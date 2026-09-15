@@ -1,0 +1,3088 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="An evaluation suite for AI agent skill routing, collision detection, and description optimization.">
+      
+      
+        <meta name="author" content="Google LLC">
+      
+      
+        <link rel="canonical" href="https://google.github.io/skill-reach/api/sweep/">
+      
+      
+        <link rel="prev" href="../runtime/">
+      
+      
+        <link rel="next" href="../uncertainty/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>reach.sweep - skill-reach</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#reachsweep" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="skill-reach" class="md-header__button md-logo" aria-label="skill-reach" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            skill-reach
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              reach.sweep
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/google/skill-reach" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    google/skill-reach
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/how-it-works/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/sandboxing/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cli/" class="md-tabs__link">
+          
+  
+  
+  CLI Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Python API
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="skill-reach" class="md-nav__button md-logo" aria-label="skill-reach" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    skill-reach
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/google/skill-reach" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    google/skill-reach
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/how-it-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How Reachability Works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progressive-disclosure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progressive Disclosure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sandboxing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandboxing & Safety
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/init/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach init
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/doctor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach doctor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/clean/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach clean
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/lint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/overlap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach overlap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/query/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach query
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/check/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach check
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/optimize/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach optimize
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach diff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/sweep/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach sweep
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/completion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach completion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.artifact
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../catalog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../check/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.check
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.diff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../optimize/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.optimize
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overlap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.overlap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../queries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.queries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../registry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../retrieval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.retrieval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.sweep
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.sweep
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sweep
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.ScalingPoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ScalingPoint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.ScalingStudy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ScalingStudy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.bootstrap_f1_ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bootstrap_f1_ci
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.compute_scaling_noise_floor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_scaling_noise_floor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.compute_sla_crossings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_sla_crossings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.find_kneedle_knee" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_kneedle_knee
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.run_scaling_sweep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_scaling_sweep
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../uncertainty/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.uncertainty
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        sweep
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.ScalingPoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ScalingPoint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.ScalingStudy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ScalingStudy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.bootstrap_f1_ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bootstrap_f1_ci
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.compute_scaling_noise_floor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_scaling_noise_floor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.compute_sla_crossings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_sla_crossings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.find_kneedle_knee" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_kneedle_knee
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reach.sweep.run_scaling_sweep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_scaling_sweep
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="reachsweep"><code>reach.sweep</code><a class="headerlink" href="#reachsweep" title="Permanent link">&para;</a></h1>
+<p>Execute multi-scale catalog evaluation sweeps to measure reachability decay and capacity knees.</p>
+<!-- prettier-ignore -->
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="reach.sweep"></a>
+    <div class="doc doc-contents first">
+
+        <p>Execute catalog scaling sweeps and detect capacity knees.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="reach.sweep.ScalingPoint" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">ScalingPoint</span>
+
+
+<a href="#reach.sweep.ScalingPoint" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="pydantic.BaseModel">BaseModel</span></code></p>
+
+
+
+        <p>Represent evaluation outcomes and decomposition for a single catalog scale point.</p>
+
+
+
+
+
+
+
+
+              <details class="mkdocstrings-source">
+                <summary>Source code in <code>src/reach/sweep.py</code></summary>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-60">60</a></span>
+<span class="normal"><a href="#__codelineno-0-61">61</a></span>
+<span class="normal"><a href="#__codelineno-0-62">62</a></span>
+<span class="normal"><a href="#__codelineno-0-63">63</a></span>
+<span class="normal"><a href="#__codelineno-0-64">64</a></span>
+<span class="normal"><a href="#__codelineno-0-65">65</a></span>
+<span class="normal"><a href="#__codelineno-0-66">66</a></span>
+<span class="normal"><a href="#__codelineno-0-67">67</a></span>
+<span class="normal"><a href="#__codelineno-0-68">68</a></span>
+<span class="normal"><a href="#__codelineno-0-69">69</a></span>
+<span class="normal"><a href="#__codelineno-0-70">70</a></span>
+<span class="normal"><a href="#__codelineno-0-71">71</a></span>
+<span class="normal"><a href="#__codelineno-0-72">72</a></span>
+<span class="normal"><a href="#__codelineno-0-73">73</a></span>
+<span class="normal"><a href="#__codelineno-0-74">74</a></span>
+<span class="normal"><a href="#__codelineno-0-75">75</a></span>
+<span class="normal"><a href="#__codelineno-0-76">76</a></span>
+<span class="normal"><a href="#__codelineno-0-77">77</a></span>
+<span class="normal"><a href="#__codelineno-0-78">78</a></span>
+<span class="normal"><a href="#__codelineno-0-79">79</a></span>
+<span class="normal"><a href="#__codelineno-0-80">80</a></span>
+<span class="normal"><a href="#__codelineno-0-81">81</a></span>
+<span class="normal"><a href="#__codelineno-0-82">82</a></span>
+<span class="normal"><a href="#__codelineno-0-83">83</a></span>
+<span class="normal"><a href="#__codelineno-0-84">84</a></span>
+<span class="normal"><a href="#__codelineno-0-85">85</a></span>
+<span class="normal"><a href="#__codelineno-0-86">86</a></span>
+<span class="normal"><a href="#__codelineno-0-87">87</a></span>
+<span class="normal"><a href="#__codelineno-0-88">88</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60"></a><span class="k">class</span><span class="w"> </span><span class="nc">ScalingPoint</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61"></a><span class="w">    </span><span class="sd">"""Represent evaluation outcomes and decomposition for a single catalog scale point."""</span>
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62"></a>
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63"></a>    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64"></a>
+</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65"></a>    <span class="n">scale</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66"></a>    <span class="n">catalog_id</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67"></a>    <span class="n">pass_rate</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68"></a>    <span class="n">pass_rate_interval</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>
+</span><span id="__span-0-69"><a id="__codelineno-0-69" name="__codelineno-0-69"></a>    <span class="n">recall</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span><span id="__span-0-70"><a id="__codelineno-0-70" name="__codelineno-0-70"></a>    <span class="n">recall_interval</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-71"><a id="__codelineno-0-71" name="__codelineno-0-71"></a>    <span class="n">precision</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span><span id="__span-0-72"><a id="__codelineno-0-72" name="__codelineno-0-72"></a>    <span class="n">precision_interval</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-73"><a id="__codelineno-0-73" name="__codelineno-0-73"></a>    <span class="n">internal_precision</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span><span id="__span-0-74"><a id="__codelineno-0-74" name="__codelineno-0-74"></a>    <span class="n">external_distractor_precision</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-75"><a id="__codelineno-0-75" name="__codelineno-0-75"></a>    <span class="n">abstention_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-76"><a id="__codelineno-0-76" name="__codelineno-0-76"></a>    <span class="n">abstention_interval</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-77"><a id="__codelineno-0-77" name="__codelineno-0-77"></a>    <span class="n">f1_score</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span><span id="__span-0-78"><a id="__codelineno-0-78" name="__codelineno-0-78"></a>    <span class="n">f1_interval</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-79"><a id="__codelineno-0-79" name="__codelineno-0-79"></a>    <span class="n">in_scope_probes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="__span-0-80"><a id="__codelineno-0-80" name="__codelineno-0-80"></a>    <span class="n">negative_probes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="__span-0-81"><a id="__codelineno-0-81" name="__codelineno-0-81"></a>    <span class="n">disclosure_states</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="__span-0-82"><a id="__codelineno-0-82" name="__codelineno-0-82"></a>    <span class="n">delta_vs_baseline</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-83"><a id="__codelineno-0-83" name="__codelineno-0-83"></a>    <span class="n">delta_context</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-84"><a id="__codelineno-0-84" name="__codelineno-0-84"></a>    <span class="n">delta_shadowing</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-85"><a id="__codelineno-0-85" name="__codelineno-0-85"></a>    <span class="n">probes_executed</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-86"><a id="__codelineno-0-86" name="__codelineno-0-86"></a>    <span class="n">probes_failed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="__span-0-87"><a id="__codelineno-0-87" name="__codelineno-0-87"></a>    <span class="n">prompt_tokens_mean</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-88"><a id="__codelineno-0-88" name="__codelineno-0-88"></a>    <span class="n">duration_ms_mean</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span></code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="reach.sweep.ScalingStudy" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">ScalingStudy</span>
+
+
+<a href="#reach.sweep.ScalingStudy" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="pydantic.BaseModel">BaseModel</span></code></p>
+
+
+
+        <p>Represent multi-scale catalog scaling study and knee curvature analysis.</p>
+
+
+
+
+
+
+
+
+              <details class="mkdocstrings-source">
+                <summary>Source code in <code>src/reach/sweep.py</code></summary>
+                <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-0-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-0-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-0-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-0-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-0-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-0-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-0-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-0-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-0-100">100</a></span>
+<span class="normal"><a href="#__codelineno-0-101">101</a></span>
+<span class="normal"><a href="#__codelineno-0-102">102</a></span>
+<span class="normal"><a href="#__codelineno-0-103">103</a></span>
+<span class="normal"><a href="#__codelineno-0-104">104</a></span>
+<span class="normal"><a href="#__codelineno-0-105">105</a></span>
+<span class="normal"><a href="#__codelineno-0-106">106</a></span>
+<span class="normal"><a href="#__codelineno-0-107">107</a></span>
+<span class="normal"><a href="#__codelineno-0-108">108</a></span>
+<span class="normal"><a href="#__codelineno-0-109">109</a></span>
+<span class="normal"><a href="#__codelineno-0-110">110</a></span>
+<span class="normal"><a href="#__codelineno-0-111">111</a></span>
+<span class="normal"><a href="#__codelineno-0-112">112</a></span>
+<span class="normal"><a href="#__codelineno-0-113">113</a></span>
+<span class="normal"><a href="#__codelineno-0-114">114</a></span>
+<span class="normal"><a href="#__codelineno-0-115">115</a></span>
+<span class="normal"><a href="#__codelineno-0-116">116</a></span>
+<span class="normal"><a href="#__codelineno-0-117">117</a></span>
+<span class="normal"><a href="#__codelineno-0-118">118</a></span>
+<span class="normal"><a href="#__codelineno-0-119">119</a></span>
+<span class="normal"><a href="#__codelineno-0-120">120</a></span>
+<span class="normal"><a href="#__codelineno-0-121">121</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-91"><a id="__codelineno-0-91" name="__codelineno-0-91"></a><span class="k">class</span><span class="w"> </span><span class="nc">ScalingStudy</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="__span-0-92"><a id="__codelineno-0-92" name="__codelineno-0-92"></a><span class="w">    </span><span class="sd">"""Represent multi-scale catalog scaling study and knee curvature analysis."""</span>
+</span><span id="__span-0-93"><a id="__codelineno-0-93" name="__codelineno-0-93"></a>
+</span><span id="__span-0-94"><a id="__codelineno-0-94" name="__codelineno-0-94"></a>    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-95"><a id="__codelineno-0-95" name="__codelineno-0-95"></a>
+</span><span id="__span-0-96"><a id="__codelineno-0-96" name="__codelineno-0-96"></a>    <span class="n">target_skill</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-97"><a id="__codelineno-0-97" name="__codelineno-0-97"></a>    <span class="n">is_corpus_sweep</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="__span-0-98"><a id="__codelineno-0-98" name="__codelineno-0-98"></a>    <span class="n">scales</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span><span id="__span-0-99"><a id="__codelineno-0-99" name="__codelineno-0-99"></a>    <span class="n">points</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">ScalingPoint</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span><span id="__span-0-100"><a id="__codelineno-0-100" name="__codelineno-0-100"></a>    <span class="n">knee_scale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-101"><a id="__codelineno-0-101" name="__codelineno-0-101"></a>    <span class="n">sla_90_scale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-102"><a id="__codelineno-0-102" name="__codelineno-0-102"></a>    <span class="n">sla_90_interpolated</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-103"><a id="__codelineno-0-103" name="__codelineno-0-103"></a>    <span class="n">sla_85_scale</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-104"><a id="__codelineno-0-104" name="__codelineno-0-104"></a>    <span class="n">sla_85_interpolated</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-105"><a id="__codelineno-0-105" name="__codelineno-0-105"></a>    <span class="n">baseline_pass_rate</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-106"><a id="__codelineno-0-106" name="__codelineno-0-106"></a>    <span class="n">final_pass_rate</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-107"><a id="__codelineno-0-107" name="__codelineno-0-107"></a>    <span class="n">total_delta</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-108"><a id="__codelineno-0-108" name="__codelineno-0-108"></a>    <span class="n">total_context_loss</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-109"><a id="__codelineno-0-109" name="__codelineno-0-109"></a>    <span class="n">total_shadowing_loss</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-110"><a id="__codelineno-0-110" name="__codelineno-0-110"></a>    <span class="n">noise_floor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span>
+</span><span id="__span-0-111"><a id="__codelineno-0-111" name="__codelineno-0-111"></a>    <span class="n">total_corpus_skills</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="__span-0-112"><a id="__codelineno-0-112" name="__codelineno-0-112"></a>    <span class="n">decomposition</span><span class="p">:</span> <span class="n">DecompositionResult</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-113"><a id="__codelineno-0-113" name="__codelineno-0-113"></a>    <span class="n">anchor_skills</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-114"><a id="__codelineno-0-114" name="__codelineno-0-114"></a>
+</span><span id="__span-0-115"><a id="__codelineno-0-115" name="__codelineno-0-115"></a>    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
+</span><span id="__span-0-116"><a id="__codelineno-0-116" name="__codelineno-0-116"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_target_skill_for_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ScalingStudy</span><span class="p">:</span>
+</span><span id="__span-0-117"><a id="__codelineno-0-117" name="__codelineno-0-117"></a><span class="w">        </span><span class="sd">"""Ensure targeted sweeps specify a target skill."""</span>
+</span><span id="__span-0-118"><a id="__codelineno-0-118" name="__codelineno-0-118"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_corpus_sweep</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_skill</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-119"><a id="__codelineno-0-119" name="__codelineno-0-119"></a>            <span class="n">msg</span> <span class="o">=</span> <span class="s2">"Targeted scaling sweep requires target_skill to be specified."</span>
+</span><span id="__span-0-120"><a id="__codelineno-0-120" name="__codelineno-0-120"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+</span><span id="__span-0-121"><a id="__codelineno-0-121" name="__codelineno-0-121"></a>        <span class="k">return</span> <span class="bp">self</span>
+</span></code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="reach.sweep.bootstrap_f1_ci" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">bootstrap_f1_ci</span>
+
+
+<a href="#reach.sweep.bootstrap_f1_ci" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">bootstrap_f1_ci</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">results</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="ProbeResult (reach.models.ProbeResult)" href="../models/#reach.models.ProbeResult">ProbeResult</a></span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">truth</span><span class="p">:</span> <span class="n"><span title="collections.abc.Mapping">Mapping</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span><span class="p">],</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">installed_skills</span><span class="p">:</span> <span class="n"><span title="set">set</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">],</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">iterations</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">1000</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">seed</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="tuple">tuple</span></span><span class="p">[</span><span class="n"><span title="float">float</span></span><span class="p">,</span> <span class="n"><span title="float">float</span></span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Compute empirical bootstrap confidence interval for micro F1 score.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/reach/sweep.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-218">218</a></span>
+<span class="normal"><a href="#__codelineno-0-219">219</a></span>
+<span class="normal"><a href="#__codelineno-0-220">220</a></span>
+<span class="normal"><a href="#__codelineno-0-221">221</a></span>
+<span class="normal"><a href="#__codelineno-0-222">222</a></span>
+<span class="normal"><a href="#__codelineno-0-223">223</a></span>
+<span class="normal"><a href="#__codelineno-0-224">224</a></span>
+<span class="normal"><a href="#__codelineno-0-225">225</a></span>
+<span class="normal"><a href="#__codelineno-0-226">226</a></span>
+<span class="normal"><a href="#__codelineno-0-227">227</a></span>
+<span class="normal"><a href="#__codelineno-0-228">228</a></span>
+<span class="normal"><a href="#__codelineno-0-229">229</a></span>
+<span class="normal"><a href="#__codelineno-0-230">230</a></span>
+<span class="normal"><a href="#__codelineno-0-231">231</a></span>
+<span class="normal"><a href="#__codelineno-0-232">232</a></span>
+<span class="normal"><a href="#__codelineno-0-233">233</a></span>
+<span class="normal"><a href="#__codelineno-0-234">234</a></span>
+<span class="normal"><a href="#__codelineno-0-235">235</a></span>
+<span class="normal"><a href="#__codelineno-0-236">236</a></span>
+<span class="normal"><a href="#__codelineno-0-237">237</a></span>
+<span class="normal"><a href="#__codelineno-0-238">238</a></span>
+<span class="normal"><a href="#__codelineno-0-239">239</a></span>
+<span class="normal"><a href="#__codelineno-0-240">240</a></span>
+<span class="normal"><a href="#__codelineno-0-241">241</a></span>
+<span class="normal"><a href="#__codelineno-0-242">242</a></span>
+<span class="normal"><a href="#__codelineno-0-243">243</a></span>
+<span class="normal"><a href="#__codelineno-0-244">244</a></span>
+<span class="normal"><a href="#__codelineno-0-245">245</a></span>
+<span class="normal"><a href="#__codelineno-0-246">246</a></span>
+<span class="normal"><a href="#__codelineno-0-247">247</a></span>
+<span class="normal"><a href="#__codelineno-0-248">248</a></span>
+<span class="normal"><a href="#__codelineno-0-249">249</a></span>
+<span class="normal"><a href="#__codelineno-0-250">250</a></span>
+<span class="normal"><a href="#__codelineno-0-251">251</a></span>
+<span class="normal"><a href="#__codelineno-0-252">252</a></span>
+<span class="normal"><a href="#__codelineno-0-253">253</a></span>
+<span class="normal"><a href="#__codelineno-0-254">254</a></span>
+<span class="normal"><a href="#__codelineno-0-255">255</a></span>
+<span class="normal"><a href="#__codelineno-0-256">256</a></span>
+<span class="normal"><a href="#__codelineno-0-257">257</a></span>
+<span class="normal"><a href="#__codelineno-0-258">258</a></span>
+<span class="normal"><a href="#__codelineno-0-259">259</a></span>
+<span class="normal"><a href="#__codelineno-0-260">260</a></span>
+<span class="normal"><a href="#__codelineno-0-261">261</a></span>
+<span class="normal"><a href="#__codelineno-0-262">262</a></span>
+<span class="normal"><a href="#__codelineno-0-263">263</a></span>
+<span class="normal"><a href="#__codelineno-0-264">264</a></span>
+<span class="normal"><a href="#__codelineno-0-265">265</a></span>
+<span class="normal"><a href="#__codelineno-0-266">266</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-218"><a id="__codelineno-0-218" name="__codelineno-0-218"></a><span class="k">def</span><span class="w"> </span><span class="nf">bootstrap_f1_ci</span><span class="p">(</span>
+</span><span id="__span-0-219"><a id="__codelineno-0-219" name="__codelineno-0-219"></a>    <span class="n">results</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">ProbeResult</span><span class="p">],</span>
+</span><span id="__span-0-220"><a id="__codelineno-0-220" name="__codelineno-0-220"></a>    <span class="n">truth</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">],</span>
+</span><span id="__span-0-221"><a id="__codelineno-0-221" name="__codelineno-0-221"></a>    <span class="n">installed_skills</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+</span><span id="__span-0-222"><a id="__codelineno-0-222" name="__codelineno-0-222"></a>    <span class="n">iterations</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1000</span><span class="p">,</span>
+</span><span id="__span-0-223"><a id="__codelineno-0-223" name="__codelineno-0-223"></a>    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span>
+</span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+</span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a><span class="w">    </span><span class="sd">"""Compute empirical bootstrap confidence interval for micro F1 score."""</span>
+</span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a>    <span class="n">m</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a>    <span class="k">if</span> <span class="n">m</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">iterations</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a>        <span class="k">return</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>
+</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>    <span class="n">tp_arr</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>        <span class="mi">1</span>
+</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">r</span><span class="o">.</span><span class="n">error</span>
+</span><span id="__span-0-233"><a id="__codelineno-0-233" name="__codelineno-0-233"></a>        <span class="ow">and</span> <span class="n">r</span><span class="o">.</span><span class="n">predicted_label</span> <span class="o">==</span> <span class="n">truth</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">query_id</span><span class="p">)</span>
+</span><span id="__span-0-234"><a id="__codelineno-0-234" name="__codelineno-0-234"></a>        <span class="ow">and</span> <span class="n">truth</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">query_id</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="__span-0-235"><a id="__codelineno-0-235" name="__codelineno-0-235"></a>        <span class="k">else</span> <span class="mi">0</span>
+</span><span id="__span-0-236"><a id="__codelineno-0-236" name="__codelineno-0-236"></a>        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">results</span>
+</span><span id="__span-0-237"><a id="__codelineno-0-237" name="__codelineno-0-237"></a>    <span class="p">]</span>
+</span><span id="__span-0-238"><a id="__codelineno-0-238" name="__codelineno-0-238"></a>    <span class="n">fn_arr</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-239"><a id="__codelineno-0-239" name="__codelineno-0-239"></a>        <span class="mi">1</span> <span class="k">if</span> <span class="n">truth</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">query_id</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">tp_arr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">else</span> <span class="mi">0</span>
+</span><span id="__span-0-240"><a id="__codelineno-0-240" name="__codelineno-0-240"></a>        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+</span><span id="__span-0-241"><a id="__codelineno-0-241" name="__codelineno-0-241"></a>    <span class="p">]</span>
+</span><span id="__span-0-242"><a id="__codelineno-0-242" name="__codelineno-0-242"></a>    <span class="n">fp_arr</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-243"><a id="__codelineno-0-243" name="__codelineno-0-243"></a>        <span class="mi">1</span>
+</span><span id="__span-0-244"><a id="__codelineno-0-244" name="__codelineno-0-244"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">r</span><span class="o">.</span><span class="n">error</span>
+</span><span id="__span-0-245"><a id="__codelineno-0-245" name="__codelineno-0-245"></a>        <span class="ow">and</span> <span class="n">r</span><span class="o">.</span><span class="n">predicted_label</span> <span class="ow">in</span> <span class="n">installed_skills</span>
+</span><span id="__span-0-246"><a id="__codelineno-0-246" name="__codelineno-0-246"></a>        <span class="ow">and</span> <span class="n">r</span><span class="o">.</span><span class="n">predicted_label</span> <span class="o">!=</span> <span class="n">truth</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">query_id</span><span class="p">)</span>
+</span><span id="__span-0-247"><a id="__codelineno-0-247" name="__codelineno-0-247"></a>        <span class="k">else</span> <span class="mi">0</span>
+</span><span id="__span-0-248"><a id="__codelineno-0-248" name="__codelineno-0-248"></a>        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">results</span>
+</span><span id="__span-0-249"><a id="__codelineno-0-249" name="__codelineno-0-249"></a>    <span class="p">]</span>
+</span><span id="__span-0-250"><a id="__codelineno-0-250" name="__codelineno-0-250"></a>
+</span><span id="__span-0-251"><a id="__codelineno-0-251" name="__codelineno-0-251"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">Random</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>  <span class="c1"># noqa: S311</span>
+</span><span id="__span-0-252"><a id="__codelineno-0-252" name="__codelineno-0-252"></a>    <span class="n">f1_boots</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-0-253"><a id="__codelineno-0-253" name="__codelineno-0-253"></a>    <span class="n">indices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">m</span><span class="p">))</span>
+</span><span id="__span-0-254"><a id="__codelineno-0-254" name="__codelineno-0-254"></a>
+</span><span id="__span-0-255"><a id="__codelineno-0-255" name="__codelineno-0-255"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">iterations</span><span class="p">):</span>
+</span><span id="__span-0-256"><a id="__codelineno-0-256" name="__codelineno-0-256"></a>        <span class="n">sample_idx</span> <span class="o">=</span> <span class="p">[</span><span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">m</span><span class="p">)]</span>
+</span><span id="__span-0-257"><a id="__codelineno-0-257" name="__codelineno-0-257"></a>        <span class="n">tp_s</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">tp_arr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">sample_idx</span><span class="p">)</span>
+</span><span id="__span-0-258"><a id="__codelineno-0-258" name="__codelineno-0-258"></a>        <span class="n">fp_s</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">fp_arr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">sample_idx</span><span class="p">)</span>
+</span><span id="__span-0-259"><a id="__codelineno-0-259" name="__codelineno-0-259"></a>        <span class="n">fn_s</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">fn_arr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">sample_idx</span><span class="p">)</span>
+</span><span id="__span-0-260"><a id="__codelineno-0-260" name="__codelineno-0-260"></a>        <span class="n">denom</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">tp_s</span> <span class="o">+</span> <span class="n">fp_s</span> <span class="o">+</span> <span class="n">fn_s</span>
+</span><span id="__span-0-261"><a id="__codelineno-0-261" name="__codelineno-0-261"></a>        <span class="n">f1_boots</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">tp_s</span> <span class="o">/</span> <span class="n">denom</span> <span class="k">if</span> <span class="n">denom</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span><span class="p">)</span>
+</span><span id="__span-0-262"><a id="__codelineno-0-262" name="__codelineno-0-262"></a>
+</span><span id="__span-0-263"><a id="__codelineno-0-263" name="__codelineno-0-263"></a>    <span class="n">f1_boots</span><span class="o">.</span><span class="n">sort</span><span class="p">()</span>
+</span><span id="__span-0-264"><a id="__codelineno-0-264" name="__codelineno-0-264"></a>    <span class="n">low_idx</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">iterations</span> <span class="o">*</span> <span class="mf">0.025</span><span class="p">))</span>
+</span><span id="__span-0-265"><a id="__codelineno-0-265" name="__codelineno-0-265"></a>    <span class="n">high_idx</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">iterations</span> <span class="o">*</span> <span class="mf">0.975</span><span class="p">),</span> <span class="n">iterations</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-266"><a id="__codelineno-0-266" name="__codelineno-0-266"></a>    <span class="k">return</span> <span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">f1_boots</span><span class="p">[</span><span class="n">low_idx</span><span class="p">],</span> <span class="mi">4</span><span class="p">),</span> <span class="nb">round</span><span class="p">(</span><span class="n">f1_boots</span><span class="p">[</span><span class="n">high_idx</span><span class="p">],</span> <span class="mi">4</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="reach.sweep.compute_scaling_noise_floor" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">compute_scaling_noise_floor</span>
+
+
+<a href="#reach.sweep.compute_scaling_noise_floor" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">compute_scaling_noise_floor</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">baseline_pass_rate</span><span class="p">:</span> <span class="n"><span title="float">float</span></span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">scaled_pass_rate</span><span class="p">:</span> <span class="n"><span title="float">float</span></span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">sample_size</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">confidence</span><span class="p">:</span> <span class="n"><span title="float">float</span></span> <span class="o">=</span> <span class="n"><a class="autorefs autorefs-internal" title="DEFAULT_CONFIDENCE
+
+
+  
+      module-attribute
+   (reach.diff.DEFAULT_CONFIDENCE)" href="../uncertainty/#reach.uncertainty.DEFAULT_CONFIDENCE">DEFAULT_CONFIDENCE</a></span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">noise_inflation</span><span class="p">:</span> <span class="n"><span title="float">float</span></span> <span class="o">=</span> <span class="n"><span title="reach.diff.NOISE_INFLATION">NOISE_INFLATION</span></span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="float">float</span></span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Calculate minimum scaling pass-rate drop distinguishable from noise using diff.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/reach/sweep.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-132">132</a></span>
+<span class="normal"><a href="#__codelineno-0-133">133</a></span>
+<span class="normal"><a href="#__codelineno-0-134">134</a></span>
+<span class="normal"><a href="#__codelineno-0-135">135</a></span>
+<span class="normal"><a href="#__codelineno-0-136">136</a></span>
+<span class="normal"><a href="#__codelineno-0-137">137</a></span>
+<span class="normal"><a href="#__codelineno-0-138">138</a></span>
+<span class="normal"><a href="#__codelineno-0-139">139</a></span>
+<span class="normal"><a href="#__codelineno-0-140">140</a></span>
+<span class="normal"><a href="#__codelineno-0-141">141</a></span>
+<span class="normal"><a href="#__codelineno-0-142">142</a></span>
+<span class="normal"><a href="#__codelineno-0-143">143</a></span>
+<span class="normal"><a href="#__codelineno-0-144">144</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-132"><a id="__codelineno-0-132" name="__codelineno-0-132"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_scaling_noise_floor</span><span class="p">(</span>
+</span><span id="__span-0-133"><a id="__codelineno-0-133" name="__codelineno-0-133"></a>    <span class="n">baseline_pass_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-134"><a id="__codelineno-0-134" name="__codelineno-0-134"></a>    <span class="n">scaled_pass_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-135"><a id="__codelineno-0-135" name="__codelineno-0-135"></a>    <span class="n">sample_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-136"><a id="__codelineno-0-136" name="__codelineno-0-136"></a>    <span class="n">confidence</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_CONFIDENCE</span><span class="p">,</span>
+</span><span id="__span-0-137"><a id="__codelineno-0-137" name="__codelineno-0-137"></a>    <span class="n">noise_inflation</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">NOISE_INFLATION</span><span class="p">,</span>
+</span><span id="__span-0-138"><a id="__codelineno-0-138" name="__codelineno-0-138"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="__span-0-139"><a id="__codelineno-0-139" name="__codelineno-0-139"></a><span class="w">    </span><span class="sd">"""Calculate minimum scaling pass-rate drop distinguishable from noise using diff."""</span>
+</span><span id="__span-0-140"><a id="__codelineno-0-140" name="__codelineno-0-140"></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">sample_size</span><span class="p">)</span>
+</span><span id="__span-0-141"><a id="__codelineno-0-141" name="__codelineno-0-141"></a>    <span class="n">control_se</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">baseline_pass_rate</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">baseline_pass_rate</span><span class="p">))</span> <span class="o">/</span> <span class="n">n</span><span class="p">)</span>
+</span><span id="__span-0-142"><a id="__codelineno-0-142" name="__codelineno-0-142"></a>    <span class="n">treatment_se</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">scaled_pass_rate</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">scaled_pass_rate</span><span class="p">))</span> <span class="o">/</span> <span class="n">n</span><span class="p">)</span>
+</span><span id="__span-0-143"><a id="__codelineno-0-143" name="__codelineno-0-143"></a>    <span class="n">floor</span> <span class="o">=</span> <span class="n">diff_noise_floor</span><span class="p">(</span><span class="n">control_se</span><span class="p">,</span> <span class="n">treatment_se</span><span class="p">,</span> <span class="n">confidence</span><span class="p">,</span> <span class="n">noise_inflation</span><span class="p">)</span>
+</span><span id="__span-0-144"><a id="__codelineno-0-144" name="__codelineno-0-144"></a>    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">floor</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="reach.sweep.compute_sla_crossings" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">compute_sla_crossings</span>
+
+
+<a href="#reach.sweep.compute_sla_crossings" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">compute_sla_crossings</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">points</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="ScalingPoint (reach.sweep.ScalingPoint)" href="#reach.sweep.ScalingPoint">ScalingPoint</a></span><span class="p">],</span> <span class="n">threshold</span><span class="p">:</span> <span class="n"><span title="float">float</span></span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="tuple">tuple</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n"><span title="float">float</span></span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Compute discrete conservative scale and log-linear continuous crossing for an SLA target.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/reach/sweep.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-269">269</a></span>
+<span class="normal"><a href="#__codelineno-0-270">270</a></span>
+<span class="normal"><a href="#__codelineno-0-271">271</a></span>
+<span class="normal"><a href="#__codelineno-0-272">272</a></span>
+<span class="normal"><a href="#__codelineno-0-273">273</a></span>
+<span class="normal"><a href="#__codelineno-0-274">274</a></span>
+<span class="normal"><a href="#__codelineno-0-275">275</a></span>
+<span class="normal"><a href="#__codelineno-0-276">276</a></span>
+<span class="normal"><a href="#__codelineno-0-277">277</a></span>
+<span class="normal"><a href="#__codelineno-0-278">278</a></span>
+<span class="normal"><a href="#__codelineno-0-279">279</a></span>
+<span class="normal"><a href="#__codelineno-0-280">280</a></span>
+<span class="normal"><a href="#__codelineno-0-281">281</a></span>
+<span class="normal"><a href="#__codelineno-0-282">282</a></span>
+<span class="normal"><a href="#__codelineno-0-283">283</a></span>
+<span class="normal"><a href="#__codelineno-0-284">284</a></span>
+<span class="normal"><a href="#__codelineno-0-285">285</a></span>
+<span class="normal"><a href="#__codelineno-0-286">286</a></span>
+<span class="normal"><a href="#__codelineno-0-287">287</a></span>
+<span class="normal"><a href="#__codelineno-0-288">288</a></span>
+<span class="normal"><a href="#__codelineno-0-289">289</a></span>
+<span class="normal"><a href="#__codelineno-0-290">290</a></span>
+<span class="normal"><a href="#__codelineno-0-291">291</a></span>
+<span class="normal"><a href="#__codelineno-0-292">292</a></span>
+<span class="normal"><a href="#__codelineno-0-293">293</a></span>
+<span class="normal"><a href="#__codelineno-0-294">294</a></span>
+<span class="normal"><a href="#__codelineno-0-295">295</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-269"><a id="__codelineno-0-269" name="__codelineno-0-269"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_sla_crossings</span><span class="p">(</span>
+</span><span id="__span-0-270"><a id="__codelineno-0-270" name="__codelineno-0-270"></a>    <span class="n">points</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">ScalingPoint</span><span class="p">],</span>
+</span><span id="__span-0-271"><a id="__codelineno-0-271" name="__codelineno-0-271"></a>    <span class="n">threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-272"><a id="__codelineno-0-272" name="__codelineno-0-272"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
+</span><span id="__span-0-273"><a id="__codelineno-0-273" name="__codelineno-0-273"></a><span class="w">    </span><span class="sd">"""Compute discrete conservative scale and log-linear continuous crossing for an SLA target."""</span>
+</span><span id="__span-0-274"><a id="__codelineno-0-274" name="__codelineno-0-274"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">points</span><span class="p">:</span>
+</span><span id="__span-0-275"><a id="__codelineno-0-275" name="__codelineno-0-275"></a>        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+</span><span id="__span-0-276"><a id="__codelineno-0-276" name="__codelineno-0-276"></a>
+</span><span id="__span-0-277"><a id="__codelineno-0-277" name="__codelineno-0-277"></a>    <span class="n">qualifying</span> <span class="o">=</span> <span class="p">[</span><span class="n">p</span><span class="o">.</span><span class="n">scale</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">points</span> <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">f1_score</span> <span class="o">&gt;=</span> <span class="n">threshold</span><span class="p">]</span>
+</span><span id="__span-0-278"><a id="__codelineno-0-278" name="__codelineno-0-278"></a>    <span class="n">discrete_k</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">qualifying</span><span class="p">)</span> <span class="k">if</span> <span class="n">qualifying</span> <span class="k">else</span> <span class="kc">None</span>
+</span><span id="__span-0-279"><a id="__codelineno-0-279" name="__codelineno-0-279"></a>
+</span><span id="__span-0-280"><a id="__codelineno-0-280" name="__codelineno-0-280"></a>    <span class="n">interp_k</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-281"><a id="__codelineno-0-281" name="__codelineno-0-281"></a>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">points</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+</span><span id="__span-0-282"><a id="__codelineno-0-282" name="__codelineno-0-282"></a>        <span class="n">p1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">=</span> <span class="n">points</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">points</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-0-283"><a id="__codelineno-0-283" name="__codelineno-0-283"></a>        <span class="k">if</span> <span class="p">(</span><span class="n">p1</span><span class="o">.</span><span class="n">f1_score</span> <span class="o">&gt;=</span> <span class="n">threshold</span> <span class="o">&gt;</span> <span class="n">p2</span><span class="o">.</span><span class="n">f1_score</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">p1</span><span class="o">.</span><span class="n">f1_score</span> <span class="o">&lt;=</span> <span class="n">threshold</span> <span class="o">&lt;</span> <span class="n">p2</span><span class="o">.</span><span class="n">f1_score</span><span class="p">):</span>
+</span><span id="__span-0-284"><a id="__codelineno-0-284" name="__codelineno-0-284"></a>            <span class="n">denom</span> <span class="o">=</span> <span class="n">p2</span><span class="o">.</span><span class="n">f1_score</span> <span class="o">-</span> <span class="n">p1</span><span class="o">.</span><span class="n">f1_score</span>
+</span><span id="__span-0-285"><a id="__codelineno-0-285" name="__codelineno-0-285"></a>            <span class="k">if</span> <span class="n">denom</span> <span class="o">!=</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-286"><a id="__codelineno-0-286" name="__codelineno-0-286"></a>                <span class="n">t</span> <span class="o">=</span> <span class="p">(</span><span class="n">threshold</span> <span class="o">-</span> <span class="n">p1</span><span class="o">.</span><span class="n">f1_score</span><span class="p">)</span> <span class="o">/</span> <span class="n">denom</span>
+</span><span id="__span-0-287"><a id="__codelineno-0-287" name="__codelineno-0-287"></a>                <span class="n">log_k1</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">p1</span><span class="o">.</span><span class="n">scale</span><span class="p">))</span>
+</span><span id="__span-0-288"><a id="__codelineno-0-288" name="__codelineno-0-288"></a>                <span class="n">log_k2</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">p2</span><span class="o">.</span><span class="n">scale</span><span class="p">))</span>
+</span><span id="__span-0-289"><a id="__codelineno-0-289" name="__codelineno-0-289"></a>                <span class="n">interp_k</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_k1</span> <span class="o">+</span> <span class="n">t</span> <span class="o">*</span> <span class="p">(</span><span class="n">log_k2</span> <span class="o">-</span> <span class="n">log_k1</span><span class="p">)),</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-290"><a id="__codelineno-0-290" name="__codelineno-0-290"></a>                <span class="k">break</span>
+</span><span id="__span-0-291"><a id="__codelineno-0-291" name="__codelineno-0-291"></a>
+</span><span id="__span-0-292"><a id="__codelineno-0-292" name="__codelineno-0-292"></a>    <span class="k">if</span> <span class="n">interp_k</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">discrete_k</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-293"><a id="__codelineno-0-293" name="__codelineno-0-293"></a>        <span class="n">interp_k</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">discrete_k</span><span class="p">)</span>
+</span><span id="__span-0-294"><a id="__codelineno-0-294" name="__codelineno-0-294"></a>
+</span><span id="__span-0-295"><a id="__codelineno-0-295" name="__codelineno-0-295"></a>    <span class="k">return</span> <span class="n">discrete_k</span><span class="p">,</span> <span class="n">interp_k</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="reach.sweep.find_kneedle_knee" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">find_kneedle_knee</span>
+
+
+<a href="#reach.sweep.find_kneedle_knee" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">find_kneedle_knee</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">scales</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">pass_rates</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><span title="float">float</span></span><span class="p">],</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">noise_floor</span><span class="p">:</span> <span class="n"><span title="float">float</span></span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Identify the inflection knee scale k* using normalized log-scale Kneedle curvature.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/reach/sweep.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-167">167</a></span>
+<span class="normal"><a href="#__codelineno-0-168">168</a></span>
+<span class="normal"><a href="#__codelineno-0-169">169</a></span>
+<span class="normal"><a href="#__codelineno-0-170">170</a></span>
+<span class="normal"><a href="#__codelineno-0-171">171</a></span>
+<span class="normal"><a href="#__codelineno-0-172">172</a></span>
+<span class="normal"><a href="#__codelineno-0-173">173</a></span>
+<span class="normal"><a href="#__codelineno-0-174">174</a></span>
+<span class="normal"><a href="#__codelineno-0-175">175</a></span>
+<span class="normal"><a href="#__codelineno-0-176">176</a></span>
+<span class="normal"><a href="#__codelineno-0-177">177</a></span>
+<span class="normal"><a href="#__codelineno-0-178">178</a></span>
+<span class="normal"><a href="#__codelineno-0-179">179</a></span>
+<span class="normal"><a href="#__codelineno-0-180">180</a></span>
+<span class="normal"><a href="#__codelineno-0-181">181</a></span>
+<span class="normal"><a href="#__codelineno-0-182">182</a></span>
+<span class="normal"><a href="#__codelineno-0-183">183</a></span>
+<span class="normal"><a href="#__codelineno-0-184">184</a></span>
+<span class="normal"><a href="#__codelineno-0-185">185</a></span>
+<span class="normal"><a href="#__codelineno-0-186">186</a></span>
+<span class="normal"><a href="#__codelineno-0-187">187</a></span>
+<span class="normal"><a href="#__codelineno-0-188">188</a></span>
+<span class="normal"><a href="#__codelineno-0-189">189</a></span>
+<span class="normal"><a href="#__codelineno-0-190">190</a></span>
+<span class="normal"><a href="#__codelineno-0-191">191</a></span>
+<span class="normal"><a href="#__codelineno-0-192">192</a></span>
+<span class="normal"><a href="#__codelineno-0-193">193</a></span>
+<span class="normal"><a href="#__codelineno-0-194">194</a></span>
+<span class="normal"><a href="#__codelineno-0-195">195</a></span>
+<span class="normal"><a href="#__codelineno-0-196">196</a></span>
+<span class="normal"><a href="#__codelineno-0-197">197</a></span>
+<span class="normal"><a href="#__codelineno-0-198">198</a></span>
+<span class="normal"><a href="#__codelineno-0-199">199</a></span>
+<span class="normal"><a href="#__codelineno-0-200">200</a></span>
+<span class="normal"><a href="#__codelineno-0-201">201</a></span>
+<span class="normal"><a href="#__codelineno-0-202">202</a></span>
+<span class="normal"><a href="#__codelineno-0-203">203</a></span>
+<span class="normal"><a href="#__codelineno-0-204">204</a></span>
+<span class="normal"><a href="#__codelineno-0-205">205</a></span>
+<span class="normal"><a href="#__codelineno-0-206">206</a></span>
+<span class="normal"><a href="#__codelineno-0-207">207</a></span>
+<span class="normal"><a href="#__codelineno-0-208">208</a></span>
+<span class="normal"><a href="#__codelineno-0-209">209</a></span>
+<span class="normal"><a href="#__codelineno-0-210">210</a></span>
+<span class="normal"><a href="#__codelineno-0-211">211</a></span>
+<span class="normal"><a href="#__codelineno-0-212">212</a></span>
+<span class="normal"><a href="#__codelineno-0-213">213</a></span>
+<span class="normal"><a href="#__codelineno-0-214">214</a></span>
+<span class="normal"><a href="#__codelineno-0-215">215</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-167"><a id="__codelineno-0-167" name="__codelineno-0-167"></a><span class="k">def</span><span class="w"> </span><span class="nf">find_kneedle_knee</span><span class="p">(</span>
+</span><span id="__span-0-168"><a id="__codelineno-0-168" name="__codelineno-0-168"></a>    <span class="n">scales</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-0-169"><a id="__codelineno-0-169" name="__codelineno-0-169"></a>    <span class="n">pass_rates</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>
+</span><span id="__span-0-170"><a id="__codelineno-0-170" name="__codelineno-0-170"></a>    <span class="n">noise_floor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span>
+</span><span id="__span-0-171"><a id="__codelineno-0-171" name="__codelineno-0-171"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-172"><a id="__codelineno-0-172" name="__codelineno-0-172"></a><span class="w">    </span><span class="sd">"""Identify the inflection knee scale k* using normalized log-scale Kneedle curvature."""</span>
+</span><span id="__span-0-173"><a id="__codelineno-0-173" name="__codelineno-0-173"></a>    <span class="k">if</span> <span class="p">(</span>
+</span><span id="__span-0-174"><a id="__codelineno-0-174" name="__codelineno-0-174"></a>        <span class="nb">len</span><span class="p">(</span><span class="n">scales</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">_MIN_KNEE_POINTS</span>
+</span><span id="__span-0-175"><a id="__codelineno-0-175" name="__codelineno-0-175"></a>        <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">scales</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">pass_rates</span><span class="p">)</span>
+</span><span id="__span-0-176"><a id="__codelineno-0-176" name="__codelineno-0-176"></a>        <span class="ow">or</span> <span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="n">pass_rates</span><span class="p">)</span> <span class="o">-</span> <span class="nb">min</span><span class="p">(</span><span class="n">pass_rates</span><span class="p">))</span> <span class="o">&lt;=</span> <span class="n">noise_floor</span>
+</span><span id="__span-0-177"><a id="__codelineno-0-177" name="__codelineno-0-177"></a>    <span class="p">):</span>
+</span><span id="__span-0-178"><a id="__codelineno-0-178" name="__codelineno-0-178"></a>        <span class="k">return</span> <span class="kc">None</span>
+</span><span id="__span-0-179"><a id="__codelineno-0-179" name="__codelineno-0-179"></a>
+</span><span id="__span-0-180"><a id="__codelineno-0-180" name="__codelineno-0-180"></a>    <span class="n">points</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">scales</span><span class="p">,</span> <span class="n">pass_rates</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+</span><span id="__span-0-181"><a id="__codelineno-0-181" name="__codelineno-0-181"></a>    <span class="n">k_vals</span> <span class="o">=</span> <span class="p">[</span><span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">points</span><span class="p">]</span>
+</span><span id="__span-0-182"><a id="__codelineno-0-182" name="__codelineno-0-182"></a>    <span class="n">y_vals</span> <span class="o">=</span> <span class="p">[</span><span class="n">p</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">points</span><span class="p">]</span>
+</span><span id="__span-0-183"><a id="__codelineno-0-183" name="__codelineno-0-183"></a>
+</span><span id="__span-0-184"><a id="__codelineno-0-184" name="__codelineno-0-184"></a>    <span class="n">log_k</span> <span class="o">=</span> <span class="p">[</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">k</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">k_vals</span><span class="p">]</span>
+</span><span id="__span-0-185"><a id="__codelineno-0-185" name="__codelineno-0-185"></a>    <span class="n">min_log</span> <span class="o">=</span> <span class="n">log_k</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-0-186"><a id="__codelineno-0-186" name="__codelineno-0-186"></a>    <span class="n">max_log</span> <span class="o">=</span> <span class="n">log_k</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-0-187"><a id="__codelineno-0-187" name="__codelineno-0-187"></a>    <span class="n">log_range</span> <span class="o">=</span> <span class="n">max_log</span> <span class="o">-</span> <span class="n">min_log</span>
+</span><span id="__span-0-188"><a id="__codelineno-0-188" name="__codelineno-0-188"></a>    <span class="k">if</span> <span class="n">log_range</span> <span class="o">&lt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-189"><a id="__codelineno-0-189" name="__codelineno-0-189"></a>        <span class="k">return</span> <span class="kc">None</span>
+</span><span id="__span-0-190"><a id="__codelineno-0-190" name="__codelineno-0-190"></a>
+</span><span id="__span-0-191"><a id="__codelineno-0-191" name="__codelineno-0-191"></a>    <span class="n">norm_x</span> <span class="o">=</span> <span class="p">[(</span><span class="n">lk</span> <span class="o">-</span> <span class="n">min_log</span><span class="p">)</span> <span class="o">/</span> <span class="n">log_range</span> <span class="k">for</span> <span class="n">lk</span> <span class="ow">in</span> <span class="n">log_k</span><span class="p">]</span>
+</span><span id="__span-0-192"><a id="__codelineno-0-192" name="__codelineno-0-192"></a>
+</span><span id="__span-0-193"><a id="__codelineno-0-193" name="__codelineno-0-193"></a>    <span class="n">min_y</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">y_vals</span><span class="p">)</span>
+</span><span id="__span-0-194"><a id="__codelineno-0-194" name="__codelineno-0-194"></a>    <span class="n">max_y</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">y_vals</span><span class="p">)</span>
+</span><span id="__span-0-195"><a id="__codelineno-0-195" name="__codelineno-0-195"></a>    <span class="n">y_range</span> <span class="o">=</span> <span class="n">max_y</span> <span class="o">-</span> <span class="n">min_y</span>
+</span><span id="__span-0-196"><a id="__codelineno-0-196" name="__codelineno-0-196"></a>    <span class="k">if</span> <span class="n">y_range</span> <span class="o">&lt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-197"><a id="__codelineno-0-197" name="__codelineno-0-197"></a>        <span class="k">return</span> <span class="kc">None</span>
+</span><span id="__span-0-198"><a id="__codelineno-0-198" name="__codelineno-0-198"></a>
+</span><span id="__span-0-199"><a id="__codelineno-0-199" name="__codelineno-0-199"></a>    <span class="n">norm_y</span> <span class="o">=</span> <span class="p">[(</span><span class="n">y</span> <span class="o">-</span> <span class="n">min_y</span><span class="p">)</span> <span class="o">/</span> <span class="n">y_range</span> <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">y_vals</span><span class="p">]</span>
+</span><span id="__span-0-200"><a id="__codelineno-0-200" name="__codelineno-0-200"></a>
+</span><span id="__span-0-201"><a id="__codelineno-0-201" name="__codelineno-0-201"></a>    <span class="n">y0</span> <span class="o">=</span> <span class="n">norm_y</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-0-202"><a id="__codelineno-0-202" name="__codelineno-0-202"></a>    <span class="n">y_end</span> <span class="o">=</span> <span class="n">norm_y</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-0-203"><a id="__codelineno-0-203" name="__codelineno-0-203"></a>    <span class="n">diffs_below</span> <span class="o">=</span> <span class="p">[(</span><span class="n">y0</span> <span class="o">+</span> <span class="n">x</span> <span class="o">*</span> <span class="p">(</span><span class="n">y_end</span> <span class="o">-</span> <span class="n">y0</span><span class="p">))</span> <span class="o">-</span> <span class="n">y</span> <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">norm_x</span><span class="p">,</span> <span class="n">norm_y</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)]</span>
+</span><span id="__span-0-204"><a id="__codelineno-0-204" name="__codelineno-0-204"></a>    <span class="n">diffs_above</span> <span class="o">=</span> <span class="p">[</span><span class="n">y</span> <span class="o">-</span> <span class="p">(</span><span class="n">y0</span> <span class="o">+</span> <span class="n">x</span> <span class="o">*</span> <span class="p">(</span><span class="n">y_end</span> <span class="o">-</span> <span class="n">y0</span><span class="p">))</span> <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">norm_x</span><span class="p">,</span> <span class="n">norm_y</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)]</span>
+</span><span id="__span-0-205"><a id="__codelineno-0-205" name="__codelineno-0-205"></a>
+</span><span id="__span-0-206"><a id="__codelineno-0-206" name="__codelineno-0-206"></a>    <span class="n">max_below</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">diffs_below</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</span><span id="__span-0-207"><a id="__codelineno-0-207" name="__codelineno-0-207"></a>    <span class="n">max_above</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">diffs_above</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</span><span id="__span-0-208"><a id="__codelineno-0-208" name="__codelineno-0-208"></a>
+</span><span id="__span-0-209"><a id="__codelineno-0-209" name="__codelineno-0-209"></a>    <span class="k">if</span> <span class="n">max_above</span> <span class="o">&gt;=</span> <span class="n">max_below</span> <span class="ow">and</span> <span class="n">max_above</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-210"><a id="__codelineno-0-210" name="__codelineno-0-210"></a>        <span class="n">knee_idx</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">+</span> <span class="n">diffs_above</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">max_above</span><span class="p">)</span>
+</span><span id="__span-0-211"><a id="__codelineno-0-211" name="__codelineno-0-211"></a>        <span class="k">return</span> <span class="n">k_vals</span><span class="p">[</span><span class="n">knee_idx</span><span class="p">]</span>
+</span><span id="__span-0-212"><a id="__codelineno-0-212" name="__codelineno-0-212"></a>    <span class="k">if</span> <span class="n">max_below</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-213"><a id="__codelineno-0-213" name="__codelineno-0-213"></a>        <span class="n">knee_idx</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">+</span> <span class="n">diffs_below</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">max_below</span><span class="p">)</span>
+</span><span id="__span-0-214"><a id="__codelineno-0-214" name="__codelineno-0-214"></a>        <span class="k">return</span> <span class="n">k_vals</span><span class="p">[</span><span class="n">knee_idx</span><span class="p">]</span>
+</span><span id="__span-0-215"><a id="__codelineno-0-215" name="__codelineno-0-215"></a>    <span class="k">return</span> <span class="kc">None</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="reach.sweep.run_scaling_sweep" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">run_scaling_sweep</span>
+
+
+<a href="#reach.sweep.run_scaling_sweep" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">run_scaling_sweep</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">config</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="RunConfig (reach.config.RunConfig)" href="../config/#reach.config.RunConfig">RunConfig</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">target_skill</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">scales</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">anchor</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">runtime</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="AgentRuntime (reach.runtime.AgentRuntime)" href="../runtime/#reach.runtime.AgentRuntime">AgentRuntime</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">rivals_share</span><span class="p">:</span> <span class="n"><span title="float">float</span></span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">noise_floor</span><span class="p">:</span> <span class="n"><span title="float">float</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">workers</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">skills</span><span class="p">:</span> <span class="n"><span title="collections.abc.Sequence">Sequence</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="Skill (reach.models.Skill)" href="../models/#reach.models.Skill">Skill</a></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">query_set</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="QuerySet (reach.queries.QuerySet)" href="../queries/#reach.queries.QuerySet">QuerySet</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">attempts</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">early_stop</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="ScalingStudy (reach.sweep.ScalingStudy)" href="#reach.sweep.ScalingStudy">ScalingStudy</a></span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Execute multi-scale catalog evaluation sweep and return scaling analysis.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>src/reach/sweep.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-738">738</a></span>
+<span class="normal"><a href="#__codelineno-0-739">739</a></span>
+<span class="normal"><a href="#__codelineno-0-740">740</a></span>
+<span class="normal"><a href="#__codelineno-0-741">741</a></span>
+<span class="normal"><a href="#__codelineno-0-742">742</a></span>
+<span class="normal"><a href="#__codelineno-0-743">743</a></span>
+<span class="normal"><a href="#__codelineno-0-744">744</a></span>
+<span class="normal"><a href="#__codelineno-0-745">745</a></span>
+<span class="normal"><a href="#__codelineno-0-746">746</a></span>
+<span class="normal"><a href="#__codelineno-0-747">747</a></span>
+<span class="normal"><a href="#__codelineno-0-748">748</a></span>
+<span class="normal"><a href="#__codelineno-0-749">749</a></span>
+<span class="normal"><a href="#__codelineno-0-750">750</a></span>
+<span class="normal"><a href="#__codelineno-0-751">751</a></span>
+<span class="normal"><a href="#__codelineno-0-752">752</a></span>
+<span class="normal"><a href="#__codelineno-0-753">753</a></span>
+<span class="normal"><a href="#__codelineno-0-754">754</a></span>
+<span class="normal"><a href="#__codelineno-0-755">755</a></span>
+<span class="normal"><a href="#__codelineno-0-756">756</a></span>
+<span class="normal"><a href="#__codelineno-0-757">757</a></span>
+<span class="normal"><a href="#__codelineno-0-758">758</a></span>
+<span class="normal"><a href="#__codelineno-0-759">759</a></span>
+<span class="normal"><a href="#__codelineno-0-760">760</a></span>
+<span class="normal"><a href="#__codelineno-0-761">761</a></span>
+<span class="normal"><a href="#__codelineno-0-762">762</a></span>
+<span class="normal"><a href="#__codelineno-0-763">763</a></span>
+<span class="normal"><a href="#__codelineno-0-764">764</a></span>
+<span class="normal"><a href="#__codelineno-0-765">765</a></span>
+<span class="normal"><a href="#__codelineno-0-766">766</a></span>
+<span class="normal"><a href="#__codelineno-0-767">767</a></span>
+<span class="normal"><a href="#__codelineno-0-768">768</a></span>
+<span class="normal"><a href="#__codelineno-0-769">769</a></span>
+<span class="normal"><a href="#__codelineno-0-770">770</a></span>
+<span class="normal"><a href="#__codelineno-0-771">771</a></span>
+<span class="normal"><a href="#__codelineno-0-772">772</a></span>
+<span class="normal"><a href="#__codelineno-0-773">773</a></span>
+<span class="normal"><a href="#__codelineno-0-774">774</a></span>
+<span class="normal"><a href="#__codelineno-0-775">775</a></span>
+<span class="normal"><a href="#__codelineno-0-776">776</a></span>
+<span class="normal"><a href="#__codelineno-0-777">777</a></span>
+<span class="normal"><a href="#__codelineno-0-778">778</a></span>
+<span class="normal"><a href="#__codelineno-0-779">779</a></span>
+<span class="normal"><a href="#__codelineno-0-780">780</a></span>
+<span class="normal"><a href="#__codelineno-0-781">781</a></span>
+<span class="normal"><a href="#__codelineno-0-782">782</a></span>
+<span class="normal"><a href="#__codelineno-0-783">783</a></span>
+<span class="normal"><a href="#__codelineno-0-784">784</a></span>
+<span class="normal"><a href="#__codelineno-0-785">785</a></span>
+<span class="normal"><a href="#__codelineno-0-786">786</a></span>
+<span class="normal"><a href="#__codelineno-0-787">787</a></span>
+<span class="normal"><a href="#__codelineno-0-788">788</a></span>
+<span class="normal"><a href="#__codelineno-0-789">789</a></span>
+<span class="normal"><a href="#__codelineno-0-790">790</a></span>
+<span class="normal"><a href="#__codelineno-0-791">791</a></span>
+<span class="normal"><a href="#__codelineno-0-792">792</a></span>
+<span class="normal"><a href="#__codelineno-0-793">793</a></span>
+<span class="normal"><a href="#__codelineno-0-794">794</a></span>
+<span class="normal"><a href="#__codelineno-0-795">795</a></span>
+<span class="normal"><a href="#__codelineno-0-796">796</a></span>
+<span class="normal"><a href="#__codelineno-0-797">797</a></span>
+<span class="normal"><a href="#__codelineno-0-798">798</a></span>
+<span class="normal"><a href="#__codelineno-0-799">799</a></span>
+<span class="normal"><a href="#__codelineno-0-800">800</a></span>
+<span class="normal"><a href="#__codelineno-0-801">801</a></span>
+<span class="normal"><a href="#__codelineno-0-802">802</a></span>
+<span class="normal"><a href="#__codelineno-0-803">803</a></span>
+<span class="normal"><a href="#__codelineno-0-804">804</a></span>
+<span class="normal"><a href="#__codelineno-0-805">805</a></span>
+<span class="normal"><a href="#__codelineno-0-806">806</a></span>
+<span class="normal"><a href="#__codelineno-0-807">807</a></span>
+<span class="normal"><a href="#__codelineno-0-808">808</a></span>
+<span class="normal"><a href="#__codelineno-0-809">809</a></span>
+<span class="normal"><a href="#__codelineno-0-810">810</a></span>
+<span class="normal"><a href="#__codelineno-0-811">811</a></span>
+<span class="normal"><a href="#__codelineno-0-812">812</a></span>
+<span class="normal"><a href="#__codelineno-0-813">813</a></span>
+<span class="normal"><a href="#__codelineno-0-814">814</a></span>
+<span class="normal"><a href="#__codelineno-0-815">815</a></span>
+<span class="normal"><a href="#__codelineno-0-816">816</a></span>
+<span class="normal"><a href="#__codelineno-0-817">817</a></span>
+<span class="normal"><a href="#__codelineno-0-818">818</a></span>
+<span class="normal"><a href="#__codelineno-0-819">819</a></span>
+<span class="normal"><a href="#__codelineno-0-820">820</a></span>
+<span class="normal"><a href="#__codelineno-0-821">821</a></span>
+<span class="normal"><a href="#__codelineno-0-822">822</a></span>
+<span class="normal"><a href="#__codelineno-0-823">823</a></span>
+<span class="normal"><a href="#__codelineno-0-824">824</a></span>
+<span class="normal"><a href="#__codelineno-0-825">825</a></span>
+<span class="normal"><a href="#__codelineno-0-826">826</a></span>
+<span class="normal"><a href="#__codelineno-0-827">827</a></span>
+<span class="normal"><a href="#__codelineno-0-828">828</a></span>
+<span class="normal"><a href="#__codelineno-0-829">829</a></span>
+<span class="normal"><a href="#__codelineno-0-830">830</a></span>
+<span class="normal"><a href="#__codelineno-0-831">831</a></span>
+<span class="normal"><a href="#__codelineno-0-832">832</a></span>
+<span class="normal"><a href="#__codelineno-0-833">833</a></span>
+<span class="normal"><a href="#__codelineno-0-834">834</a></span>
+<span class="normal"><a href="#__codelineno-0-835">835</a></span>
+<span class="normal"><a href="#__codelineno-0-836">836</a></span>
+<span class="normal"><a href="#__codelineno-0-837">837</a></span>
+<span class="normal"><a href="#__codelineno-0-838">838</a></span>
+<span class="normal"><a href="#__codelineno-0-839">839</a></span>
+<span class="normal"><a href="#__codelineno-0-840">840</a></span>
+<span class="normal"><a href="#__codelineno-0-841">841</a></span>
+<span class="normal"><a href="#__codelineno-0-842">842</a></span>
+<span class="normal"><a href="#__codelineno-0-843">843</a></span>
+<span class="normal"><a href="#__codelineno-0-844">844</a></span>
+<span class="normal"><a href="#__codelineno-0-845">845</a></span>
+<span class="normal"><a href="#__codelineno-0-846">846</a></span>
+<span class="normal"><a href="#__codelineno-0-847">847</a></span>
+<span class="normal"><a href="#__codelineno-0-848">848</a></span>
+<span class="normal"><a href="#__codelineno-0-849">849</a></span>
+<span class="normal"><a href="#__codelineno-0-850">850</a></span>
+<span class="normal"><a href="#__codelineno-0-851">851</a></span>
+<span class="normal"><a href="#__codelineno-0-852">852</a></span>
+<span class="normal"><a href="#__codelineno-0-853">853</a></span>
+<span class="normal"><a href="#__codelineno-0-854">854</a></span>
+<span class="normal"><a href="#__codelineno-0-855">855</a></span>
+<span class="normal"><a href="#__codelineno-0-856">856</a></span>
+<span class="normal"><a href="#__codelineno-0-857">857</a></span>
+<span class="normal"><a href="#__codelineno-0-858">858</a></span>
+<span class="normal"><a href="#__codelineno-0-859">859</a></span>
+<span class="normal"><a href="#__codelineno-0-860">860</a></span>
+<span class="normal"><a href="#__codelineno-0-861">861</a></span>
+<span class="normal"><a href="#__codelineno-0-862">862</a></span>
+<span class="normal"><a href="#__codelineno-0-863">863</a></span>
+<span class="normal"><a href="#__codelineno-0-864">864</a></span>
+<span class="normal"><a href="#__codelineno-0-865">865</a></span>
+<span class="normal"><a href="#__codelineno-0-866">866</a></span>
+<span class="normal"><a href="#__codelineno-0-867">867</a></span>
+<span class="normal"><a href="#__codelineno-0-868">868</a></span>
+<span class="normal"><a href="#__codelineno-0-869">869</a></span>
+<span class="normal"><a href="#__codelineno-0-870">870</a></span>
+<span class="normal"><a href="#__codelineno-0-871">871</a></span>
+<span class="normal"><a href="#__codelineno-0-872">872</a></span>
+<span class="normal"><a href="#__codelineno-0-873">873</a></span>
+<span class="normal"><a href="#__codelineno-0-874">874</a></span>
+<span class="normal"><a href="#__codelineno-0-875">875</a></span>
+<span class="normal"><a href="#__codelineno-0-876">876</a></span>
+<span class="normal"><a href="#__codelineno-0-877">877</a></span>
+<span class="normal"><a href="#__codelineno-0-878">878</a></span>
+<span class="normal"><a href="#__codelineno-0-879">879</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-738"><a id="__codelineno-0-738" name="__codelineno-0-738"></a><span class="k">def</span><span class="w"> </span><span class="nf">run_scaling_sweep</span><span class="p">(</span>
+</span><span id="__span-0-739"><a id="__codelineno-0-739" name="__codelineno-0-739"></a>    <span class="n">config</span><span class="p">:</span> <span class="n">RunConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-740"><a id="__codelineno-0-740" name="__codelineno-0-740"></a>    <span class="n">target_skill</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-741"><a id="__codelineno-0-741" name="__codelineno-0-741"></a>    <span class="n">scales</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-742"><a id="__codelineno-0-742" name="__codelineno-0-742"></a>    <span class="n">anchor</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-743"><a id="__codelineno-0-743" name="__codelineno-0-743"></a>    <span class="n">runtime</span><span class="p">:</span> <span class="n">AgentRuntime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-744"><a id="__codelineno-0-744" name="__codelineno-0-744"></a>    <span class="n">rivals_share</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+</span><span id="__span-0-745"><a id="__codelineno-0-745" name="__codelineno-0-745"></a>    <span class="n">noise_floor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-746"><a id="__codelineno-0-746" name="__codelineno-0-746"></a>    <span class="n">workers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-747"><a id="__codelineno-0-747" name="__codelineno-0-747"></a>    <span class="n">skills</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Skill</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-748"><a id="__codelineno-0-748" name="__codelineno-0-748"></a>    <span class="n">query_set</span><span class="p">:</span> <span class="n">QuerySet</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-749"><a id="__codelineno-0-749" name="__codelineno-0-749"></a>    <span class="n">attempts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-750"><a id="__codelineno-0-750" name="__codelineno-0-750"></a>    <span class="n">early_stop</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-751"><a id="__codelineno-0-751" name="__codelineno-0-751"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ScalingStudy</span><span class="p">:</span>
+</span><span id="__span-0-752"><a id="__codelineno-0-752" name="__codelineno-0-752"></a><span class="w">    </span><span class="sd">"""Execute multi-scale catalog evaluation sweep and return scaling analysis."""</span>
+</span><span id="__span-0-753"><a id="__codelineno-0-753" name="__codelineno-0-753"></a>    <span class="n">effective_config</span> <span class="o">=</span> <span class="n">_prepare_sweep_config</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">attempts</span><span class="p">,</span> <span class="n">early_stop</span><span class="p">)</span>
+</span><span id="__span-0-754"><a id="__codelineno-0-754" name="__codelineno-0-754"></a>    <span class="n">resolved_skills</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-0-755"><a id="__codelineno-0-755" name="__codelineno-0-755"></a>        <span class="nb">list</span><span class="p">(</span><span class="n">skills</span><span class="p">)</span> <span class="k">if</span> <span class="n">skills</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">load_skills</span><span class="p">(</span><span class="n">effective_config</span><span class="o">.</span><span class="n">require_skills</span><span class="p">())</span>
+</span><span id="__span-0-756"><a id="__codelineno-0-756" name="__codelineno-0-756"></a>    <span class="p">)</span>
+</span><span id="__span-0-757"><a id="__codelineno-0-757" name="__codelineno-0-757"></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">resolved_skills</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a>        <span class="n">msg</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"Scaling sweep requires at least 2 skills in corpus, got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">resolved_skills</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-0-759"><a id="__codelineno-0-759" name="__codelineno-0-759"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+</span><span id="__span-0-760"><a id="__codelineno-0-760" name="__codelineno-0-760"></a>
+</span><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a>    <span class="n">raw_query_set</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a>        <span class="n">query_set</span> <span class="k">if</span> <span class="n">query_set</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">load_query_set</span><span class="p">(</span><span class="n">effective_config</span><span class="o">.</span><span class="n">require_queries</span><span class="p">())</span>
+</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a>    <span class="p">)</span>
+</span><span id="__span-0-764"><a id="__codelineno-0-764" name="__codelineno-0-764"></a>
+</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a>    <span class="n">is_corpus</span> <span class="o">=</span> <span class="n">target_skill</span> <span class="ow">is</span> <span class="kc">None</span>
+</span><span id="__span-0-766"><a id="__codelineno-0-766" name="__codelineno-0-766"></a>    <span class="n">requested_scales</span> <span class="o">=</span> <span class="n">scales</span> <span class="k">if</span> <span class="n">scales</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">effective_config</span><span class="o">.</span><span class="n">study</span><span class="o">.</span><span class="n">scales</span>
+</span><span id="__span-0-767"><a id="__codelineno-0-767" name="__codelineno-0-767"></a>    <span class="n">actual_scales</span> <span class="o">=</span> <span class="n">resolve_sweep_scales</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">resolved_skills</span><span class="p">),</span> <span class="n">requested_scales</span><span class="p">)</span>
+</span><span id="__span-0-768"><a id="__codelineno-0-768" name="__codelineno-0-768"></a>
+</span><span id="__span-0-769"><a id="__codelineno-0-769" name="__codelineno-0-769"></a>    <span class="n">target</span><span class="p">,</span> <span class="n">catalogs</span><span class="p">,</span> <span class="n">resolved_query_set</span><span class="p">,</span> <span class="n">corpus_plan</span><span class="p">,</span> <span class="n">resolved_anchors</span> <span class="o">=</span> <span class="n">_setup_sweep_execution</span><span class="p">(</span>
+</span><span id="__span-0-770"><a id="__codelineno-0-770" name="__codelineno-0-770"></a>        <span class="n">is_corpus</span><span class="o">=</span><span class="n">is_corpus</span><span class="p">,</span>
+</span><span id="__span-0-771"><a id="__codelineno-0-771" name="__codelineno-0-771"></a>        <span class="n">target_skill</span><span class="o">=</span><span class="n">target_skill</span><span class="p">,</span>
+</span><span id="__span-0-772"><a id="__codelineno-0-772" name="__codelineno-0-772"></a>        <span class="n">anchor</span><span class="o">=</span><span class="n">anchor</span><span class="p">,</span>
+</span><span id="__span-0-773"><a id="__codelineno-0-773" name="__codelineno-0-773"></a>        <span class="n">resolved_skills</span><span class="o">=</span><span class="n">resolved_skills</span><span class="p">,</span>
+</span><span id="__span-0-774"><a id="__codelineno-0-774" name="__codelineno-0-774"></a>        <span class="n">actual_scales</span><span class="o">=</span><span class="n">actual_scales</span><span class="p">,</span>
+</span><span id="__span-0-775"><a id="__codelineno-0-775" name="__codelineno-0-775"></a>        <span class="n">raw_query_set</span><span class="o">=</span><span class="n">raw_query_set</span><span class="p">,</span>
+</span><span id="__span-0-776"><a id="__codelineno-0-776" name="__codelineno-0-776"></a>        <span class="n">effective_config</span><span class="o">=</span><span class="n">effective_config</span><span class="p">,</span>
+</span><span id="__span-0-777"><a id="__codelineno-0-777" name="__codelineno-0-777"></a>        <span class="n">rivals_share</span><span class="o">=</span><span class="n">rivals_share</span><span class="p">,</span>
+</span><span id="__span-0-778"><a id="__codelineno-0-778" name="__codelineno-0-778"></a>    <span class="p">)</span>
+</span><span id="__span-0-779"><a id="__codelineno-0-779" name="__codelineno-0-779"></a>
+</span><span id="__span-0-780"><a id="__codelineno-0-780" name="__codelineno-0-780"></a>    <span class="n">resolved_runtime</span> <span class="o">=</span> <span class="n">runtime</span> <span class="ow">or</span> <span class="n">build_runtime</span><span class="p">(</span><span class="n">effective_config</span><span class="o">.</span><span class="n">runtime</span><span class="p">)</span>
+</span><span id="__span-0-781"><a id="__codelineno-0-781" name="__codelineno-0-781"></a>    <span class="n">baseline_results</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">ProbeResult</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()</span>
+</span><span id="__span-0-782"><a id="__codelineno-0-782" name="__codelineno-0-782"></a>    <span class="n">points</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ScalingPoint</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-0-783"><a id="__codelineno-0-783" name="__codelineno-0-783"></a>    <span class="n">final_decomp</span><span class="p">:</span> <span class="n">DecompositionResult</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-784"><a id="__codelineno-0-784" name="__codelineno-0-784"></a>
+</span><span id="__span-0-785"><a id="__codelineno-0-785" name="__codelineno-0-785"></a>    <span class="n">work_dir</span> <span class="o">=</span> <span class="n">effective_config</span><span class="o">.</span><span class="n">study</span><span class="o">.</span><span class="n">workdir</span>
+</span><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a>    <span class="n">temp_dir_obj</span><span class="p">:</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">TemporaryDirectory</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-787"><a id="__codelineno-0-787" name="__codelineno-0-787"></a>    <span class="k">if</span> <span class="n">work_dir</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-788"><a id="__codelineno-0-788" name="__codelineno-0-788"></a>        <span class="n">temp_dir_obj</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">TemporaryDirectory</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="s2">"reach_sweep_"</span><span class="p">)</span>
+</span><span id="__span-0-789"><a id="__codelineno-0-789" name="__codelineno-0-789"></a>        <span class="n">work_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">temp_dir_obj</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+</span><span id="__span-0-790"><a id="__codelineno-0-790" name="__codelineno-0-790"></a>
+</span><span id="__span-0-791"><a id="__codelineno-0-791" name="__codelineno-0-791"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-792"><a id="__codelineno-0-792" name="__codelineno-0-792"></a>        <span class="k">for</span> <span class="n">scale</span><span class="p">,</span> <span class="n">catalog</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">actual_scales</span><span class="p">,</span> <span class="n">catalogs</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="__span-0-793"><a id="__codelineno-0-793" name="__codelineno-0-793"></a>            <span class="n">scale_config</span> <span class="o">=</span> <span class="n">effective_config</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
+</span><span id="__span-0-794"><a id="__codelineno-0-794" name="__codelineno-0-794"></a>                <span class="n">update</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-0-795"><a id="__codelineno-0-795" name="__codelineno-0-795"></a>                    <span class="s2">"study"</span><span class="p">:</span> <span class="n">effective_config</span><span class="o">.</span><span class="n">study</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
+</span><span id="__span-0-796"><a id="__codelineno-0-796" name="__codelineno-0-796"></a>                        <span class="n">update</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-0-797"><a id="__codelineno-0-797" name="__codelineno-0-797"></a>                            <span class="s2">"catalog"</span><span class="p">:</span> <span class="n">catalog</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+</span><span id="__span-0-798"><a id="__codelineno-0-798" name="__codelineno-0-798"></a>                            <span class="s2">"rescope"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-799"><a id="__codelineno-0-799" name="__codelineno-0-799"></a>                            <span class="s2">"partial"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-800"><a id="__codelineno-0-800" name="__codelineno-0-800"></a>                            <span class="s2">"workdir"</span><span class="p">:</span> <span class="n">work_dir</span><span class="p">,</span>
+</span><span id="__span-0-801"><a id="__codelineno-0-801" name="__codelineno-0-801"></a>                            <span class="s2">"out"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-802"><a id="__codelineno-0-802" name="__codelineno-0-802"></a>                        <span class="p">}</span>
+</span><span id="__span-0-803"><a id="__codelineno-0-803" name="__codelineno-0-803"></a>                    <span class="p">),</span>
+</span><span id="__span-0-804"><a id="__codelineno-0-804" name="__codelineno-0-804"></a>                    <span class="s2">"catalog"</span><span class="p">:</span> <span class="n">effective_config</span><span class="o">.</span><span class="n">catalog</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
+</span><span id="__span-0-805"><a id="__codelineno-0-805" name="__codelineno-0-805"></a>                        <span class="n">update</span><span class="o">=</span><span class="p">{</span><span class="s2">"mode"</span><span class="p">:</span> <span class="n">CatalogMode</span><span class="o">.</span><span class="n">SWEEP</span><span class="p">}</span>
+</span><span id="__span-0-806"><a id="__codelineno-0-806" name="__codelineno-0-806"></a>                    <span class="p">),</span>
+</span><span id="__span-0-807"><a id="__codelineno-0-807" name="__codelineno-0-807"></a>                <span class="p">}</span>
+</span><span id="__span-0-808"><a id="__codelineno-0-808" name="__codelineno-0-808"></a>            <span class="p">)</span>
+</span><span id="__span-0-809"><a id="__codelineno-0-809" name="__codelineno-0-809"></a>
+</span><span id="__span-0-810"><a id="__codelineno-0-810" name="__codelineno-0-810"></a>            <span class="n">scale_query_set</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-0-811"><a id="__codelineno-0-811" name="__codelineno-0-811"></a>                <span class="n">corpus_plan</span><span class="o">.</span><span class="n">queries_for_scale</span><span class="p">(</span>
+</span><span id="__span-0-812"><a id="__codelineno-0-812" name="__codelineno-0-812"></a>                    <span class="n">catalog</span><span class="o">=</span><span class="n">catalog</span><span class="p">,</span>
+</span><span id="__span-0-813"><a id="__codelineno-0-813" name="__codelineno-0-813"></a>                    <span class="n">raw_query_set</span><span class="o">=</span><span class="n">raw_query_set</span><span class="p">,</span>
+</span><span id="__span-0-814"><a id="__codelineno-0-814" name="__codelineno-0-814"></a>                <span class="p">)</span>
+</span><span id="__span-0-815"><a id="__codelineno-0-815" name="__codelineno-0-815"></a>                <span class="k">if</span> <span class="n">is_corpus</span> <span class="ow">and</span> <span class="n">corpus_plan</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="__span-0-816"><a id="__codelineno-0-816" name="__codelineno-0-816"></a>                <span class="k">else</span> <span class="n">resolved_query_set</span>
+</span><span id="__span-0-817"><a id="__codelineno-0-817" name="__codelineno-0-817"></a>            <span class="p">)</span>
+</span><span id="__span-0-818"><a id="__codelineno-0-818" name="__codelineno-0-818"></a>
+</span><span id="__span-0-819"><a id="__codelineno-0-819" name="__codelineno-0-819"></a>            <span class="n">composed</span> <span class="o">=</span> <span class="n">Composition</span><span class="p">(</span>
+</span><span id="__span-0-820"><a id="__codelineno-0-820" name="__codelineno-0-820"></a>                <span class="n">config</span><span class="o">=</span><span class="n">scale_config</span><span class="p">,</span>
+</span><span id="__span-0-821"><a id="__codelineno-0-821" name="__codelineno-0-821"></a>                <span class="n">query_set</span><span class="o">=</span><span class="n">scale_query_set</span><span class="p">,</span>
+</span><span id="__span-0-822"><a id="__codelineno-0-822" name="__codelineno-0-822"></a>                <span class="n">catalog</span><span class="o">=</span><span class="n">catalog</span><span class="p">,</span>
+</span><span id="__span-0-823"><a id="__codelineno-0-823" name="__codelineno-0-823"></a>                <span class="n">skills</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="n">resolved_skills</span><span class="p">),</span>
+</span><span id="__span-0-824"><a id="__codelineno-0-824" name="__codelineno-0-824"></a>            <span class="p">)</span>
+</span><span id="__span-0-825"><a id="__codelineno-0-825" name="__codelineno-0-825"></a>
+</span><span id="__span-0-826"><a id="__codelineno-0-826" name="__codelineno-0-826"></a>            <span class="n">outcome</span> <span class="o">=</span> <span class="n">conduct</span><span class="p">(</span>
+</span><span id="__span-0-827"><a id="__codelineno-0-827" name="__codelineno-0-827"></a>                <span class="n">config</span><span class="o">=</span><span class="n">scale_config</span><span class="p">,</span>
+</span><span id="__span-0-828"><a id="__codelineno-0-828" name="__codelineno-0-828"></a>                <span class="n">runtime</span><span class="o">=</span><span class="n">resolved_runtime</span><span class="p">,</span>
+</span><span id="__span-0-829"><a id="__codelineno-0-829" name="__codelineno-0-829"></a>                <span class="n">composed</span><span class="o">=</span><span class="n">composed</span><span class="p">,</span>
+</span><span id="__span-0-830"><a id="__codelineno-0-830" name="__codelineno-0-830"></a>                <span class="n">allow_truncation</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-831"><a id="__codelineno-0-831" name="__codelineno-0-831"></a>                <span class="n">append_across_arms</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-832"><a id="__codelineno-0-832" name="__codelineno-0-832"></a>                <span class="n">workers</span><span class="o">=</span><span class="n">workers</span><span class="p">,</span>
+</span><span id="__span-0-833"><a id="__codelineno-0-833" name="__codelineno-0-833"></a>            <span class="p">)</span>
+</span><span id="__span-0-834"><a id="__codelineno-0-834" name="__codelineno-0-834"></a>
+</span><span id="__span-0-835"><a id="__codelineno-0-835" name="__codelineno-0-835"></a>            <span class="n">point</span><span class="p">,</span> <span class="n">decomp</span> <span class="o">=</span> <span class="n">_build_scaling_point</span><span class="p">(</span>
+</span><span id="__span-0-836"><a id="__codelineno-0-836" name="__codelineno-0-836"></a>                <span class="n">scale</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span>
+</span><span id="__span-0-837"><a id="__codelineno-0-837" name="__codelineno-0-837"></a>                <span class="n">catalog_id</span><span class="o">=</span><span class="n">catalog</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+</span><span id="__span-0-838"><a id="__codelineno-0-838" name="__codelineno-0-838"></a>                <span class="n">results</span><span class="o">=</span><span class="n">outcome</span><span class="o">.</span><span class="n">results</span><span class="p">,</span>
+</span><span id="__span-0-839"><a id="__codelineno-0-839" name="__codelineno-0-839"></a>                <span class="n">resolved_query_set</span><span class="o">=</span><span class="n">scale_query_set</span><span class="p">,</span>
+</span><span id="__span-0-840"><a id="__codelineno-0-840" name="__codelineno-0-840"></a>                <span class="n">baseline_results</span><span class="o">=</span><span class="n">baseline_results</span><span class="p">,</span>
+</span><span id="__span-0-841"><a id="__codelineno-0-841" name="__codelineno-0-841"></a>                <span class="n">installed_skills</span><span class="o">=</span><span class="nb">set</span><span class="p">(</span><span class="n">catalog</span><span class="o">.</span><span class="n">skills</span><span class="p">),</span>
+</span><span id="__span-0-842"><a id="__codelineno-0-842" name="__codelineno-0-842"></a>                <span class="n">seed</span><span class="o">=</span><span class="n">effective_config</span><span class="o">.</span><span class="n">catalog</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span>
+</span><span id="__span-0-843"><a id="__codelineno-0-843" name="__codelineno-0-843"></a>            <span class="p">)</span>
+</span><span id="__span-0-844"><a id="__codelineno-0-844" name="__codelineno-0-844"></a>            <span class="n">points</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">point</span><span class="p">)</span>
+</span><span id="__span-0-845"><a id="__codelineno-0-845" name="__codelineno-0-845"></a>
+</span><span id="__span-0-846"><a id="__codelineno-0-846" name="__codelineno-0-846"></a>            <span class="k">if</span> <span class="n">scale</span> <span class="o">==</span> <span class="n">actual_scales</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
+</span><span id="__span-0-847"><a id="__codelineno-0-847" name="__codelineno-0-847"></a>                <span class="n">baseline_results</span> <span class="o">=</span> <span class="n">outcome</span><span class="o">.</span><span class="n">results</span>
+</span><span id="__span-0-848"><a id="__codelineno-0-848" name="__codelineno-0-848"></a>            <span class="k">elif</span> <span class="n">decomp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-849"><a id="__codelineno-0-849" name="__codelineno-0-849"></a>                <span class="n">final_decomp</span> <span class="o">=</span> <span class="n">decomp</span>
+</span><span id="__span-0-850"><a id="__codelineno-0-850" name="__codelineno-0-850"></a>
+</span><span id="__span-0-851"><a id="__codelineno-0-851" name="__codelineno-0-851"></a>            <span class="k">if</span> <span class="p">(</span>
+</span><span id="__span-0-852"><a id="__codelineno-0-852" name="__codelineno-0-852"></a>                <span class="n">effective_config</span><span class="o">.</span><span class="n">study</span><span class="o">.</span><span class="n">early_stop</span>
+</span><span id="__span-0-853"><a id="__codelineno-0-853" name="__codelineno-0-853"></a>                <span class="ow">and</span> <span class="n">is_corpus</span>
+</span><span id="__span-0-854"><a id="__codelineno-0-854" name="__codelineno-0-854"></a>                <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">points</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">_MIN_EARLY_STOP_POINTS</span>
+</span><span id="__span-0-855"><a id="__codelineno-0-855" name="__codelineno-0-855"></a>                <span class="ow">and</span> <span class="n">point</span><span class="o">.</span><span class="n">f1_interval</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">_EARLY_STOP_F1_THRESHOLD</span>
+</span><span id="__span-0-856"><a id="__codelineno-0-856" name="__codelineno-0-856"></a>            <span class="p">):</span>
+</span><span id="__span-0-857"><a id="__codelineno-0-857" name="__codelineno-0-857"></a>                <span class="k">break</span>
+</span><span id="__span-0-858"><a id="__codelineno-0-858" name="__codelineno-0-858"></a>
+</span><span id="__span-0-859"><a id="__codelineno-0-859" name="__codelineno-0-859"></a>        <span class="n">effective_noise_floor</span> <span class="o">=</span> <span class="n">_compute_effective_noise_floor</span><span class="p">(</span>
+</span><span id="__span-0-860"><a id="__codelineno-0-860" name="__codelineno-0-860"></a>            <span class="n">noise_floor</span><span class="p">,</span> <span class="n">points</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">baseline_results</span><span class="p">)</span>
+</span><span id="__span-0-861"><a id="__codelineno-0-861" name="__codelineno-0-861"></a>        <span class="p">)</span>
+</span><span id="__span-0-862"><a id="__codelineno-0-862" name="__codelineno-0-862"></a>        <span class="n">evaluated_scales</span> <span class="o">=</span> <span class="n">actual_scales</span><span class="p">[:</span> <span class="nb">len</span><span class="p">(</span><span class="n">points</span><span class="p">)]</span>
+</span><span id="__span-0-863"><a id="__codelineno-0-863" name="__codelineno-0-863"></a>        <span class="n">rate_curve</span> <span class="o">=</span> <span class="p">[</span><span class="n">p</span><span class="o">.</span><span class="n">f1_score</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">points</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_corpus</span> <span class="k">else</span> <span class="p">[</span><span class="n">p</span><span class="o">.</span><span class="n">pass_rate</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">points</span><span class="p">]</span>
+</span><span id="__span-0-864"><a id="__codelineno-0-864" name="__codelineno-0-864"></a>        <span class="n">knee</span> <span class="o">=</span> <span class="n">find_kneedle_knee</span><span class="p">(</span><span class="n">evaluated_scales</span><span class="p">,</span> <span class="n">rate_curve</span><span class="p">,</span> <span class="n">noise_floor</span><span class="o">=</span><span class="n">effective_noise_floor</span><span class="p">)</span>
+</span><span id="__span-0-865"><a id="__codelineno-0-865" name="__codelineno-0-865"></a>
+</span><span id="__span-0-866"><a id="__codelineno-0-866" name="__codelineno-0-866"></a>        <span class="k">return</span> <span class="n">_build_study_result</span><span class="p">(</span>
+</span><span id="__span-0-867"><a id="__codelineno-0-867" name="__codelineno-0-867"></a>            <span class="n">target</span><span class="o">=</span><span class="n">target</span><span class="p">,</span>
+</span><span id="__span-0-868"><a id="__codelineno-0-868" name="__codelineno-0-868"></a>            <span class="n">is_corpus</span><span class="o">=</span><span class="n">is_corpus</span><span class="p">,</span>
+</span><span id="__span-0-869"><a id="__codelineno-0-869" name="__codelineno-0-869"></a>            <span class="n">evaluated_scales</span><span class="o">=</span><span class="n">evaluated_scales</span><span class="p">,</span>
+</span><span id="__span-0-870"><a id="__codelineno-0-870" name="__codelineno-0-870"></a>            <span class="n">points</span><span class="o">=</span><span class="n">points</span><span class="p">,</span>
+</span><span id="__span-0-871"><a id="__codelineno-0-871" name="__codelineno-0-871"></a>            <span class="n">knee</span><span class="o">=</span><span class="n">knee</span><span class="p">,</span>
+</span><span id="__span-0-872"><a id="__codelineno-0-872" name="__codelineno-0-872"></a>            <span class="n">noise_floor</span><span class="o">=</span><span class="n">effective_noise_floor</span><span class="p">,</span>
+</span><span id="__span-0-873"><a id="__codelineno-0-873" name="__codelineno-0-873"></a>            <span class="n">total_skills</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">resolved_skills</span><span class="p">),</span>
+</span><span id="__span-0-874"><a id="__codelineno-0-874" name="__codelineno-0-874"></a>            <span class="n">decomp</span><span class="o">=</span><span class="n">final_decomp</span><span class="p">,</span>
+</span><span id="__span-0-875"><a id="__codelineno-0-875" name="__codelineno-0-875"></a>            <span class="n">anchor_skills</span><span class="o">=</span><span class="n">resolved_anchors</span><span class="p">,</span>
+</span><span id="__span-0-876"><a id="__codelineno-0-876" name="__codelineno-0-876"></a>        <span class="p">)</span>
+</span><span id="__span-0-877"><a id="__codelineno-0-877" name="__codelineno-0-877"></a>    <span class="k">finally</span><span class="p">:</span>
+</span><span id="__span-0-878"><a id="__codelineno-0-878" name="__codelineno-0-878"></a>        <span class="k">if</span> <span class="n">temp_dir_obj</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-879"><a id="__codelineno-0-879" name="__codelineno-0-879"></a>            <span class="n">temp_dir_obj</span><span class="o">.</span><span class="n">cleanup</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight", "search.share"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
