@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, NamedTuple
 
 from cyclopts import Parameter
 
@@ -29,14 +29,16 @@ from reach.config import (
     default_agent,
     resolve_sub_settings,
 )
+from reach.generate import checkpoint_path
 from reach.models import Catalog, CatalogMode
-from reach.queries import load_query_set
+from reach.queries import QuerySet, load_query_set
 from reach.runtime import AgentRuntime, build_runtime
 from reach.sweep import _resolve_anchor_skills, resolve_sweep_scales, run_scaling_sweep
 from reach.views import Console, build_console, print_sweep, print_wrote, render_sweep
 
 from .app import LOOP, app
 from .discovery import REACH_DIR_NAME, _corpus, _no_skills, find_existing_queries_path
+from .drafting import _draft_query_set
 from .flags import (
     POSITIVE_INT,
     RATE,
@@ -45,6 +47,7 @@ from .flags import (
     ConfigFlag,
     EarlyStopFlag,
     Format,
+    GenerateFlags,
     Global,
     RegistryFlags,
     YesFlag,
@@ -63,6 +66,9 @@ def _resolve_sweep_queries(
     queries: Path | None,
     configured: Path | None,
     skills_path: Path | None = None,
+    *,
+    auto_queries: bool = True,
+    global_scope: bool = False,
 ) -> Path:
     """Resolve queries file from explicit argument, configuration, or .reach fallback."""
     resolved = queries if queries is not None else configured
@@ -70,11 +76,19 @@ def _resolve_sweep_queries(
         return resolved
     if found := find_existing_queries_path(skills_path):
         return found
+    if auto_queries:
+        if skills_path is not None and not global_scope:
+            sp = Path(skills_path)
+            base = sp if sp.is_dir() else sp.parent
+            return base / REACH_DIR_NAME / "queries.json"
+        return Path(REACH_DIR_NAME) / "queries.json"
     msg = (
         "scaling sweep requires a labeled query benchmark to test reachability across "
         "catalog scales.\n\n"
         "• Pass an existing queries file:\n"
         "    reach sweep ./skills --queries .reach/queries.json\n\n"
+        "• Or allow Reach to automatically draft anchor queries (default):\n"
+        "    reach sweep ./skills\n\n"
         "• Or draft benchmark queries first:\n"
         "    reach query draft --skills ./skills --out .reach/queries.json"
     )
@@ -93,7 +107,7 @@ def _resolve_sweep_out_path(
         return configured
     if queries_path is not None:
         qp = Path(queries_path)
-        if qp.parent.name == REACH_DIR_NAME and qp.parent.is_dir():
+        if qp.parent.name == REACH_DIR_NAME:
             return qp.parent / "sweep.json"
     return Path(REACH_DIR_NAME) / "sweep.json"
 
@@ -151,16 +165,22 @@ def _print_anchor_coverage(
     skills: Sequence[Skill],
     scales: Sequence[int] | None,
     target: str | None,
+    clamp_to_queried: bool = True,
+    query_set: QuerySet | None = None,
 ) -> None:
     """Print corpus and anchor query coverage summary and warn on 0-query skills."""
-    if target is not None or not queries_path.exists():
+    if target is not None:
         return
-    try:
-        raw_qs = load_query_set(queries_path)
-    except (OSError, ValueError):
-        return
+    raw_qs = query_set
+    if raw_qs is None:
+        if not queries_path.exists():
+            return
+        try:
+            raw_qs = load_query_set(queries_path)
+        except (OSError, ValueError):
+            return
 
-    queried_corpus = {q.expected_skill for q in raw_qs.queries if q.expected_skill is not None}
+    queried_corpus = raw_qs.covered_skills()
     missing_corpus = sorted(s.name for s in skills if s.name not in queried_corpus)
     if missing_corpus:
         sample = ", ".join(missing_corpus[:_MAX_SAMPLE_SKILLS])
@@ -182,6 +202,7 @@ def _print_anchor_coverage(
             skills,
             actual_scales,
             query_set=raw_qs,
+            clamp_to_queried=clamp_to_queried,
         )
     except ValueError:
         return
@@ -327,6 +348,18 @@ def _sweep(
             ),
         ),
     ] = True,
+    auto_queries: Annotated[
+        bool | None,
+        Parameter(
+            name="--auto-queries",
+            negative="--no-auto-queries",
+            show_default=False,
+            help=(
+                "Automatically synthesize and backfill queries for unqueried "
+                "anchor skills (default: True)"
+            ),
+        ),
+    ] = None,
     yes: YesFlag = False,
     config: ConfigFlag = None,
 ) -> int:
@@ -358,6 +391,7 @@ def _sweep(
         queries=queries,
         workdir=workdir,
         out=out,
+        auto_queries=auto_queries,
     )
 
     found = _load_sweep_corpus(
@@ -375,7 +409,13 @@ def _sweep(
         return 2
 
     effective_config, resolved_queries = _finalize_sweep_study_config(
-        effective_config, found, skills, queries, workdir, early_stop
+        effective_config,
+        found,
+        skills,
+        queries,
+        workdir,
+        early_stop,
+        global_scope=global_,
     )
     destination = _resolve_sweep_out_path(
         out,
@@ -387,42 +427,19 @@ def _sweep(
             "study": effective_config.study.model_copy(update={"out": destination}),
         }
     )
-    if format == "text":
-        console.print(f"[dim]Using benchmark queries from:[/] [cyan]{resolved_queries}[/]")
-        _print_anchor_coverage(
-            console=console,
-            queries_path=resolved_queries,
-            anchor=anchor,
-            configured_anchor=effective_config.study.anchor,
-            skills=found,
-            scales=parsed_scales or effective_config.study.scales,
-            target=target,
-        )
-        if driver.rations_catalog and allow_truncation and found:
-            fit = driver.fit(
-                Catalog(
-                    id="sweep:corpus:full",
-                    mode=CatalogMode.SWEEP,
-                    skills=tuple(s.name for s in found),
-                ),
-                found,
-            )
-            if not fit.whole:
-                console.print(
-                    f"[yellow]Notice:[/] full catalog ({fit.asked:,} chars) exceeds "
-                    f"[bold]{driver.name}[/] listing budget ({fit.allowed:,} chars); "
-                    f"{fit.truncated} of {len(found)} descriptions will be truncated to "
-                    "bare names at higher scales."
-                )
-        console.print()
 
-    if code := confirm_skill_execution(
-        console,
-        runtime_name=driver.name,
-        skills=found,
-        action="scaling sweep",
+    if code := _prepare_and_confirm_sweep(
+        console=console,
+        driver=driver,
+        effective_config=effective_config,
+        found=found,
+        resolved_queries=resolved_queries,
+        anchor=anchor,
+        scales=parsed_scales or effective_config.study.scales,
+        target=target,
+        allow_truncation=allow_truncation,
+        format=format,
         yes=yes,
-        trusted=effective_config.study.trusted,
     ):
         return code
 
@@ -472,6 +489,178 @@ def _sweep(
     return 0
 
 
+class _SweepQueryResolution(NamedTuple):
+    """Hold missing anchor target skill names and cached query set."""
+
+    missing_targets: tuple[str, ...]
+    existing_query_set: QuerySet | None
+
+
+def _prepare_and_confirm_sweep(
+    *,
+    console: Console,
+    driver: AgentRuntime,
+    effective_config: RunConfig,
+    found: Sequence[Skill],
+    resolved_queries: Path,
+    anchor: str | None,
+    scales: Sequence[int] | None,
+    target: str | None,
+    allow_truncation: bool,
+    format: Format,
+    yes: bool,
+) -> int:
+    """Confirm skill execution, draft missing anchor queries, and print preflight notices."""
+    resolution = (
+        _resolve_missing_sweep_targets(
+            queries_path=resolved_queries,
+            anchor=anchor,
+            configured_anchor=effective_config.study.anchor,
+            skills=found,
+            scales=scales,
+            target=target,
+        )
+        if effective_config.study.auto_queries
+        else _SweepQueryResolution((), None)
+    )
+
+    if code := confirm_skill_execution(
+        console,
+        runtime_name=driver.name,
+        skills=found,
+        action="scaling sweep",
+        yes=yes,
+        trusted=effective_config.study.trusted,
+    ):
+        return code
+
+    fresh_qs: QuerySet | None = resolution.existing_query_set
+    if resolution.missing_targets:
+        if code := _draft_missing_sweep_queries(
+            console=console,
+            effective_config=effective_config,
+            found=found,
+            resolved_queries=resolved_queries,
+            missing_targets=resolution.missing_targets,
+            format=format,
+            existing_qs=resolution.existing_query_set,
+        ):
+            return code
+        fresh_qs = None
+
+    if format == "text":
+        console.print(f"[dim]Using benchmark queries from:[/] [cyan]{resolved_queries}[/]")
+        _print_anchor_coverage(
+            console=console,
+            queries_path=resolved_queries,
+            anchor=anchor,
+            configured_anchor=effective_config.study.anchor,
+            skills=found,
+            scales=scales,
+            target=target,
+            clamp_to_queried=not effective_config.study.auto_queries,
+            query_set=fresh_qs,
+        )
+        if driver.rations_catalog and allow_truncation and found:
+            fit = driver.fit(
+                Catalog(
+                    id="sweep:corpus:full",
+                    mode=CatalogMode.SWEEP,
+                    skills=tuple(s.name for s in found),
+                ),
+                found,
+            )
+            if not fit.whole:
+                console.print(
+                    f"[yellow]Notice:[/] full catalog ({fit.asked:,} chars) exceeds "
+                    f"[bold]{driver.name}[/] listing budget ({fit.allowed:,} chars); "
+                    f"{fit.truncated} of {len(found)} descriptions will be truncated to "
+                    "bare names at higher scales."
+                )
+        console.print()
+    return 0
+
+
+def _resolve_missing_sweep_targets(
+    *,
+    queries_path: Path,
+    anchor: str | None,
+    configured_anchor: int | Sequence[str] | str | None,
+    skills: Sequence[Skill],
+    scales: Sequence[int] | None,
+    target: str | None,
+) -> _SweepQueryResolution:
+    """Identify anchor or target skills that lack positive queries in the query file."""
+    existing_query_set = load_query_set(queries_path) if queries_path.is_file() else None
+    query_set = existing_query_set or QuerySet(queries=())
+    if target is not None:
+        anchor_names: tuple[str, ...] = tuple(s.name for s in skills if s.name == target)
+    else:
+        try:
+            actual_scales = resolve_sweep_scales(len(skills), scales)
+            resolved_anchors = _resolve_anchor_skills(
+                anchor if anchor is not None else configured_anchor,
+                skills,
+                actual_scales,
+                query_set=query_set,
+                clamp_to_queried=False,
+            )
+        except ValueError:
+            return _SweepQueryResolution((), existing_query_set)
+        anchor_names = (
+            resolved_anchors if resolved_anchors is not None else tuple(s.name for s in skills)
+        )
+    queried_names = query_set.covered_skills()
+    missing = tuple(name for name in anchor_names if name not in queried_names)
+    return _SweepQueryResolution(missing, existing_query_set)
+
+
+def _draft_missing_sweep_queries(
+    *,
+    console: Console,
+    effective_config: RunConfig,
+    found: Sequence[Skill],
+    resolved_queries: Path,
+    missing_targets: tuple[str, ...],
+    format: Format,
+    existing_qs: QuerySet | None = None,
+) -> int:
+    """Draft or backfill missing anchor queries and save them to resolved_queries."""
+    draft_console = console if format == "text" else build_console(quiet=True)
+    if format == "text":
+        draft_console.print(
+            f"[dim]Drafting queries for {len(missing_targets)} unqueried anchor "
+            f"skill(s) ({', '.join(missing_targets)}) ->[/] [cyan]{resolved_queries}[/]"
+        )
+
+    flags = GenerateFlags.from_query_settings(
+        effective_config.query,
+        targets=missing_targets,
+    )
+    draft_settings = effective_config.with_overrides(
+        catalog={"mode": CatalogMode.ALL},
+        study={"queries": resolved_queries},
+    )
+    try:
+        code = _draft_query_set(
+            draft_console,
+            draft_settings,
+            found,
+            flags,
+            dry_run=False,
+            same_invocation_probe=True,
+            existing_query_set=existing_qs,
+        )
+        if code != 0:
+            checkpoint_path(resolved_queries).unlink(missing_ok=True)
+            return code
+    except (OSError, ValueError, RuntimeError) as err:
+        checkpoint_path(resolved_queries).unlink(missing_ok=True)
+        console.print(f"[red]Error drafting queries:[/] {err}")
+        return 2
+    return 0
+
+
 def _parse_scales_cli(
     scales: str | None,
     configured_scales: tuple[int, ...] | None,
@@ -495,6 +684,7 @@ def _resolve_sweep_effective_config(
     queries: Path | None,
     workdir: Path | None,
     out: Path | None,
+    auto_queries: bool | None = None,
 ) -> tuple[RunConfig, AgentRuntime]:
     """Resolve layered runtime, registry, and study settings across CLI flags and configs."""
     resolved_agent = (
@@ -533,6 +723,7 @@ def _resolve_sweep_effective_config(
         queries=queries,
         workdir=workdir,
         out=out,
+        auto_queries=auto_queries,
     )
 
     effective_config = (run_config or RunConfig()).model_copy(
@@ -580,6 +771,8 @@ def _finalize_sweep_study_config(
     queries: Path | None,
     workdir: Path | None,
     early_stop: bool,
+    *,
+    global_scope: bool = False,
 ) -> tuple[RunConfig, Path]:
     """Determine working directory and resolved benchmark queries path."""
     work_dir = workdir or effective_config.study.workdir
@@ -592,6 +785,8 @@ def _finalize_sweep_study_config(
         queries,
         effective_config.study.queries,
         skills_path=resolved_skills or skills,
+        auto_queries=effective_config.study.auto_queries,
+        global_scope=global_scope,
     )
     updated_study = effective_config.study.model_copy(
         update={

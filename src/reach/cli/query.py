@@ -434,9 +434,7 @@ def _resolve_missing_backfill(
     generate: GenerateFlags | None,
 ) -> tuple[GenerateFlags | None, int | None]:
     """Filter generation targets to unqueried skills when running in --missing mode."""
-    covered_names = {
-        q.expected_skill for q in existing_query_set.queries if q.expected_skill is not None
-    }
+    covered_names = existing_query_set.covered_skills()
     requested_targets = effective_generate.targets
     candidate_skills = (
         [s for s in skills_found if s.name in requested_targets]

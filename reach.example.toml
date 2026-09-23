@@ -176,6 +176,7 @@ partial = false
 rescope = false
 tag = ""
 # anchor = "all"
+# auto_queries = true
 # early_stop = true
 # scales = [10, 25, 50, 100]
 # trusted = false

@@ -28,6 +28,7 @@ from pydantic import ValidationError
 from reach.cli import StudyFlags, build_config
 from reach.config import (
     DEFAULT_ATTEMPTS,
+    QuerySettings,
     RunConfig,
     RuntimeSettings,
     StudySettings,
@@ -780,6 +781,7 @@ def test_the_loader_gained_no_field(variable_config: Path, skill_repo: Path) -> 
         "scales",
         "anchor",
         "trusted",
+        "auto_queries",
     }
     assert RunConfig.model_validate(dumped).fingerprint == config.fingerprint
 
@@ -1938,3 +1940,69 @@ def test_run_config_inherits_runtime_agent_from_general(tmp_path: Path) -> None:
     cfg3 = RunConfig.from_toml(toml_explicit)
     assert cfg3.general.default_agent == "antigravity-sdk"
     assert cfg3.runtime.agent == "claude-code"
+
+
+def test_study_settings_auto_queries_fingerprint_and_resolution(tmp_path: Path) -> None:
+    """Verify StudySettings.auto_queries layers via RunConfig.resolve and keeps fingerprints."""
+    cfg_true = RunConfig(study=StudySettings(auto_queries=True))
+    cfg_false = RunConfig(study=StudySettings(auto_queries=False))
+
+    assert cfg_true.study.auto_queries is True
+    assert cfg_false.study.auto_queries is False
+    assert cfg_true.fingerprint == cfg_false.fingerprint
+    assert cfg_true.arm == cfg_false.arm
+    assert cfg_true.condition == cfg_false.condition
+
+    resolved_inherit = RunConfig.resolve(StudySettings, cfg_false, auto_queries=None)
+    assert resolved_inherit.auto_queries is False
+
+    resolved_override = RunConfig.resolve(StudySettings, cfg_false, auto_queries=True)
+    assert resolved_override.auto_queries is True
+
+
+@pytest.mark.parametrize(
+    (
+        "query_settings",
+        "targets",
+        "expected_count",
+        "expected_adversarial",
+        "expected_adversarial_count",
+        "expected_top_rivals",
+    ),
+    [
+        (
+            QuerySettings(count=4, adversarial_count=0, top_rivals=0),
+            ("skill-a", "skill-b"),
+            4,
+            False,
+            1,
+            None,
+        ),
+        (
+            QuerySettings(count=2, adversarial_count=3, top_rivals=5),
+            ("skill-c",),
+            2,
+            True,
+            3,
+            5,
+        ),
+    ],
+    ids=["zero_constraints_fallback", "active_constraints_preserved"],
+)
+def test_generate_flags_from_query_settings_handles_zero_constraints(
+    query_settings: QuerySettings,
+    targets: tuple[str, ...],
+    expected_count: int,
+    expected_adversarial: bool,
+    expected_adversarial_count: int,
+    expected_top_rivals: int | None,
+) -> None:
+    """Verify GenerateFlags.from_query_settings safely maps zero values in QuerySettings."""
+    from reach.cli.flags import GenerateFlags
+
+    flags = GenerateFlags.from_query_settings(query_settings, targets=targets)
+    assert flags.targets == targets
+    assert flags.count == expected_count
+    assert flags.adversarial is expected_adversarial
+    assert flags.adversarial_count == expected_adversarial_count
+    assert flags.top_rivals == expected_top_rivals

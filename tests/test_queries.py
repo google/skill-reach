@@ -670,3 +670,22 @@ def test_draft_backfill_resolves_id_collisions_without_numeric_suffix(
     saved = load_query_set(dest)
     assert len(saved.queries) == 2
     assert [q.id for q in saved.queries] == ["skill-a", "skill-a-1"]
+
+
+def test_query_set_covered_skills_filters_negatives_and_unassigned() -> None:
+    """Verify covered_skills returns positive target skills excluding negatives."""
+    from reach.models import Query, QueryKind
+    from reach.queries import QuerySet
+
+    qs = QuerySet(
+        queries=(
+            Query(id="q1", text="Task 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+            Query(id="q2", text="Task 2", expected_skill="skill-b", kind=QueryKind.CONTEXTUAL),
+            Query(
+                id="q3", text="Task 3", expected_skill="skill-c", kind=QueryKind.NEIGHBOR_NEGATIVE
+            ),
+            Query(id="q4", text="Out of scope", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+            Query(id="q5", text="Task 1 repeat", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+        )
+    )
+    assert qs.covered_skills() == frozenset({"skill-a", "skill-b"})

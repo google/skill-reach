@@ -1793,3 +1793,40 @@ def test_resolve_anchor_skills_warns_when_query_set_has_no_resident_queries(
     assert anchors is not None
     assert len(anchors) == 1
     assert "Provided query set contains 0 benchmark queries for resident skills" in caplog.text
+
+
+def test_resolve_anchor_skills_unclamped_computes_full_corpus_medoids(
+    tmp_path: Path,
+) -> None:
+    """Verify _resolve_anchor_skills selects full-corpus medoids when clamp_to_queried=False."""
+    from reach.models import Skill
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _resolve_anchor_skills
+
+    skills = [
+        Skill(name=f"skill-{i:02d}", description=f"Action {i:02d}", path=tmp_path / f"s-{i:02d}")
+        for i in range(5)
+    ]
+    partial_qs = QuerySet(
+        catalog_id="cat",
+        queries=(Query(id="q-0", text="Query 0", expected_skill="skill-00"),),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    clamped = _resolve_anchor_skills(
+        requested_anchor=3,
+        resolved_skills=skills,
+        actual_scales=(3, 5),
+        query_set=partial_qs,
+        clamp_to_queried=True,
+    )
+    assert clamped == ("skill-00",)
+
+    unclamped = _resolve_anchor_skills(
+        requested_anchor=3,
+        resolved_skills=skills,
+        actual_scales=(3, 5),
+        query_set=partial_qs,
+        clamp_to_queried=False,
+    )
+    assert unclamped is not None
+    assert len(unclamped) == 3

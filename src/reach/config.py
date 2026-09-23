@@ -667,6 +667,7 @@ class StudySettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    auto_queries: bool = True
     skills: Path | None = None
     queries: Path | None = None
     workdir: Path | None = None
@@ -999,7 +1000,7 @@ def digest_material(material: dict[str, Any]) -> Digests:
     fingerprint["study"] = {
         k: v
         for k, v in fingerprint.get("study", {}).items()
-        if k not in {"out", "workdir", "skills", "queries", "tag", "trusted"}
+        if k not in {"out", "workdir", "skills", "queries", "tag", "trusted", "auto_queries"}
     }
 
     arm = deepcopy(base)

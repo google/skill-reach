@@ -25,6 +25,7 @@ import pytest
 from reach.cli import main
 from reach.models import Query, QueryKind
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
+from reach.runtime.fake import FakeGenerator
 from reach.sweep import ScalingStudy
 
 if TYPE_CHECKING:
@@ -37,7 +38,11 @@ def sweep_corpus(corpus_builder, tmp_path: Path) -> tuple[Path, Path]:
     corpus_dir = tmp_path / "corpus"
     builder = corpus_builder()
     for i in range(6):
-        builder.add(f"skill-{i:02d}", f"Perform specialized task number {i:02d}")
+        builder.add(
+            f"skill-{i:02d}",
+            f"Perform specialized task number {i:02d}",
+            body=f"Instructions and documentation for specialized task number {i:02d}.",
+        )
     builder.build_disk(corpus_dir)
 
     queries_file = tmp_path / "queries.json"
@@ -57,6 +62,40 @@ def sweep_corpus(corpus_builder, tmp_path: Path) -> tuple[Path, Path]:
     )
     save_query_set(query_set, queries_file)
     return corpus_dir, queries_file
+
+
+@pytest.fixture
+def generator(monkeypatch: pytest.MonkeyPatch) -> FakeGenerator:
+    """Provide a mock generator runtime producing valid positive and adversarial queries."""
+
+    def _responder(prompt: str) -> str:
+        if "near-miss" in prompt or "OUT OF SCOPE" in prompt:
+            return json.dumps(
+                {
+                    "queries": [
+                        {
+                            "text": "Adversarial out-of-scope query",
+                            "citation": "specialized task",
+                            "rival_index": None,
+                            "reason": "Not supported",
+                        }
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Perform specialized task for skill",
+                        "citation": "specialized task",
+                    }
+                ]
+            }
+        )
+
+    runtime = FakeGenerator(responses=_responder)
+    monkeypatch.setattr("reach.cli.drafting.text_generator", lambda **_: runtime)
+    return runtime
 
 
 def test_sweep_invalid_scales_exits_2(sweep_corpus: tuple[Path, Path]) -> None:
@@ -195,12 +234,12 @@ def test_sweep_missing_queries_fails_descriptively(
     monkeypatch,
     capsys,
 ) -> None:
-    """Verify reach sweep without --queries or default query file fails descriptively."""
+    """Verify reach sweep with --no-auto-queries and without query file fails descriptively."""
     corpus_dir, _ = sweep_corpus
     empty_workspace = corpus_dir.parent / "nowhere"
     empty_workspace.mkdir()
     monkeypatch.chdir(empty_workspace)
-    exit_code = main(["sweep", str(corpus_dir)])
+    exit_code = main(["sweep", str(corpus_dir), "--no-auto-queries"])
     assert exit_code == 2
     err = capsys.readouterr().err
     assert "--queries" in err or ".reach/queries.json" in err
@@ -930,6 +969,7 @@ def test_sweep_warns_when_anchor_has_zero_matching_queries(
             "skill-00,skill-05",
             "--agent",
             "fake",
+            "--no-auto-queries",
             "--no-early-stop",
         ]
     )
@@ -1012,3 +1052,161 @@ def test_sweep_cli_allow_truncation_flag(
     )
     assert code == 0
     assert passed_kwargs.get("allow_truncation") is False
+
+
+def test_sweep_auto_queries_cold_start_colocated_with_corpus(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach sweep drafts anchor queries into <skills>/.reach/queries.json on cold start."""
+    from reach.queries import load_query_set
+
+    corpus_dir, _ = sweep_corpus
+    elsewhere = corpus_dir.parent / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    colocated_queries = corpus_dir / ".reach" / "queries.json"
+    assert not colocated_queries.exists()
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--scales",
+            "2,4",
+            "--agent",
+            "fake",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    assert colocated_queries.exists()
+    saved_qs = load_query_set(colocated_queries)
+    # Only the 2 anchor medoid skills for initial scale K=2 should be synthesized
+    assert len(saved_qs.covered_skills()) == 2
+
+
+def test_sweep_auto_queries_backfills_missing_anchor_skills(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach sweep backfills missing anchor skills into a partial query set."""
+    from reach.queries import load_query_set
+
+    corpus_dir, _ = sweep_corpus
+    partial_queries_file = tmp_path / "partial_queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="synthetic",
+            queries=(
+                Query(
+                    id="q-0",
+                    text="Requesting task number 00",
+                    expected_skill="skill-00",
+                    kind=QueryKind.IMPLICIT,
+                ),
+                Query(
+                    id="adv-skill-00-1",
+                    text="Near-miss task number 05",
+                    expected_skill="skill-05",
+                    kind=QueryKind.NEIGHBOR_NEGATIVE,
+                ),
+            ),
+            provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        ),
+        partial_queries_file,
+    )
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--queries",
+            str(partial_queries_file),
+            "--scales",
+            "2,4",
+            "--anchor",
+            "skill-00,skill-05",
+            "--agent",
+            "fake",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "2/2 anchor skills" in combined
+
+    updated_qs = load_query_set(partial_queries_file)
+    assert {"skill-00", "skill-05"}.issubset(updated_qs.covered_skills())
+
+
+def test_sweep_auto_queries_single_target_cold_start(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach sweep --target drafts queries only for the target skill when missing."""
+    from reach.queries import load_query_set
+
+    corpus_dir, _ = sweep_corpus
+    elsewhere = corpus_dir.parent / "elsewhere_target"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    colocated_queries = corpus_dir / ".reach" / "queries.json"
+    assert not colocated_queries.exists()
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--target",
+            "skill-03",
+            "--scales",
+            "2,4",
+            "--agent",
+            "fake",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    assert colocated_queries.exists()
+    saved_qs = load_query_set(colocated_queries)
+    assert saved_qs.covered_skills() == {"skill-03"}
+
+
+def test_sweep_auto_queries_format_json_suppresses_draft_logs(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach sweep --format json suppresses draft logs and produces valid JSON."""
+    corpus_dir, _ = sweep_corpus
+    out_file = tmp_path / "sweep.json"
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--scales",
+            "2,4",
+            "--agent",
+            "fake",
+            "--format",
+            "json",
+            "--out",
+            str(out_file),
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Drafting queries for" not in captured.err
+    data = json.loads(captured.out)
+    assert "points" in data
