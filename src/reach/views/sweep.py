@@ -277,17 +277,17 @@ _ZOOM_MID_THRESHOLD: float = 0.55
 _TOP_TIER_BIAS: float = 0.95
 
 
-def _select_curve_levels(values: Sequence[float]) -> list[float]:
+def _select_curve_levels(values: Sequence[float]) -> tuple[float, ...]:
     """Select adaptive Y-axis tick levels so high-accuracy curves show fine slope resolution."""
     if not values:
-        return [1.0, 0.75, 0.5, 0.25, 0.0]
+        return (1.0, 0.75, 0.5, 0.25, 0.0)
     min_v = min(values)
     max_v = max(values)
     if min_v >= _ZOOM_HIGH_THRESHOLD and max_v > min_v:
-        return [1.0, 0.95, 0.90, 0.85, 0.80]
+        return (1.0, 0.95, 0.90, 0.85, 0.80)
     if min_v >= _ZOOM_MID_THRESHOLD and max_v > min_v:
-        return [1.0, 0.90, 0.80, 0.70, 0.60]
-    return [1.0, 0.75, 0.5, 0.25, 0.0]
+        return (1.0, 0.90, 0.80, 0.70, 0.60)
+    return (1.0, 0.75, 0.5, 0.25, 0.0)
 
 
 def render_ascii_curve(

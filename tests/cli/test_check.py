@@ -391,7 +391,7 @@ def test_check_cli_filter_glob_flags(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify reach check passes glob filter patterns to run_check."""
+    """Verify that reach check passes glob filter patterns to run_check."""
     import reach.cli.check as cli_check
 
     passed_kwargs = {}

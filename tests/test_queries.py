@@ -577,3 +577,96 @@ def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     assert saved.provenance.origin == Origin.IMPORTED
     assert saved.provenance.source == "benchmark-v1.json"
     assert saved.provenance.recorded_at == original_recorded
+
+
+def test_draft_backfill_resolves_id_collisions_without_numeric_suffix(
+    tmp_path: Path,
+) -> None:
+    """Verify backfill increments from 1 when existing ID has no numeric suffix."""
+    from io import StringIO
+
+    from reach.cli.drafting import _execute_draft_generation
+    from reach.cli.flags import GenerateFlags
+    from reach.config import RunConfig, StudySettings
+    from reach.generate import DraftCheckpoint
+    from reach.models import Catalog, CatalogMode, Skill
+    from reach.runtime.fake import FakeGenerator
+    from reach.views import build_console
+
+    skills = [
+        Skill(
+            name="skill-a",
+            description="Perform action A.",
+            path=tmp_path / "skill-a",
+        ),
+    ]
+    catalog = Catalog(id="cat", mode=CatalogMode.ALL, skills=("skill-a",))
+    dest = tmp_path / "queries.json"
+    in_progress = tmp_path / "queries.json.drafting"
+
+    existing_qs = QuerySet(
+        catalog_id="cat",
+        queries=(
+            Query(id="skill-a", text="Existing query without suffix", expected_skill="skill-a"),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    terms = DraftCheckpoint(
+        fingerprint="test-fp",
+        bodies="bodies-hash",
+        catalog_id="cat",
+        arm="content",
+        count=1,
+        generator_model="fake",
+        targets=("skill-a",),
+        covered=("skill-a",),
+        drafted=existing_qs,
+    )
+
+    fake_drafter = FakeGenerator(
+        completion=json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Newly drafted query",
+                        "citation": "Perform action A.",
+                        "reason": "Direct citation",
+                    }
+                ]
+            }
+        )
+    )
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    settings = RunConfig(study=StudySettings(queries=dest))
+    generate = GenerateFlags(count=1)
+
+    s_dir = tmp_path / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Perform action A.\n---\nPerform action A.\n",
+        encoding="utf-8",
+    )
+
+    rc = _execute_draft_generation(
+        console,
+        settings,
+        catalog,
+        skills,
+        generate,
+        fake_drafter,
+        terms,
+        drafting=("skill-a",),
+        recovered=terms,
+        destination=dest,
+        in_progress=in_progress,
+        keep=True,
+        same_invocation_probe=False,
+        then="probed {path}",
+        existing_query_set=existing_qs,
+    )
+    assert rc == 0
+    saved = load_query_set(dest)
+    assert len(saved.queries) == 2
+    assert [q.id for q in saved.queries] == ["skill-a", "skill-a-1"]

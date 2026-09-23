@@ -758,6 +758,12 @@ def _dispatch_generation(
                 )
                 if raw_count > len(drafts):
                     had_dropped = True
+                if raw_count > 0 and not drafts:
+                    logger.debug(
+                        "All %d drafted queries for %r failed citation verification on attempt.",
+                        raw_count,
+                        target,
+                    )
                 added = 0
                 for d in drafts:
                     norm = d.text.strip().lower()

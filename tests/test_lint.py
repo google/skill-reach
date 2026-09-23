@@ -1358,3 +1358,13 @@ def test_catalog_budget_overflow_suppressed_when_ignored(tmp_path: Path) -> None
     )
     overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
     assert len(overflow_issues) == 0
+
+
+def test_catalog_budget_overflow_skipped_when_budget_is_none(tmp_path: Path) -> None:
+    """Verify catalog-budget-overflow is skipped when catalog_budget_chars is None."""
+    corpus = _populate_overflow_corpus(tmp_path)
+    cfg = LintSettings.from_settings({"lint": {"catalog_budget_chars": None}})
+    assert cfg.catalog_budget_chars is None
+    report = lint_tree(corpus, config=cfg)
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) == 0

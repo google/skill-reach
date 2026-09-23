@@ -208,10 +208,15 @@ def _execute_draft_generation(
             new_id = q.id
             if new_id in existing_ids:
                 prefix, sep, num_str = new_id.rpartition("-")
-                num = int(num_str) if sep and num_str.isdigit() else 1
+                if sep and num_str.isdigit():
+                    num = int(num_str)
+                    base = prefix
+                else:
+                    num = 0
+                    base = new_id
                 while new_id in existing_ids:
                     num += 1
-                    new_id = f"{prefix}-{num}" if sep else f"{q.id}-{num}"
+                    new_id = f"{base}-{num}"
             existing_ids.add(new_id)
             remapped.append(q if new_id == q.id else q.model_copy(update={"id": new_id}))
         return partial.model_copy(update={"queries": kept + tuple(remapped)})
