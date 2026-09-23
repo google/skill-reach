@@ -283,17 +283,17 @@ Default thresholds enforced by `reach check` in continuous integration.
 
 | Key                | Type    | Default    | Description                                                                  |
 | :----------------- | :------ | :--------- | :--------------------------------------------------------------------------- |
-| `min_recall`       | Float   | `0.80`     | Fail gate if target skill recall drops below this threshold.                 |
-| `min_accuracy`     | Float   | `0.80`     | Fail gate if overall routing accuracy drops below this threshold.            |
-| `max_misroute`     | Float   | `0.10`     | Fail gate if queries misroute to competitor skills above this fraction.      |
-| `min_entrypoint`   | Float   | `None`     | Fail gate if observed entrypoint accuracy drops below this threshold.        |
-| `min_reachability` | Float   | `None`     | Fail gate if observed trajectory reachability drops below this threshold.    |
-| `min_efficiency`   | Float   | `None`     | Fail gate if observed step efficiency MRR drops below this threshold.        |
-| `min_f1`           | Float   | `None`     | Fail gate if observed skill selection F1 score drops below this threshold.   |
-| `max_redundancy`   | Float   | `None`     | Fail gate if skill redundancy exceeds this fraction (excess calls).          |
 | `budget`           | Integer | `50`       | Maximum empirical probes executed during CI evaluations.                     |
-| `strict`           | Boolean | `true`     | When true, Stage 1 static lint warnings cause the check to exit with code 1. |
+| `max_misroute`     | Float   | `0.10`     | Fail gate if queries misroute to competitor skills above this fraction.      |
+| `max_redundancy`   | Float   | `None`     | Fail gate if skill redundancy exceeds this fraction (excess calls).          |
+| `min_accuracy`     | Float   | `0.80`     | Fail gate if overall routing accuracy drops below this threshold.            |
+| `min_efficiency`   | Float   | `None`     | Fail gate if observed step efficiency MRR drops below this threshold.        |
+| `min_entrypoint`   | Float   | `None`     | Fail gate if observed entrypoint accuracy drops below this threshold.        |
+| `min_f1`           | Float   | `None`     | Fail gate if observed skill selection F1 score drops below this threshold.   |
+| `min_reachability` | Float   | `None`     | Fail gate if observed trajectory reachability drops below this threshold.    |
+| `min_recall`       | Float   | `0.80`     | Fail gate if target skill recall drops below this threshold.                 |
 | `since`            | String  | `"HEAD~1"` | Default git revision comparison target when `--changed` is passed.           |
+| `strict`           | Boolean | `true`     | When true, Stage 1 static lint warnings cause the check to exit with code 1. |
 
 ### `[diff]`
 
@@ -339,18 +339,18 @@ Parameters for closed-loop skill description optimization.
 
 | Key                 | Type    | Default | Description                                                                   |
 | :------------------ | :------ | :------ | :---------------------------------------------------------------------------- |
-| `budget`            | Integer | `30`    | Maximum empirical probe budget allocated across candidate evaluations.        |
-| `temperature`       | Float   | `0.7`   | Sampling temperature for candidate rewrite generation.                        |
-| `iterations`        | Integer | `1`     | Number of iterative hill-climbing refinement rounds (1-10).                   |
-| `holdout`           | Float   | `0.2`   | Fraction of queries held out for generalization validation (`0.0` - `0.9`).   |
-| `review`            | Boolean | `false` | Launch interactive browser boundary review for drafted queries before probes. |
-| `auto_queries`      | Boolean | `true`  | Automatically synthesize positive and adversarial queries when none provided. |
 | `adversarial_count` | Integer | `5`     | Number of adversarial negative near-miss queries to synthesize per round.     |
+| `auto_queries`      | Boolean | `true`  | Automatically synthesize positive and adversarial queries when none provided. |
+| `budget`            | Integer | `30`    | Maximum empirical probe budget allocated across candidate evaluations.        |
+| `holdout`           | Float   | `0.2`   | Fraction of queries held out for generalization validation (`0.0` - `0.9`).   |
+| `iterations`        | Integer | `1`     | Number of iterative hill-climbing refinement rounds (1-10).                   |
 | `positive_count`    | Integer | `5`     | Number of positive in-scope trigger queries to synthesize per round.          |
-| `seed`              | Integer | `42`    | Pseudo-random seed for train/test query splitting and reproducible runs.      |
+| `review`            | Boolean | `false` | Launch interactive browser boundary review for drafted queries before probes. |
 | `review_timeout`    | Float   | `600.0` | Maximum timeout in seconds waiting for interactive browser query review.      |
-| `workers`           | Integer | `4`     | Number of parallel probe workers (inherits from `[plan].workers` if unset).   |
+| `seed`              | Integer | `42`    | Pseudo-random seed for train/test query splitting and reproducible runs.      |
+| `temperature`       | Float   | `0.7`   | Sampling temperature for candidate rewrite generation.                        |
 | `with_handoff`      | Boolean | `false` | Synthesize and stage reciprocal Layer-2 `SKILL.md` Routing Notes.             |
+| `workers`           | Integer | `4`     | Number of parallel probe workers (inherits from `[plan].workers` if unset).   |
 
 ### `[overlap]`
 
