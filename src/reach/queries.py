@@ -33,7 +33,7 @@ from pydantic import (
 )
 
 from reach._io import write_model
-from reach.models import Query
+from reach.models import Query, QueryKind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -119,6 +119,14 @@ class QuerySet(BaseModel):
     def for_skill(self, name: str) -> tuple[Query, ...]:
         """Return queries whose expected skill or truth label matches the specified name."""
         return tuple(q for q in self.queries if name in (q.expected_skill, q.truth_label))
+
+    def covered_skills(self) -> frozenset[str]:
+        """Return target skill names covered by positive benchmark queries."""
+        return frozenset(
+            q.expected_skill
+            for q in self.queries
+            if q.expected_skill is not None and q.kind is not QueryKind.NEIGHBOR_NEGATIVE
+        )
 
 
 def _apply_catalog_id_fallback(parsed: QuerySet, catalog_id: str) -> QuerySet:

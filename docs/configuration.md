@@ -424,20 +424,21 @@ Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciproc
 
 Controls default file paths for benchmark queries, skill roots, workspaces, and evaluation artifacts.
 
-| Key          | Type                                | Default  | Description                                                                                                                |
-| :----------- | :---------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------- |
-| `queries`    | Path                                | `None`   | Path to labeled evaluation queries JSON benchmark file.                                                                    |
-| `out`        | Path                                | `None`   | Destination file path for recorded evaluation artifacts.                                                                   |
-| `catalog`    | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`. |
-| `workdir`    | Path                                | `None`   | Custom persistent workspace path (defaults to isolated ephemeral temp directory).                                          |
-| `skills`     | Path                                | `None`   | Explicit path override to local skills directory (bypasses `[discovery].precedence` if set).                               |
-| `tag`        | String                              | `""`     | Semantic run tracking label (e.g. `"v1-baseline"`).                                                                        |
-| `partial`    | Boolean                             | `false`  | Allow query sets that evaluate only a subset of resident skills.                                                           |
-| `rescope`    | Boolean                             | `false`  | Permit evaluation against a catalog differing from the one labeled in.                                                     |
-| `early_stop` | Boolean                             | `true`   | When true, terminates scaling sweeps early if $F_1$ upper CI drops below threshold.                                        |
-| `scales`     | Sequence[Integer]                   | `None`   | Pre-configured catalog sizes for scaling sweeps (e.g. `[10, 25, 50, 100]`).                                                |
-| `anchor`     | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                    |
-| `trusted`    | Boolean                             | `false`  | When true, trusts resident skills and bypasses interactive safety confirmation prompts.                                    |
+| Key            | Type                                | Default  | Description                                                                                                                |
+| :------------- | :---------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------- |
+| `anchor`       | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                    |
+| `auto_queries` | Boolean                             | `true`   | Automatically synthesize and backfill benchmark queries for unqueried anchor skills during scaling sweeps.                 |
+| `catalog`      | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`. |
+| `early_stop`   | Boolean                             | `true`   | When true, terminates scaling sweeps early if $F_1$ upper CI drops below threshold.                                        |
+| `out`          | Path                                | `None`   | Destination file path for recorded evaluation artifacts.                                                                   |
+| `partial`      | Boolean                             | `false`  | Allow query sets that evaluate only a subset of resident skills.                                                           |
+| `queries`      | Path                                | `None`   | Path to labeled evaluation queries JSON benchmark file.                                                                    |
+| `rescope`      | Boolean                             | `false`  | Permit evaluation against a catalog differing from the one labeled in.                                                     |
+| `scales`       | Sequence[Integer]                   | `None`   | Pre-configured catalog sizes for scaling sweeps (e.g. `[10, 25, 50, 100]`).                                                |
+| `skills`       | Path                                | `None`   | Explicit path override to local skills directory (bypasses `[discovery].precedence` if set).                               |
+| `tag`          | String                              | `""`     | Semantic run tracking label (e.g. `"v1-baseline"`).                                                                        |
+| `trusted`      | Boolean                             | `false`  | When true, trusts resident skills and bypasses interactive safety confirmation prompts.                                    |
+| `workdir`      | Path                                | `None`   | Custom persistent workspace path (defaults to isolated ephemeral temp directory).                                          |
 
 > [!CAUTION]
 > **Risk of Bypassing Safety Confirmation**

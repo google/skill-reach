@@ -936,11 +936,39 @@ def _build_study_result(
     )
 
 
+def _resolve_medoid_anchors(
+    medoid_count: int,
+    resolved_skills: Sequence[Skill],
+    query_set: QuerySet | None,
+    *,
+    clamp_to_queried: bool,
+) -> tuple[str, ...]:
+    """Select TF-IDF cluster medoid anchors across the full or queried corpus."""
+    full_medoids = find_cluster_medoids(resolved_skills, medoid_count)
+    if not clamp_to_queried or query_set is None:
+        return full_medoids
+    queried_names = query_set.covered_skills()
+    if set(full_medoids).issubset(queried_names):
+        return full_medoids
+    queried_skills = [s for s in resolved_skills if s.name in queried_names]
+    if len(queried_skills) >= medoid_count:
+        return find_cluster_medoids(queried_skills, medoid_count)
+    if queried_skills:
+        return tuple(s.name for s in queried_skills)
+    logger.warning(
+        "Provided query set contains 0 benchmark queries for resident skills; "
+        "falling back to unqueried corpus medoids."
+    )
+    return full_medoids
+
+
 def _resolve_anchor_skills(
-    requested_anchor: object,
+    requested_anchor: int | Sequence[str] | str | None,
     resolved_skills: Sequence[Skill],
     actual_scales: Sequence[int],
     query_set: QuerySet | None = None,
+    *,
+    clamp_to_queried: bool = True,
 ) -> tuple[str, ...] | None:
     """Resolve anchor skills cohort from configuration or initial scale medoids."""
     if isinstance(requested_anchor, str) and requested_anchor.lower() == "all":
@@ -955,20 +983,12 @@ def _resolve_anchor_skills(
         medoid_count = actual_scales[0]
 
     if medoid_count is not None:
-        if query_set is not None:
-            queried_names = {
-                q.expected_skill for q in query_set.queries if q.expected_skill is not None
-            }
-            queried_skills = [s for s in resolved_skills if s.name in queried_names]
-            if len(queried_skills) >= medoid_count:
-                return find_cluster_medoids(queried_skills, medoid_count)
-            if queried_skills:
-                return tuple(s.name for s in queried_skills)
-            logger.warning(
-                "Provided query set contains 0 benchmark queries for resident skills; "
-                "falling back to unqueried corpus medoids."
-            )
-        return find_cluster_medoids(resolved_skills, medoid_count)
+        return _resolve_medoid_anchors(
+            medoid_count,
+            resolved_skills,
+            query_set,
+            clamp_to_queried=clamp_to_queried,
+        )
 
     if isinstance(requested_anchor, str):
         raw_names = tuple(p.strip() for p in requested_anchor.split(",") if p.strip())
@@ -1015,6 +1035,7 @@ def _setup_sweep_execution(
             resolved_skills,
             actual_scales,
             query_set=raw_query_set,
+            clamp_to_queried=not effective_config.study.auto_queries,
         )
         plan = CorpusScalingPlan.create(
             skills=resolved_skills,

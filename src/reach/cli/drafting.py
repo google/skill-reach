@@ -329,9 +329,7 @@ def _draft_query_set(
     covered_existing: tuple[str, ...] = ()
     existing_citations: tuple[Citation, ...] = ()
     if existing_query_set is not None:
-        covered_existing = tuple(
-            sorted({q.expected_skill for q in existing_query_set.queries if q.expected_skill})
-        )
+        covered_existing = tuple(sorted(existing_query_set.covered_skills()))
         c_path = citations_path(destination)
         if c_path.exists():
             existing_citations = read_citations(c_path).root

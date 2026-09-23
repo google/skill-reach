@@ -19,13 +19,13 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal, override
+from typing import Annotated, Any, Literal, Self, override
 
 from cyclopts import Group, Parameter, validators
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
-from reach.config import DEFAULT_GEMINI_MODEL, RunConfig, StudySettings
+from reach.config import DEFAULT_GEMINI_MODEL, QuerySettings, RunConfig, StudySettings
 from reach.diff import VaryFactor
 from reach.generate import GeneratorArm
 from reach.lint import Severity
@@ -610,6 +610,22 @@ class GenerateFlags(BaseModel):
             help="Number of adversarial negative queries to synthesize per target",
         ),
     ] = 1
+
+    @classmethod
+    def from_query_settings(
+        cls,
+        query: QuerySettings,
+        *,
+        targets: tuple[str, ...] = (),
+    ) -> Self:
+        """Construct GenerateFlags from QuerySettings while respecting ge=1 field constraints."""
+        return cls(
+            targets=targets,
+            count=query.count,
+            top_rivals=query.top_rivals if query.top_rivals > 0 else None,
+            adversarial=query.adversarial_count > 0,
+            adversarial_count=max(1, query.adversarial_count),
+        )
 
 
 def _load_base_config(
