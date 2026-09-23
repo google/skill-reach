@@ -297,11 +297,18 @@ def cap_that_fits(
     adversarial: bool = False,
 ) -> int | None:
     """Calculate the maximum rival count that fits within prompt character limits."""
-    base_prompt = _build_generation_prompt(target_body, (), count, arm, adversarial=adversarial)
+    if adversarial and rival_bodies:
+        safe_target = sanitize_xml_boundary(target_body, "target_documentation")
+        base_prompt = ADVERSARIAL_PROMPT_WITH_RIVALS.format(
+            count=count, target=safe_target, rivals=""
+        )
+    else:
+        base_prompt = _build_generation_prompt(target_body, (), count, arm, adversarial=adversarial)
     room = budget_chars - len(base_prompt)
     kept = 0
     for position, body in enumerate(sorted(rival_bodies, key=len, reverse=True), 1):
-        room -= len(RIVAL_BLOCK.format(index=position, body=body))
+        safe_body = sanitize_xml_boundary(body, "rival_documentation")
+        room -= len(RIVAL_BLOCK.format(index=position, body=safe_body))
         if room < 0:
             break
         kept = position
@@ -352,6 +359,8 @@ _INLINE_MARKDOWN = re.compile(r"[*`~]")
 def parse_response(raw: str) -> tuple[GeneratedQuery, ...]:
     """Parse JSON query draft payload from model completion output."""
     payload = parse_model_json(raw)
+    if isinstance(payload, list):
+        payload = {"queries": payload}
     return _Response.model_validate(payload).queries
 
 
@@ -410,6 +419,80 @@ def select_rivals(
     return tuple(by_name[name] for name in ranked_names if name in by_name)
 
 
+def _auto_clamp_prompt_materials(
+    target: str,
+    target_body: str,
+    rivals: Sequence[str],
+    count: int,
+    arm: GeneratorArm = GeneratorArm.CONTENT,
+    budget: int | None = None,
+    catalog: Catalog | None = None,
+    skills: Sequence[Skill] = (),
+    scorer: Scorer | None = None,
+    *,
+    adversarial: bool = False,
+    rival_skills: Sequence[Skill] | None = None,
+) -> tuple[str, tuple[str, ...], tuple[Skill, ...] | None]:
+    """Clamp rivals to fit within prompt budget for standard or adversarial prompts."""
+    if budget is not None:
+        raw_prompt = _build_generation_prompt(
+            target_body, rivals, count, arm=arm, adversarial=adversarial
+        )
+        if len(raw_prompt) > budget:
+            cap = cap_that_fits(
+                target_body, rivals, budget, count, arm=arm, adversarial=adversarial
+            )
+            if cap is not None and catalog is not None:
+                label = "adversarial rivals" if adversarial else "rivals"
+                logger.info(
+                    "Auto-clamping %s for %r from %d to %d to fit prompt budget (%d chars)",
+                    label,
+                    target,
+                    len(rivals),
+                    cap,
+                    budget,
+                )
+                if rival_skills is not None:
+                    return prompt_material_with_skills(target, catalog, skills, cap, scorer)
+                t_body, r_bodies = prompt_material(target, catalog, skills, cap, scorer)
+                return t_body, r_bodies, None
+    return target_body, tuple(rivals), tuple(rival_skills) if rival_skills is not None else None
+
+
+def _generate_for_skill_with_stats(
+    target: str,
+    catalog: Catalog,
+    skills: Sequence[Skill],
+    count: int = DEFAULT_COUNT,
+    runtime: TextGenerator | None = None,
+    arm: GeneratorArm = GeneratorArm.CONTENT,
+    top_rivals: int | None = None,
+    scorer: Scorer | None = None,
+    *,
+    auto_clamp: bool = False,
+) -> tuple[tuple[GeneratedQuery, ...], int]:
+    """Generate grounded evaluation queries and return (verified_drafts, raw_draft_count)."""
+    runtime = runtime or text_generator()
+    target_body, rivals = prompt_material(target, catalog, skills, top_rivals, scorer)
+    budget = runtime.prompt_budget_chars()
+    if auto_clamp and top_rivals is None and budget is not None:
+        target_body, rivals, _ = _auto_clamp_prompt_materials(
+            target,
+            target_body,
+            rivals,
+            count,
+            arm=arm,
+            budget=budget,
+            catalog=catalog,
+            skills=skills,
+            scorer=scorer,
+        )
+    prompt = assert_prompt_fits(runtime, target, target_body, rivals, count, arm)
+    drafts = parse_response(runtime.complete(prompt, schema=_RESPONSE_JSON_SCHEMA))
+    verified = tuple(d for d in drafts if verify_citation(d, target_body))
+    return verified, len(drafts)
+
+
 def generate_for_skill(
     target: str,
     catalog: Catalog,
@@ -419,13 +502,22 @@ def generate_for_skill(
     arm: GeneratorArm = GeneratorArm.CONTENT,
     top_rivals: int | None = None,
     scorer: Scorer | None = None,
+    *,
+    auto_clamp: bool = False,
 ) -> tuple[GeneratedQuery, ...]:
     """Generate and verify grounded evaluation queries for a single target skill."""
-    runtime = runtime or text_generator()
-    target_body, rivals = prompt_material(target, catalog, skills, top_rivals, scorer)
-    prompt = assert_prompt_fits(runtime, target, target_body, rivals, count, arm)
-    drafts = parse_response(runtime.complete(prompt, schema=_RESPONSE_JSON_SCHEMA))
-    return tuple(d for d in drafts if verify_citation(d, target_body))
+    verified, _ = _generate_for_skill_with_stats(
+        target,
+        catalog,
+        skills,
+        count,
+        runtime,
+        arm,
+        top_rivals,
+        scorer,
+        auto_clamp=auto_clamp,
+    )
+    return verified
 
 
 def prompt_material_with_skills(
@@ -485,6 +577,8 @@ def generate_adversarial_for_skill(
     runtime: TextGenerator | None = None,
     top_rivals: int | None = None,
     scorer: Scorer | None = None,
+    *,
+    auto_clamp: bool = False,
 ) -> tuple[Query, ...]:
     """Generate and verify adversarial near-miss queries for a single target skill."""
     driver = runtime or text_generator()
@@ -495,6 +589,22 @@ def generate_adversarial_for_skill(
         top_rivals,
         scorer,
     )
+    budget = driver.prompt_budget_chars()
+    if auto_clamp and top_rivals is None and budget is not None:
+        target_body, rival_bodies, clamped_skills = _auto_clamp_prompt_materials(
+            target,
+            target_body,
+            rival_bodies,
+            count,
+            budget=budget,
+            catalog=catalog,
+            skills=skills,
+            scorer=scorer,
+            adversarial=True,
+            rival_skills=rival_skills,
+        )
+        if clamped_skills is not None:
+            rival_skills = clamped_skills
     prompt = assert_prompt_fits(
         driver,
         target,
@@ -547,6 +657,9 @@ def assert_prompts_fit(
     count: int = DEFAULT_COUNT,
     arm: GeneratorArm = GeneratorArm.CONTENT,
     top_rivals: int | None = None,
+    *,
+    auto_clamp: bool = True,
+    adversarial: bool = False,
 ) -> int:
     """Validate prompt lengths across targets, returning maximum length."""
     scorer = (
@@ -555,9 +668,31 @@ def assert_prompts_fit(
         else None
     )
     longest = 0
+    budget = runtime.prompt_budget_chars()
     for target in targets:
         body, rivals = prompt_material(target, catalog, skills, top_rivals, scorer)
-        prompt = assert_prompt_fits(runtime, target, body, rivals, count, arm)
+        if auto_clamp and top_rivals is None and budget is not None:
+            body, rivals, _ = _auto_clamp_prompt_materials(
+                target,
+                body,
+                rivals,
+                count,
+                arm=arm,
+                budget=budget,
+                catalog=catalog,
+                skills=skills,
+                scorer=scorer,
+                adversarial=adversarial,
+            )
+        prompt = assert_prompt_fits(
+            runtime,
+            target,
+            body,
+            rivals,
+            count=count,
+            arm=arm,
+            adversarial=adversarial,
+        )
         longest = max(longest, len(prompt))
     return longest
 
@@ -595,30 +730,61 @@ def _dispatch_generation(
     scorer: Bm25Scorer | None,
     concurrency: int,
     land: Callable[[str, tuple[GeneratedQuery, ...]], None],
+    *,
+    auto_clamp: bool = True,
 ) -> None:
     """Execute skill query generation sequentially or across a thread pool."""
 
     def generate_target(target: str) -> tuple[GeneratedQuery, ...]:
+        collected: list[GeneratedQuery] = []
+        seen_texts: set[str] = set()
         last_err: Exception | None = None
+        had_dropped = False
         for _ in range(DEFAULT_MAX_ATTEMPTS):
+            needed = count - len(collected)
+            if needed <= 0:
+                break
             try:
-                drafts = generate_for_skill(
+                drafts, raw_count = _generate_for_skill_with_stats(
                     target,
                     catalog,
                     skills,
-                    count,
+                    needed,
                     runtime,
                     arm,
                     top_rivals,
                     scorer,
+                    auto_clamp=auto_clamp,
                 )
-                if drafts:
-                    return drafts
+                if raw_count > len(drafts):
+                    had_dropped = True
+                if raw_count > 0 and not drafts:
+                    logger.debug(
+                        "All %d drafted queries for %r failed citation verification on attempt.",
+                        raw_count,
+                        target,
+                    )
+                added = 0
+                for d in drafts:
+                    norm = d.text.strip().lower()
+                    if norm not in seen_texts and len(collected) < count:
+                        seen_texts.add(norm)
+                        collected.append(d)
+                        added += 1
                 last_err = None
+                if (
+                    len(collected) >= count
+                    or (added == 0 and drafts)
+                    or (collected and not had_dropped)
+                ):
+                    break
             except (ValueError, ValidationError) as err:
                 last_err = err
             except RuntimeError:
                 raise
+
+        if collected:
+            return tuple(collected)
 
         if last_err is not None:
             logger.warning(
@@ -666,6 +832,7 @@ def generate_query_set(
     concurrency: int = 1,
     adversarial: bool = False,
     adversarial_count: int = 1,
+    auto_clamp: bool = True,
 ) -> QuerySet:
     """Generate QuerySet for a catalog with progress reporting and checkpointing."""
     driver = runtime or text_generator()
@@ -713,6 +880,7 @@ def generate_query_set(
                         runtime=driver,
                         top_rivals=top_rivals,
                         scorer=scorer,
+                        auto_clamp=auto_clamp,
                     )
                     if adv_queries:
                         break

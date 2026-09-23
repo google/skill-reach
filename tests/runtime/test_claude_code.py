@@ -1074,3 +1074,79 @@ def test_claude_generator_build_env_applies_region_and_project_options() -> None
     env = gen.build_env()
     assert env["CLOUD_ML_REGION"] == "europe-west1"
     assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "gen-proj"
+
+
+def test_claude_code_parse_stream_extracts_prompt_tokens(
+    runtime: ClaudeCodeRuntime,
+) -> None:
+    """Verify parse_stream extracts prompt_tokens from assistant and result usage fields."""
+    stream = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Skill",
+                                "input": {"skill": "bigquery-basics"},
+                            }
+                        ],
+                        "usage": {
+                            "input_tokens": 1200,
+                            "cache_creation_input_tokens": 300,
+                            "cache_read_input_tokens": 4500,
+                            "output_tokens": 45,
+                        },
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "duration_ms": 2150,
+                    "usage": {
+                        "input_tokens": 1250,
+                        "cache_creation_input_tokens": 300,
+                        "cache_read_input_tokens": 4500,
+                        "output_tokens": 80,
+                    },
+                }
+            ),
+        ]
+    )
+    summary = runtime.parse_stream(stream.splitlines())
+    assert summary.prompt_tokens == 1250 + 300 + 4500
+    assert summary.invoked_skills == ("bigquery-basics",)
+
+
+def test_claude_usage_schema_validation_and_token_resolution() -> None:
+    """Verify ClaudeUsage validates constraints, computes totals, and avoids double-counting."""
+    from pydantic import ValidationError
+
+    from reach.runtime.claude_code import ClaudeUsage, _extract_usage_prompt_tokens
+
+    # Anthropic input + cache read + cache creation
+    u1 = ClaudeUsage.model_validate(
+        {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 300}
+    )
+    assert u1.total_prompt_tokens == 1500
+
+    # Avoid double-counting when both input_tokens and prompt_tokens are present
+    u2 = ClaudeUsage.model_validate({"input_tokens": 1000, "prompt_tokens": 1000})
+    assert u2.total_prompt_tokens == 1000
+
+    # Fallback to prompt_tokens when input_tokens is absent/0
+    u3 = ClaudeUsage.model_validate({"prompt_tokens": 750})
+    assert u3.total_prompt_tokens == 750
+
+    # Non-negative constraint enforcement
+    with pytest.raises(ValidationError):
+        ClaudeUsage.model_validate({"input_tokens": -5})
+
+    # _extract_usage_prompt_tokens handles malformed or non-dict input gracefully
+    assert _extract_usage_prompt_tokens(None) is None
+    assert _extract_usage_prompt_tokens("invalid") is None
+    assert _extract_usage_prompt_tokens({"input_tokens": -5}) is None

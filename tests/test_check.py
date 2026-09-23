@@ -695,6 +695,67 @@ def test_filter_check_queries_includes_competing_neighbor_guardrails(
     assert "q-billing-1" not in selected_ids
 
 
+def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
+    """Verify _filter_check_queries filters by skill name and query id."""
+    from reach.check import _filter_check_queries
+    from reach.models import Query, QueryKind
+    from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
+
+    queries_file = tmp_path / "test_queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="catalog",
+            queries=(
+                Query(id="q-1", text="text 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+                Query(id="q-2", text="text 2", expected_skill="skill-b", kind=QueryKind.IMPLICIT),
+                Query(id="q-3", text="text 3", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+            ),
+            provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        ),
+        queries_file,
+    )
+
+    # Filter by skill
+    filtered_skill, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_skill="skill-a",
+    )
+    assert [q.id for q in filtered_skill] == ["q-1", "q-3"]
+
+    # Filter by query id
+    filtered_id, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_id=("q-2",),
+    )
+    assert [q.id for q in filtered_id] == ["q-2"]
+
+    # Filter by skill glob pattern
+    filtered_skill_glob, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_skill="skill-*",
+    )
+    assert [q.id for q in filtered_skill_glob] == ["q-1", "q-2", "q-3"]
+
+    # Filter by query id glob pattern
+    filtered_id_glob, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_id="q-[13]",
+    )
+    assert [q.id for q in filtered_id_glob] == ["q-1", "q-3"]
+
+
 def test_find_competing_neighbors_includes_dense_semantic_rivals(tmp_path: Path) -> None:
     """Verify find_competing_neighbors retains neighbors with semantic similarity >= 0.75."""
     from reach.lint import find_competing_neighbors

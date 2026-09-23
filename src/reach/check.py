@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import tempfile
@@ -262,10 +263,25 @@ def _filter_check_queries(
     changed: bool,
     budget: int,
     skills: Sequence[Skill] = (),
+    filter_skill: str | Sequence[str] | None = None,
+    filter_id: str | Sequence[str] | None = None,
 ) -> tuple[list[Query], bool]:
-    """Load, filter by modified skills and competing neighbors if requested, and slice by budget."""
+    """Load, filter by modified skills, specific skills or IDs, and slice by budget."""
     query_set = load_query_set(queries_path)
     all_queries = list(query_set.queries)
+    if filter_skill is not None:
+        target_skills = [filter_skill] if isinstance(filter_skill, str) else list(filter_skill)
+        all_queries = [
+            q
+            for q in all_queries
+            if q.expected_skill is not None
+            and any(fnmatch.fnmatchcase(q.expected_skill, pat) for pat in target_skills)
+        ]
+    if filter_id is not None:
+        target_ids = [filter_id] if isinstance(filter_id, str) else list(filter_id)
+        all_queries = [
+            q for q in all_queries if any(fnmatch.fnmatchcase(q.id, pat) for pat in target_ids)
+        ]
     if changed:
         primary = [q for q in all_queries if q.expected_skill in modified]
         neighbors = _competing_neighbors_for_modified(modified, skills)
@@ -600,6 +616,8 @@ def run_check(  # noqa: PLR0913
     runtime_options: dict[str, Any] | None = None,
     global_scope: bool = False,
     confirm_callback: Callable[[str, list[Skill], Sequence[Path]], int] | None = None,
+    filter_skill: str | Sequence[str] | None = None,
+    filter_id: str | Sequence[str] | None = None,
 ) -> CheckOutcome:
     """Execute two-stage quality gate: static lint pre-flight then empirical assertions."""
     if settings is not None:
@@ -664,6 +682,8 @@ def run_check(  # noqa: PLR0913
         changed,
         check_settings.budget,
         skills=catalog_skills,
+        filter_skill=filter_skill,
+        filter_id=filter_id,
     )
 
     empty_outcome = _check_empty_queries_exit(lint_report, queries_to_run, check_settings.budget)

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import math
 import random
 import statistics
@@ -40,7 +41,7 @@ from reach.diff import noise_floor as diff_noise_floor
 from reach.metrics import DecompositionResult, decompose_pass_rate_drop, score_trajectory
 from reach.models import NO_SKILL, Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
 from reach.queries import QuerySet, load_query_set
-from reach.run import Composition, conduct
+from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
 from reach.uncertainty import wilson_interval
 
@@ -56,6 +57,9 @@ __all__ = [
     "find_kneedle_knee",
     "run_scaling_sweep",
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 class ScalingPoint(BaseModel):
@@ -936,15 +940,37 @@ def _resolve_anchor_skills(
     requested_anchor: object,
     resolved_skills: Sequence[Skill],
     actual_scales: Sequence[int],
+    query_set: QuerySet | None = None,
 ) -> tuple[str, ...] | None:
     """Resolve anchor skills cohort from configuration or initial scale medoids."""
     if isinstance(requested_anchor, str) and requested_anchor.lower() == "all":
         return None
+
+    medoid_count: int | None = None
     if isinstance(requested_anchor, int):
-        return find_cluster_medoids(resolved_skills, requested_anchor)
+        medoid_count = requested_anchor
+    elif isinstance(requested_anchor, str) and requested_anchor.isdigit():
+        medoid_count = int(requested_anchor)
+    elif requested_anchor is None:
+        medoid_count = actual_scales[0]
+
+    if medoid_count is not None:
+        if query_set is not None:
+            queried_names = {
+                q.expected_skill for q in query_set.queries if q.expected_skill is not None
+            }
+            queried_skills = [s for s in resolved_skills if s.name in queried_names]
+            if len(queried_skills) >= medoid_count:
+                return find_cluster_medoids(queried_skills, medoid_count)
+            if queried_skills:
+                return tuple(s.name for s in queried_skills)
+            logger.warning(
+                "Provided query set contains 0 benchmark queries for resident skills; "
+                "falling back to unqueried corpus medoids."
+            )
+        return find_cluster_medoids(resolved_skills, medoid_count)
+
     if isinstance(requested_anchor, str):
-        if requested_anchor.isdigit():
-            return find_cluster_medoids(resolved_skills, int(requested_anchor))
         raw_names = tuple(p.strip() for p in requested_anchor.split(",") if p.strip())
     elif isinstance(requested_anchor, (list, tuple)):
         raw_names = tuple(str(s).strip() for s in requested_anchor if str(s).strip())
@@ -984,7 +1010,12 @@ def _setup_sweep_execution(
     """Configure catalogs, query sets, and scaling plan for sweep execution."""
     if is_corpus:
         requested_anchor = anchor if anchor is not None else effective_config.study.anchor
-        resolved_anchors = _resolve_anchor_skills(requested_anchor, resolved_skills, actual_scales)
+        resolved_anchors = _resolve_anchor_skills(
+            requested_anchor,
+            resolved_skills,
+            actual_scales,
+            query_set=raw_query_set,
+        )
         plan = CorpusScalingPlan.create(
             skills=resolved_skills,
             scales=actual_scales,
@@ -1048,6 +1079,7 @@ def run_scaling_sweep(
     query_set: QuerySet | None = None,
     attempts: int | None = None,
     early_stop: bool | None = None,
+    allow_truncation: bool = True,
     on_scale_complete: Callable[[int, int, ScalingPoint, ScalingStudy], None] | None = None,
 ) -> ScalingStudy:
     """Execute multi-scale catalog evaluation sweep and return scaling analysis."""
@@ -1079,6 +1111,14 @@ def run_scaling_sweep(
     )
 
     resolved_runtime = runtime or build_runtime(effective_config.runtime)
+    if not allow_truncation and resolved_runtime.rations_catalog:
+        for cat in catalogs:
+            validate_catalog_fit(
+                resolved_runtime,
+                cat,
+                resolved_skills,
+                allow_truncation=False,
+            )
     baseline_results: tuple[ProbeResult, ...] = ()
     points: list[ScalingPoint] = []
     final_decomp: DecompositionResult | None = None
@@ -1131,7 +1171,7 @@ def run_scaling_sweep(
             config=scale_config,
             runtime=resolved_runtime,
             composed=composed,
-            allow_truncation=True,
+            allow_truncation=allow_truncation,
             append_across_arms=True,
             workers=scale_workers,
             outcome_cache=shared_outcome_cache,

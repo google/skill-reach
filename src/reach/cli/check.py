@@ -41,6 +41,7 @@ from reach.views import (
 
 from .app import LOOP, app
 from .flags import (
+    LIST,
     NON_NEGATIVE,
     POSITIVE_INT,
     RATE,
@@ -252,6 +253,22 @@ def _check(
         ),
     ] = True,
     global_: Global = False,
+    filter_skill: Annotated[
+        tuple[str, ...] | None,
+        LIST,
+        Parameter(
+            name=["--filter-skill"],
+            help="Filter check queries to those expecting specified skills; repeatable",
+        ),
+    ] = None,
+    filter_id: Annotated[
+        tuple[str, ...] | None,
+        LIST,
+        Parameter(
+            name=["--filter-id"],
+            help="Filter check queries to specific query identifiers; repeatable",
+        ),
+    ] = None,
     rules: Annotated[RuleOverrideFlags | None, Parameter(group=RULES_GROUP)] = None,
     registry: Annotated[RegistryFlags | None, Parameter(group=REGISTRY_GROUP)] = None,
     yes: YesFlag = False,
@@ -344,6 +361,8 @@ def _check(
         config=run_config,
         rule_overrides=rule_overrides or None,
         global_scope=global_,
+        filter_skill=filter_skill,
+        filter_id=filter_id,
         confirm_callback=lambda rt_name, loaded, roots: confirm_skill_execution(
             console,
             runtime_name=rt_name,

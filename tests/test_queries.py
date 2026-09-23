@@ -409,3 +409,264 @@ def test_query_set_for_skill_lookup(target: str, expected_ids: tuple[str, ...]) 
     q3 = Query(id="q3", text="out of scope", kind=QueryKind.OUT_OF_SCOPE)
     qs = QuerySet(catalog_id="c", queries=(q1, q2, q3), provenance=provenance())
     assert tuple(q.id for q in qs.for_skill(target)) == expected_ids
+
+
+def test_query_draft_missing_backfill_targets_only_uncovered_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify --missing skips already-covered skills and drafts only missing skills."""
+    from io import StringIO
+
+    from reach.cli.query import _handle_draft_query_generation
+    from reach.views import Console
+
+    skills_dir = tmp_path / "skills"
+    for name in ("skill-a", "skill-b"):
+        s_dir = skills_dir / name
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Desc for {name}\n---\nBody for {name}\n",
+            encoding="utf-8",
+        )
+
+    out_file = tmp_path / ".reach" / "queries.json"
+    existing = QuerySet(
+        catalog_id="all",
+        queries=(Query(id="skill-a-1", text="query a", expected_skill="skill-a"),),
+        provenance=provenance(),
+    )
+    save_query_set(existing, out_file)
+
+    captured: dict[str, object] = {}
+
+    def fake_draft_query_set(
+        console,
+        settings,
+        skills,
+        generate,
+        *,
+        dry_run,
+        review=False,
+        existing_query_set=None,
+    ) -> int:
+        captured["targets"] = generate.targets
+        captured["existing_count"] = len(existing_query_set.queries) if existing_query_set else 0
+        return 0
+
+    monkeypatch.setattr("reach.cli.query._draft_query_set", fake_draft_query_set)
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+
+    rc = _handle_draft_query_generation(
+        console,
+        target=skills_dir,
+        count=2,
+        out=out_file,
+        format_opt=None,
+        study=None,
+        run_dir=None,
+        config=None,
+        catalog=None,
+        runtime=None,
+        generate=None,
+        missing=True,
+    )
+    assert rc == 0
+    assert captured["targets"] == ("skill-b",)
+    assert captured["existing_count"] == 1
+
+
+def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
+    tmp_path: Path,
+) -> None:
+    """Verify backfilling offsets colliding query IDs and preserves original provenance."""
+    from io import StringIO
+
+    from reach.cli.drafting import _execute_draft_generation
+    from reach.cli.flags import GenerateFlags
+    from reach.config import RunConfig, StudySettings
+    from reach.generate import DraftCheckpoint
+    from reach.models import Catalog, CatalogMode, Skill
+    from reach.runtime.fake import FakeGenerator
+    from reach.views import build_console
+
+    skills = [
+        Skill(
+            name="skill-a",
+            description="Perform action A.",
+            path=tmp_path / "skill-a",
+        ),
+    ]
+    catalog = Catalog(id="cat", mode=CatalogMode.ALL, skills=("skill-a",))
+    dest = tmp_path / "queries.json"
+    in_progress = tmp_path / "queries.json.drafting"
+
+    original_recorded = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    existing_prov = QuerySetProvenance(
+        origin=Origin.IMPORTED,
+        source="benchmark-v1.json",
+        recorded_at=original_recorded,
+        queries_per_target=5,
+    )
+    existing_qs = QuerySet(
+        catalog_id="cat",
+        queries=(Query(id="skill-a-1", text="Existing query 1", expected_skill="skill-a"),),
+        provenance=existing_prov,
+    )
+
+    terms = DraftCheckpoint(
+        fingerprint="test-fp",
+        bodies="bodies-hash",
+        catalog_id="cat",
+        arm="content",
+        count=1,
+        generator_model="fake",
+        targets=("skill-a",),
+        covered=("skill-a",),
+        drafted=existing_qs,
+    )
+
+    fake_drafter = FakeGenerator(
+        completion=json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Newly backfilled query",
+                        "citation": "Perform action A.",
+                        "reason": "Direct citation",
+                    }
+                ]
+            }
+        )
+    )
+
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    settings = RunConfig(study=StudySettings(queries=dest))
+    generate = GenerateFlags(count=1)
+
+    s_dir = tmp_path / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Perform action A.\n---\nPerform action A.\n",
+        encoding="utf-8",
+    )
+
+    rc = _execute_draft_generation(
+        console,
+        settings,
+        catalog,
+        skills,
+        generate,
+        fake_drafter,
+        terms,
+        drafting=("skill-a",),
+        recovered=terms,
+        destination=dest,
+        in_progress=in_progress,
+        keep=True,
+        same_invocation_probe=False,
+        then="probed {path}",
+        existing_query_set=existing_qs,
+    )
+    assert rc == 0
+    saved = load_query_set(dest)
+    assert len(saved.queries) == 2
+    assert [q.id for q in saved.queries] == ["skill-a-1", "skill-a-2"]
+    assert saved.provenance.origin == Origin.IMPORTED
+    assert saved.provenance.source == "benchmark-v1.json"
+    assert saved.provenance.recorded_at == original_recorded
+
+
+def test_draft_backfill_resolves_id_collisions_without_numeric_suffix(
+    tmp_path: Path,
+) -> None:
+    """Verify backfill increments from 1 when existing ID has no numeric suffix."""
+    from io import StringIO
+
+    from reach.cli.drafting import _execute_draft_generation
+    from reach.cli.flags import GenerateFlags
+    from reach.config import RunConfig, StudySettings
+    from reach.generate import DraftCheckpoint
+    from reach.models import Catalog, CatalogMode, Skill
+    from reach.runtime.fake import FakeGenerator
+    from reach.views import build_console
+
+    skills = [
+        Skill(
+            name="skill-a",
+            description="Perform action A.",
+            path=tmp_path / "skill-a",
+        ),
+    ]
+    catalog = Catalog(id="cat", mode=CatalogMode.ALL, skills=("skill-a",))
+    dest = tmp_path / "queries.json"
+    in_progress = tmp_path / "queries.json.drafting"
+
+    existing_qs = QuerySet(
+        catalog_id="cat",
+        queries=(
+            Query(id="skill-a", text="Existing query without suffix", expected_skill="skill-a"),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    terms = DraftCheckpoint(
+        fingerprint="test-fp",
+        bodies="bodies-hash",
+        catalog_id="cat",
+        arm="content",
+        count=1,
+        generator_model="fake",
+        targets=("skill-a",),
+        covered=("skill-a",),
+        drafted=existing_qs,
+    )
+
+    fake_drafter = FakeGenerator(
+        completion=json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Newly drafted query",
+                        "citation": "Perform action A.",
+                        "reason": "Direct citation",
+                    }
+                ]
+            }
+        )
+    )
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    settings = RunConfig(study=StudySettings(queries=dest))
+    generate = GenerateFlags(count=1)
+
+    s_dir = tmp_path / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Perform action A.\n---\nPerform action A.\n",
+        encoding="utf-8",
+    )
+
+    rc = _execute_draft_generation(
+        console,
+        settings,
+        catalog,
+        skills,
+        generate,
+        fake_drafter,
+        terms,
+        drafting=("skill-a",),
+        recovered=terms,
+        destination=dest,
+        in_progress=in_progress,
+        keep=True,
+        same_invocation_probe=False,
+        then="probed {path}",
+        existing_query_set=existing_qs,
+    )
+    assert rc == 0
+    saved = load_query_set(dest)
+    assert len(saved.queries) == 2
+    assert [q.id for q in saved.queries] == ["skill-a", "skill-a-1"]

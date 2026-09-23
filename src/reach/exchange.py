@@ -312,10 +312,7 @@ def _skills(value: object, separator: str) -> tuple[str, ...]:
         skills: list[str] = []
         for part in value:
             if not isinstance(part, str):
-                msg = (
-                    "acceptable_skills array elements must be strings, "
-                    f"got {type(part).__name__}"
-                )
+                msg = f"acceptable_skills array elements must be strings, got {type(part).__name__}"
                 raise ValueError(msg)
             if skill := part.strip():
                 skills.append(skill)

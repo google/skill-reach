@@ -24,7 +24,7 @@ from math import floor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_serializer
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import resident_skills
@@ -282,6 +282,40 @@ def _parse_init_event(
     return observed, tools, resolved_model
 
 
+class ClaudeUsage(BaseModel):
+    """Represent usage metrics from Claude Code stream events."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input_tokens: int = Field(default=0, ge=0)
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int = Field(default=0, ge=0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+
+    @computed_field
+    @property
+    def total_prompt_tokens(self) -> int | None:
+        """Calculate total input/prompt tokens avoiding double-counting."""
+        anthropic_input = (
+            self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+        )
+        if anthropic_input > 0:
+            return anthropic_input
+        return self.prompt_tokens
+
+
+def _extract_usage_prompt_tokens(usage_obj: object) -> int | None:
+    """Extract total input/prompt tokens via typed ClaudeUsage model."""
+    if not isinstance(usage_obj, dict):
+        return None
+    try:
+        usage = ClaudeUsage.model_validate(usage_obj)
+        return usage.total_prompt_tokens
+    except PydanticValidationError:
+        return None
+
+
 def _parse_result_event(
     event: dict[str, Any],
 ) -> tuple[str, float | None, int | None]:
@@ -313,6 +347,7 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
     resolved_model = ""
     cost: float | None = None
     duration: int | None = None
+    prompt_tokens: int | None = None
     subtype: str | None = None
     retries = 0
     assistant_turns = 0
@@ -330,8 +365,14 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
                 invs, ths = _parse_assistant_event(event)
                 invocations += invs
                 reasoning += ths
+                msg = event.get("message")
+                usage = msg.get("usage") if isinstance(msg, dict) else event.get("usage")
+                if (toks := _extract_usage_prompt_tokens(usage)) is not None:
+                    prompt_tokens = toks
             case "result":
                 subtype, cost, duration = _parse_result_event(event)
+                if (toks := _extract_usage_prompt_tokens(event.get("usage"))) is not None:
+                    prompt_tokens = toks
 
     status: SessionStatus | str | None = None
     if early_exit:
@@ -350,6 +391,7 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
         resolved_model=resolved_model,
         cost_usd=cost,
         duration_ms=duration,
+        prompt_tokens=prompt_tokens,
         result_subtype=subtype,
         status=status,
         retries=retries,

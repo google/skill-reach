@@ -99,11 +99,50 @@ def _asks_for_a_mode(config: Path | None, catalog: CatalogFlags | None) -> bool:
     return config is not None and RunConfig.declared(config, "catalog", "mode")
 
 
+#: Canonical directory name for Reach study artifacts and benchmark queries.
+REACH_DIR_NAME = ".reach"
+
+#: Default benchmark query set filename.
+QUERIES_FILENAME = "queries.json"
+
+#: Default project-local path to the benchmark query set.
+DEFAULT_QUERIES_PATH = Path(REACH_DIR_NAME) / QUERIES_FILENAME
+
+#: Supported benchmark query set filenames checked during auto-discovery.
+QUERY_FILENAMES: tuple[str, ...] = (QUERIES_FILENAME, "queries.jsonl", "queries.csv")
+
+
+def find_existing_queries_path(
+    skills_path: Path | None = None,
+    *,
+    prefer_local: bool = True,
+) -> Path | None:
+    """Discover an existing .reach/queries.{json,jsonl,csv} file from CWD or skills corpus roots."""
+    local_candidates = [Path(REACH_DIR_NAME) / name for name in QUERY_FILENAMES]
+    corpus_candidates: list[Path] = []
+    if skills_path is not None:
+        sp = Path(skills_path).resolve()
+        search_roots = [sp] if sp.is_dir() else [sp.parent]
+        if sp.parent != sp and sp.parent not in search_roots:
+            search_roots.append(sp.parent)
+        for root in search_roots:
+            corpus_candidates.extend(root / REACH_DIR_NAME / name for name in QUERY_FILENAMES)
+    candidates = (
+        local_candidates + corpus_candidates
+        if prefer_local
+        else corpus_candidates + local_candidates
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _run_dir_study(run_dir: Path, study: StudyFlags) -> StudyFlags:
     """Populate default queries and workspace paths relative to a study root."""
     return study.model_copy(
         update={
-            "queries": (study.queries if study.queries is not None else run_dir / "queries.json"),
+            "queries": (study.queries if study.queries is not None else run_dir / QUERIES_FILENAME),
             "workdir": (study.workdir if study.workdir is not None else run_dir / "workspace"),
         },
     )

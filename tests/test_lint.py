@@ -1313,3 +1313,58 @@ def test_missing_mutual_handoff_ignores_multi_skill_template_cliques(tmp_path: P
         "workflow-pipeline-authoring",
         "workflow-pipeline-debugging",
     }
+
+
+def test_explain_catalog_budget_overflow_rule() -> None:
+    """Verify explain_rule returns definition for catalog-budget-overflow."""
+    rule = explain_rule("catalog-budget-overflow")
+    assert rule is not None
+    assert rule.rule == "catalog-budget-overflow"
+    assert rule.default_severity == Severity.WARN
+
+
+def _populate_overflow_corpus(root: Path, count: int = 5) -> Path:
+    """Populate directory with test skills that together exceed small listing budgets."""
+    for i in range(count):
+        d = root / f"skill-{i}"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            f"---\nname: skill-{i}\ndescription: Tool for category {i} operations.\n---\n",
+            encoding="utf-8",
+        )
+    return root
+
+
+def test_catalog_budget_overflow_detected_when_exceeding_budget(tmp_path: Path) -> None:
+    """Verify catalog-budget-overflow emits warnings when skills exceed listing budget."""
+    corpus = _populate_overflow_corpus(tmp_path)
+    # With a small budget (e.g. 100 chars), not all 5 skills can fit
+    report = lint_tree(corpus, config=LintSettings(catalog_budget_chars=100))
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) > 0
+    assert all(i.severity == Severity.WARN for i in overflow_issues)
+    assert any("exceeds listing budget" in i.message for i in overflow_issues)
+
+
+def test_catalog_budget_overflow_suppressed_when_ignored(tmp_path: Path) -> None:
+    """Verify catalog-budget-overflow is omitted when configured to ignore."""
+    corpus = _populate_overflow_corpus(tmp_path)
+    report = lint_tree(
+        corpus,
+        config=LintSettings(
+            catalog_budget_chars=100,
+            rules={"catalog-budget-overflow": Severity.IGNORE},
+        ),
+    )
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) == 0
+
+
+def test_catalog_budget_overflow_skipped_when_budget_is_none(tmp_path: Path) -> None:
+    """Verify catalog-budget-overflow is skipped when catalog_budget_chars is None."""
+    corpus = _populate_overflow_corpus(tmp_path)
+    cfg = LintSettings.from_settings({"lint": {"catalog_budget_chars": None}})
+    assert cfg.catalog_budget_chars is None
+    report = lint_tree(corpus, config=cfg)
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) == 0

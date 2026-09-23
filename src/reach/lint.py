@@ -284,6 +284,20 @@ RULES: dict[str, RuleDefinition] = {
             "both overlapping skills so each carves out the other's territory."
         ),
     ),
+    "catalog-budget-overflow": RuleDefinition(
+        rule="catalog-budget-overflow",
+        default_severity=Severity.WARN,
+        summary="Skill catalog exceeds runtime resident listing budget",
+        explanation=(
+            "When resident skills exceed the agent runtime's skill listing budget "
+            "(e.g. 30,000 chars for Claude Code), descriptions are truncated to bare names "
+            "during evaluation and routing, reducing discovery accuracy."
+        ),
+        remedy=(
+            "Partition catalog with 'reach cluster', shorten skill descriptions, or set "
+            "skill_listing_budget_fraction."
+        ),
+    ),
 }
 
 
@@ -1271,6 +1285,38 @@ def _check_declared_dependencies(
     return issues
 
 
+def _check_catalog_budget_overflow(
+    skills: Sequence[Skill],
+    paths_by_name: Mapping[str, Sequence[Path]],
+    cfg: LintSettings,
+) -> list[LintIssue]:
+    """Identify skills whose descriptions are truncated due to catalog listing budget limits."""
+    if (
+        _resolve_severity("catalog-budget-overflow", cfg) is None
+        or not skills
+        or cfg.catalog_budget_chars is None
+    ):
+        return []
+
+    from reach.runtime.claude_listing import fit_skill_listing
+
+    listing = fit_skill_listing(skills, budget_chars=cfg.catalog_budget_chars)
+    if not listing.over_budget:
+        return []
+
+    issues: list[LintIssue] = []
+    for skill_name in listing.name_only:
+        paths = paths_by_name.get(skill_name, ())
+        for skill_path in paths:
+            msg = (
+                f"Skill '{skill_name}' description is truncated to bare name because resident "
+                f"catalog ({listing.full_chars:,} chars) exceeds listing budget "
+                f"({listing.budget_chars:,} chars)."
+            )
+            _record_issue(issues, "catalog-budget-overflow", skill_name, skill_path, msg, cfg)
+    return issues
+
+
 def _lint_paths(
     file_paths: Sequence[Path],
     cfg: LintSettings,
@@ -1361,6 +1407,13 @@ def _lint_paths(
             dense_similarities=dense_sims,
             skill_filter=skill_filter,
             semantics_by_name=semantics_by_name,
+        )
+    )
+    corpus_issues.extend(
+        _check_catalog_budget_overflow(
+            valid_skills,
+            paths_by_name,
+            cfg,
         )
     )
 

@@ -25,6 +25,40 @@ default_agent = "antigravity-cli"
 
 
 # ==============================================================================
+# Catalog Assembly
+# ==============================================================================
+[catalog]
+mode = "neighborhood"    # Assembly strategy: all, neighborhood, singleton
+rivals = 10              # Number of competitor skills sampled around the target
+scorer = "hybrid"        # Rival selection metric: hybrid, dense, bm25
+seed = 0                 # Deterministic seed for reproducible catalog sampling
+size = 20                # Total resident skills installed per probe trial
+
+# ==============================================================================
+# CI/CD Quality Gate (`reach check`)
+# ==============================================================================
+[check]
+budget = 50              # Probe limit budget for Stage 2 empirical evaluation
+max_misroute = 0.10      # Maximum permitted fraction of misrouted queries
+max_redundancy = 0.25    # Maximum acceptable skill redundancy (excess calls >= 0.0, optional)
+min_accuracy = 0.80      # Minimum overall routing accuracy (0.0 - 1.0)
+min_efficiency = 0.80    # Minimum observed step efficiency MRR (0.0 - 1.0, optional)
+min_entrypoint = 0.80    # Minimum observed entrypoint accuracy (0.0 - 1.0, optional)
+min_f1 = 0.85            # Minimum observed skill selection F1 score (0.0 - 1.0, optional)
+min_reachability = 0.90  # Minimum observed trajectory reachability (0.0 - 1.0, optional)
+min_recall = 0.80        # Minimum recall rate for target skills (0.0 - 1.0)
+since = "HEAD~1"         # Default git base reference when running --changed
+strict = true            # When true, Stage 1 static lint warnings fail the build
+
+# ==============================================================================
+# A/B Diffing & Noise Floor Calibration
+# ==============================================================================
+[diff]
+confidence = 0.95
+noise_inflation = 1.265
+power = 0.80
+
+# ==============================================================================
 # Discovery Precedence Order
 # ==============================================================================
 [discovery]
@@ -42,53 +76,6 @@ precedence = [
 ]
 
 # ==============================================================================
-# Study Inputs, Workspaces & Artifacts
-# ==============================================================================
-[study]
-# queries = ".reach/queries.json"  # Labeled evaluation queries benchmark file
-# out = ".reach/eval.json"     # Destination for evaluation run results
-# catalog = "auto"             # Target catalog scope: "auto" (default), "all", "neighborhood:<skill>", or "singleton:<skill>"
-# workdir = "work"             # Custom persistent workspace (omit to use isolated ephemeral tempdir)
-# skills = "skills"            # Optional explicit override (omit to use [discovery].precedence)
-# tag = ""                     # Semantic label for run tracking (e.g. "v1-baseline")
-# partial = false              # Enforce query set coverage across all catalog skills
-# rescope = false              # Prevent cross-catalog label reuse without --rescope
-
-# ==============================================================================
-# Catalog Assembly
-# ==============================================================================
-[catalog]
-mode = "neighborhood"    # Assembly strategy: all, neighborhood, singleton
-rivals = 10              # Number of competitor skills sampled around the target
-scorer = "hybrid"        # Rival selection metric: hybrid, dense, bm25
-seed = 0                 # Deterministic seed for reproducible catalog sampling
-size = 20                # Total resident skills installed per probe trial
-
-# ==============================================================================
-# CI/CD Quality Gate (`reach check`)
-# ==============================================================================
-[check]
-budget = 50              # Probe limit budget for Stage 2 empirical evaluation
-max_misroute = 0.10      # Maximum permitted fraction of misrouted queries
-min_accuracy = 0.80      # Minimum overall routing accuracy (0.0 - 1.0)
-min_recall = 0.80        # Minimum recall rate for target skills (0.0 - 1.0)
-min_entrypoint = 0.80    # Minimum observed entrypoint accuracy (0.0 - 1.0, optional)
-min_reachability = 0.90  # Minimum observed trajectory reachability (0.0 - 1.0, optional)
-min_efficiency = 0.80    # Minimum observed step efficiency MRR (0.0 - 1.0, optional)
-min_f1 = 0.85            # Minimum observed skill selection F1 score (0.0 - 1.0, optional)
-max_redundancy = 0.25    # Maximum acceptable skill redundancy (excess calls >= 0.0, optional)
-since = "HEAD~1"         # Default git base reference when running --changed
-strict = true            # When true, Stage 1 static lint warnings fail the build
-
-# ==============================================================================
-# A/B Diffing & Noise Floor Calibration
-# ==============================================================================
-[diff]
-confidence = 0.95
-noise_inflation = 1.265
-power = 0.80
-
-# ==============================================================================
 # Static Linting
 # ==============================================================================
 [lint]
@@ -99,6 +86,7 @@ mutual_handoff_lexical_threshold = 0.35
 mutual_handoff_similarity_threshold = 0.75
 
 [lint.rules]
+catalog-budget-overflow = "warn"
 description-too-short = "warn"
 duplicate-capability = "warn"
 duplicate-name = "error"
@@ -111,23 +99,27 @@ missing-mutual-handoff = "warn"
 missing-name = "error"
 name-mismatch = "error"
 reserved-name-collision = "warn"
+unbounded-attractor = "warn"
 unknown-skill-reference = "warn"
 unresolved-declared-dependency = "warn"
 unresolved-placeholder = "warn"
-unbounded-attractor = "warn"
 
 # ==============================================================================
 # Description Optimization
 # ==============================================================================
 [optimize]
-budget = 30
-temperature = 0.7
-iterations = 1
-holdout = 0.2
-review = false
-auto_queries = true
 adversarial_count = 5
+auto_queries = true
+budget = 30
+holdout = 0.2
+iterations = 1
 positive_count = 5
+review = false
+review_timeout = 600.0
+seed = 42
+temperature = 0.7
+with_handoff = false
+workers = 4
 
 # ==============================================================================
 # Lexical Overlap & Vocabulary Rewrite Heuristics
@@ -172,9 +164,22 @@ similarity_threshold = 0.92
 # Runtime Execution
 # ==============================================================================
 [runtime]
-timeout_s = 200          # Maximum seconds to wait for an agent probe response
-max_turns = 3            # Maximum turns for multi-turn evaluations
 early_exit = true        # Abort multi-turn execution immediately when target skill is observed
+max_turns = 3            # Maximum turns for multi-turn evaluations
+timeout_s = 200          # Maximum seconds to wait for an agent probe response
+
+# ==============================================================================
+# Study Inputs, Workspaces & Artifacts
+# ==============================================================================
+[study]
+# catalog = "auto"             # Target catalog scope: "auto" (default), "all", "neighborhood:<skill>", or "singleton:<skill>"
+# out = ".reach/eval.json"     # Destination for evaluation run results
+# partial = false              # Enforce query set coverage across all catalog skills
+# queries = ".reach/queries.json"  # Labeled evaluation queries benchmark file
+# rescope = false              # Prevent cross-catalog label reuse without --rescope
+# skills = "skills"            # Optional explicit override (omit to use [discovery].precedence)
+# tag = ""                     # Semantic label for run tracking (e.g. "v1-baseline")
+# workdir = "work"             # Custom persistent workspace (omit to use isolated ephemeral tempdir)
 
 # ==============================================================================
 # Agent Profiles & Executables
@@ -260,11 +265,45 @@ effort = "low"
 
 ## Sections & Options Reference
 
-### `[general]`
+### `[catalog]`
 
-| Key             | Type   | Default             | Description                                                                                                                                       |
-| :-------------- | :----- | :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `default_agent` | String | `"antigravity-cli"` | Default agent driver when `--agent` is omitted from CLI commands (`antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `pi`, `keyword`). |
+Controls how competing skills are selected and installed into the active catalog during empirical probes.
+
+| Key      | Type    | Default          | Description                                                                                                         |
+| :------- | :------ | :--------------- | :------------------------------------------------------------------------------------------------------------------ |
+| `mode`   | String  | `"neighborhood"` | Assembly mode: `all` (install whole catalog), `neighborhood` (target + nearest rivals), `singleton` (target alone). |
+| `size`   | Integer | `20`             | Total number of resident skills in the synthetic catalog.                                                           |
+| `rivals` | Integer | `10`             | Number of competing skills selected by vocabulary or semantic proximity.                                            |
+| `seed`   | Integer | `0`              | Deterministic random seed for catalog permutation.                                                                  |
+| `scorer` | String  | `"hybrid"`       | Scoring method for selecting nearest rivals: `hybrid`, `dense`, or `bm25`.                                          |
+
+### `[check]`
+
+Default thresholds enforced by `reach check` in continuous integration.
+
+| Key                | Type    | Default    | Description                                                                  |
+| :----------------- | :------ | :--------- | :--------------------------------------------------------------------------- |
+| `budget`           | Integer | `50`       | Maximum empirical probes executed during CI evaluations.                     |
+| `max_misroute`     | Float   | `0.10`     | Fail gate if queries misroute to competitor skills above this fraction.      |
+| `max_redundancy`   | Float   | `None`     | Fail gate if skill redundancy exceeds this fraction (excess calls).          |
+| `min_accuracy`     | Float   | `0.80`     | Fail gate if overall routing accuracy drops below this threshold.            |
+| `min_efficiency`   | Float   | `None`     | Fail gate if observed step efficiency MRR drops below this threshold.        |
+| `min_entrypoint`   | Float   | `None`     | Fail gate if observed entrypoint accuracy drops below this threshold.        |
+| `min_f1`           | Float   | `None`     | Fail gate if observed skill selection F1 score drops below this threshold.   |
+| `min_reachability` | Float   | `None`     | Fail gate if observed trajectory reachability drops below this threshold.    |
+| `min_recall`       | Float   | `0.80`     | Fail gate if target skill recall drops below this threshold.                 |
+| `since`            | String  | `"HEAD~1"` | Default git revision comparison target when `--changed` is passed.           |
+| `strict`           | Boolean | `true`     | When true, Stage 1 static lint warnings cause the check to exit with code 1. |
+
+### `[diff]`
+
+Statistical parameters for A/B evaluation diffing and noise floor estimation.
+
+| Key               | Type  | Default | Description                                                                    |
+| :---------------- | :---- | :------ | :----------------------------------------------------------------------------- |
+| `confidence`      | Float | `0.95`  | Two-sided confidence level ($0 < c < 1$) for statistical intervals.            |
+| `power`           | Float | `0.80`  | Statistical power ($1 - \beta$) for sample size planning.                      |
+| `noise_inflation` | Float | `1.265` | Inflation multiplier applied to standard errors for empirical over-dispersion. |
 
 ### `[discovery]`
 
@@ -273,6 +312,113 @@ Controls directory and client skill store search precedence for auto-discovering
 | Key          | Type            | Default                                                                               | Description                                            |
 | :----------- | :-------------- | :------------------------------------------------------------------------------------ | :----------------------------------------------------- |
 | `precedence` | Array of String | `[".", "skills", ".agents/skills", "claude-code", "cursor", "github", "pi", "goose"]` | Ordered search locations when resolving skill corpora. |
+
+### `[general]`
+
+| Key             | Type   | Default             | Description                                                                                                                                       |
+| :-------------- | :----- | :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `default_agent` | String | `"antigravity-cli"` | Default agent driver when `--agent` is omitted from CLI commands (`antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `pi`, `keyword`). |
+
+### `[lint]` & `[lint.rules]`
+
+Controls static frontmatter and budget thresholds.
+
+| Key                                   | Type    | Default  | Description                                                                                          |
+| :------------------------------------ | :------ | :------- | :--------------------------------------------------------------------------------------------------- |
+| `max_description_length`              | Integer | `1024`   | Maximum allowable character length for description before triggering `listing-overflow`.             |
+| `min_description_length`              | Integer | `20`     | Minimum character length before triggering `description-too-short`.                                  |
+| `max_name_length`                     | Integer | `64`     | Maximum character length for skill name.                                                             |
+| `catalog_budget_chars`                | Integer | `30000`  | Maximum allowable resident listing budget in characters before triggering `catalog-budget-overflow`. |
+| `mutual_handoff_similarity_threshold` | Float   | `0.75`   | Minimum semantic similarity between neighbors before requiring reciprocal handoffs.                  |
+| `mutual_handoff_lexical_threshold`    | Float   | `0.35`   | Minimum lexical competition score before requiring reciprocal handoffs.                              |
+| `rules.<rule-name>`                   | String  | (varies) | Severity override for any static lint rule: `"error"`, `"warn"`, or `"ignore"`.                      |
+
+### `[optimize]`
+
+Parameters for closed-loop skill description optimization.
+
+| Key                 | Type    | Default | Description                                                                   |
+| :------------------ | :------ | :------ | :---------------------------------------------------------------------------- |
+| `adversarial_count` | Integer | `5`     | Number of adversarial negative near-miss queries to synthesize per round.     |
+| `auto_queries`      | Boolean | `true`  | Automatically synthesize positive and adversarial queries when none provided. |
+| `budget`            | Integer | `30`    | Maximum empirical probe budget allocated across candidate evaluations.        |
+| `holdout`           | Float   | `0.2`   | Fraction of queries held out for generalization validation (`0.0` - `0.9`).   |
+| `iterations`        | Integer | `1`     | Number of iterative hill-climbing refinement rounds (1-10).                   |
+| `positive_count`    | Integer | `5`     | Number of positive in-scope trigger queries to synthesize per round.          |
+| `review`            | Boolean | `false` | Launch interactive browser boundary review for drafted queries before probes. |
+| `review_timeout`    | Float   | `600.0` | Maximum timeout in seconds waiting for interactive browser query review.      |
+| `seed`              | Integer | `42`    | Pseudo-random seed for train/test query splitting and reproducible runs.      |
+| `temperature`       | Float   | `0.7`   | Sampling temperature for candidate rewrite generation.                        |
+| `with_handoff`      | Boolean | `false` | Synthesize and stage reciprocal Layer-2 `SKILL.md` Routing Notes.             |
+| `workers`           | Integer | `4`     | Number of parallel probe workers (inherits from `[plan].workers` if unset).   |
+
+### `[overlap]`
+
+Parameters governing lexical competition and vocabulary rewrite suggestions.
+
+| Key                | Type    | Default | Description                                                                 |
+| :----------------- | :------ | :------ | :-------------------------------------------------------------------------- |
+| `contender_band`   | Float   | `0.90`  | Proximity ratio (within 90% of top score) defining close competitor skills. |
+| `material_share`   | Float   | `0.01`  | Minimum contribution share (1%) for a rival term to be reported as ceded.   |
+| `claim_limit`      | Integer | `8`     | Maximum number of suggested unclaimed terms extracted from a skill body.    |
+| `min_claim_length` | Integer | `3`     | Minimum character length for suggested unclaimed body terms.                |
+| `min_claim_uses`   | Integer | `2`     | Minimum frequency in the skill body to qualify as a claim candidate.        |
+
+### `[plan]`
+
+Controls probe replication and network resilience.
+
+| Key         | Type    | Default | Description                                                                           |
+| :---------- | :------ | :------ | :------------------------------------------------------------------------------------ |
+| `attempts`  | Integer | `5`     | Number of repeated trials per query to compute statistical confidence intervals.      |
+| `retries`   | Integer | `2`     | Number of times to retry a probe if an agent throws a transient API or network error. |
+| `backoff_s` | Float   | `5.0`   | Initial backoff time in seconds between retries.                                      |
+| `pause_s`   | Float   | `0.0`   | Delay between consecutive probes to respect provider rate limits.                     |
+| `workers`   | Integer | `1`     | Number of concurrent worker threads executing probes in parallel.                     |
+
+### `[query]`
+
+Parameters for synthetic query drafting and leakage detection.
+
+| Key                     | Type    | Default    | Description                                                               |
+| :---------------------- | :------ | :--------- | :------------------------------------------------------------------------ |
+| `count`                 | Integer | `3`        | Number of positive queries drafted per target skill.                      |
+| `adversarial_count`     | Integer | `1`        | Number of negative near-miss queries drafted per target skill.            |
+| `top_rivals`            | Integer | `3`        | Maximum competitor skills injected into synthesis prompts.                |
+| `distinctive_idf_floor` | Float   | `0.693147` | Minimum IDF threshold ($\ln(2)$) for distinctive terms in leak detection. |
+
+### `[registry]`
+
+Parameters for Google Cloud Agent Registry integration.
+
+| Key                 | Type    | Default    | Description                                                                         |
+| :------------------ | :------ | :--------- | :---------------------------------------------------------------------------------- |
+| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry.                         |
+| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                   |
+| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                |
+| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating. |
+
+### `[retrieval]`
+
+Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciprocal rank fusion (RRF).
+
+| Key                    | Type    | Default                            | Description                                                              |
+| :--------------------- | :------ | :--------------------------------- | :----------------------------------------------------------------------- |
+| `scorer`               | String  | `"hybrid"`                         | Rival retrieval algorithm (`hybrid`, `dense`, `bm25`).                   |
+| `model`                | String  | `"minishlab/potion-retrieval-32M"` | Sentence transformer embedding model for dense similarity ranking.       |
+| `rrf_k`                | Integer | `60`                               | Smoothing constant $k$ used in Reciprocal Rank Fusion ($1 / (k + r)$).   |
+| `similarity_threshold` | Float   | `0.92`                             | Cosine similarity threshold for identifying near-duplicate capabilities. |
+| `bm25_k1`              | Float   | `1.5`                              | Lucene BM25 term-frequency saturation parameter ($k_1 > 0$).             |
+| `bm25_b`               | Float   | `0.75`                             | Lucene BM25 document length normalization parameter ($0 \le b \le 1$).   |
+
+### `[runtime]`
+
+| Key                | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| :----------------- | :--------------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout_s`        | Integer          | `200`   | Process execution timeout in seconds before aborting an unresponsive probe.                                                                                                                                                                                                                                                                                                                                                                                              |
+| `max_turns`        | Integer          | `3`     | Maximum conversation turns to execute and evaluate per probe.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden or Google Enterprise mode is active; runner configuration variables such as `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). Set to `[]` to allow all ambient variables. |
 
 ### `[study]`
 
@@ -296,146 +442,6 @@ Controls default file paths for benchmark queries, skill roots, workspaces, and 
 > [!CAUTION]
 > **Risk of Bypassing Safety Confirmation**
 > Setting `trusted = true` bypasses interactive safety confirmation prompts across all commands that launch live agent probes. **Only enable `trusted = true` in private repositories where all skill manifests and instructions have been vetted and reviewed.** Never enable `trusted = true` on repositories that evaluate untrusted or community-contributed skills.
-
-### `[catalog]`
-
-Controls how competing skills are selected and installed into the active catalog during empirical probes.
-
-| Key      | Type    | Default          | Description                                                                                                         |
-| :------- | :------ | :--------------- | :------------------------------------------------------------------------------------------------------------------ |
-| `mode`   | String  | `"neighborhood"` | Assembly mode: `all` (install whole catalog), `neighborhood` (target + nearest rivals), `singleton` (target alone). |
-| `size`   | Integer | `20`             | Total number of resident skills in the synthetic catalog.                                                           |
-| `rivals` | Integer | `10`             | Number of competing skills selected by vocabulary or semantic proximity.                                            |
-| `seed`   | Integer | `0`              | Deterministic random seed for catalog permutation.                                                                  |
-| `scorer` | String  | `"hybrid"`       | Scoring method for selecting nearest rivals: `hybrid`, `dense`, or `bm25`.                                          |
-
-### `[plan]`
-
-Controls probe replication and network resilience.
-
-| Key         | Type    | Default | Description                                                                           |
-| :---------- | :------ | :------ | :------------------------------------------------------------------------------------ |
-| `attempts`  | Integer | `5`     | Number of repeated trials per query to compute statistical confidence intervals.      |
-| `retries`   | Integer | `2`     | Number of times to retry a probe if an agent throws a transient API or network error. |
-| `backoff_s` | Float   | `5.0`   | Initial backoff time in seconds between retries.                                      |
-| `pause_s`   | Float   | `0.0`   | Delay between consecutive probes to respect provider rate limits.                     |
-| `workers`   | Integer | `1`     | Number of concurrent worker threads executing probes in parallel.                     |
-
-### `[runtime]`
-
-| Key                | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| :----------------- | :--------------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeout_s`        | Integer          | `200`   | Process execution timeout in seconds before aborting an unresponsive probe.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `max_turns`        | Integer          | `3`     | Maximum conversation turns to execute and evaluate per probe.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden or Google Enterprise mode is active; runner configuration variables such as `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). Set to `[]` to allow all ambient variables. |
-
-### `[lint]` & `[lint.rules]`
-
-Controls static frontmatter and budget thresholds.
-
-| Key                                   | Type    | Default  | Description                                                                              |
-| :------------------------------------ | :------ | :------- | :--------------------------------------------------------------------------------------- |
-| `max_description_length`              | Integer | `1024`   | Maximum allowable character length for description before triggering `listing-overflow`. |
-| `min_description_length`              | Integer | `20`     | Minimum character length before triggering `description-too-short`.                      |
-| `max_name_length`                     | Integer | `64`     | Maximum character length for skill name.                                                 |
-| `mutual_handoff_similarity_threshold` | Float   | `0.75`   | Minimum semantic similarity between neighbors before requiring reciprocal handoffs.      |
-| `mutual_handoff_lexical_threshold`    | Float   | `0.35`   | Minimum lexical competition score before requiring reciprocal handoffs.                  |
-| `rules.<rule-name>`                   | String  | (varies) | Severity override for any static lint rule: `"error"`, `"warn"`, or `"ignore"`.          |
-
-### `[check]`
-
-Default thresholds enforced by `reach check` in continuous integration.
-
-| Key                | Type    | Default    | Description                                                                  |
-| :----------------- | :------ | :--------- | :--------------------------------------------------------------------------- |
-| `min_recall`       | Float   | `0.80`     | Fail gate if target skill recall drops below this threshold.                 |
-| `min_accuracy`     | Float   | `0.80`     | Fail gate if overall routing accuracy drops below this threshold.            |
-| `max_misroute`     | Float   | `0.10`     | Fail gate if queries misroute to competitor skills above this fraction.      |
-| `min_entrypoint`   | Float   | `None`     | Fail gate if observed entrypoint accuracy drops below this threshold.        |
-| `min_reachability` | Float   | `None`     | Fail gate if observed trajectory reachability drops below this threshold.    |
-| `min_efficiency`   | Float   | `None`     | Fail gate if observed step efficiency MRR drops below this threshold.        |
-| `min_f1`           | Float   | `None`     | Fail gate if observed skill selection F1 score drops below this threshold.   |
-| `max_redundancy`   | Float   | `None`     | Fail gate if skill redundancy exceeds this fraction (excess calls).          |
-| `budget`           | Integer | `50`       | Maximum empirical probes executed during CI evaluations.                     |
-| `strict`           | Boolean | `true`     | When true, Stage 1 static lint warnings cause the check to exit with code 1. |
-| `since`            | String  | `"HEAD~1"` | Default git revision comparison target when `--changed` is passed.           |
-
-### `[retrieval]`
-
-Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciprocal rank fusion (RRF).
-
-| Key                    | Type    | Default                            | Description                                                              |
-| :--------------------- | :------ | :--------------------------------- | :----------------------------------------------------------------------- |
-| `scorer`               | String  | `"hybrid"`                         | Rival retrieval algorithm (`hybrid`, `dense`, `bm25`).                   |
-| `model`                | String  | `"minishlab/potion-retrieval-32M"` | Sentence transformer embedding model for dense similarity ranking.       |
-| `rrf_k`                | Integer | `60`                               | Smoothing constant $k$ used in Reciprocal Rank Fusion ($1 / (k + r)$).   |
-| `similarity_threshold` | Float   | `0.92`                             | Cosine similarity threshold for identifying near-duplicate capabilities. |
-| `bm25_k1`              | Float   | `1.5`                              | Lucene BM25 term-frequency saturation parameter ($k_1 > 0$).             |
-| `bm25_b`               | Float   | `0.75`                             | Lucene BM25 document length normalization parameter ($0 \le b \le 1$).   |
-
-### `[overlap]`
-
-Parameters governing lexical competition and vocabulary rewrite suggestions.
-
-| Key                | Type    | Default | Description                                                                 |
-| :----------------- | :------ | :------ | :-------------------------------------------------------------------------- |
-| `contender_band`   | Float   | `0.90`  | Proximity ratio (within 90% of top score) defining close competitor skills. |
-| `material_share`   | Float   | `0.01`  | Minimum contribution share (1%) for a rival term to be reported as ceded.   |
-| `claim_limit`      | Integer | `8`     | Maximum number of suggested unclaimed terms extracted from a skill body.    |
-| `min_claim_length` | Integer | `3`     | Minimum character length for suggested unclaimed body terms.                |
-| `min_claim_uses`   | Integer | `2`     | Minimum frequency in the skill body to qualify as a claim candidate.        |
-
-### `[diff]`
-
-Statistical parameters for A/B evaluation diffing and noise floor estimation.
-
-| Key               | Type  | Default | Description                                                                    |
-| :---------------- | :---- | :------ | :----------------------------------------------------------------------------- |
-| `confidence`      | Float | `0.95`  | Two-sided confidence level ($0 < c < 1$) for statistical intervals.            |
-| `power`           | Float | `0.80`  | Statistical power ($1 - \beta$) for sample size planning.                      |
-| `noise_inflation` | Float | `1.265` | Inflation multiplier applied to standard errors for empirical over-dispersion. |
-
-### `[query]`
-
-Parameters for synthetic query drafting and leakage detection.
-
-| Key                     | Type    | Default    | Description                                                               |
-| :---------------------- | :------ | :--------- | :------------------------------------------------------------------------ |
-| `count`                 | Integer | `3`        | Number of positive queries drafted per target skill.                      |
-| `adversarial_count`     | Integer | `1`        | Number of negative near-miss queries drafted per target skill.            |
-| `top_rivals`            | Integer | `3`        | Maximum competitor skills injected into synthesis prompts.                |
-| `distinctive_idf_floor` | Float   | `0.693147` | Minimum IDF threshold ($\ln(2)$) for distinctive terms in leak detection. |
-
-### `[optimize]`
-
-Parameters for closed-loop skill description optimization.
-
-| Key                 | Type    | Default | Description                                                                   |
-| :------------------ | :------ | :------ | :---------------------------------------------------------------------------- |
-| `budget`            | Integer | `30`    | Maximum empirical probe budget allocated across candidate evaluations.        |
-| `temperature`       | Float   | `0.7`   | Sampling temperature for candidate rewrite generation.                        |
-| `iterations`        | Integer | `1`     | Number of iterative hill-climbing refinement rounds (1-10).                   |
-| `holdout`           | Float   | `0.2`   | Fraction of queries held out for generalization validation (`0.0` - `0.9`).   |
-| `review`            | Boolean | `false` | Launch interactive browser boundary review for drafted queries before probes. |
-| `auto_queries`      | Boolean | `true`  | Automatically synthesize positive and adversarial queries when none provided. |
-| `adversarial_count` | Integer | `5`     | Number of adversarial negative near-miss queries to synthesize per round.     |
-| `positive_count`    | Integer | `5`     | Number of positive in-scope trigger queries to synthesize per round.          |
-| `seed`              | Integer | `42`    | Pseudo-random seed for train/test query splitting and reproducible runs.      |
-| `review_timeout`    | Float   | `600.0` | Maximum timeout in seconds waiting for interactive browser query review.      |
-| `workers`           | Integer | `4`     | Number of parallel probe workers (inherits from `[plan].workers` if unset).   |
-| `with_handoff`      | Boolean | `false` | Synthesize and stage reciprocal Layer-2 `SKILL.md` Routing Notes.             |
-
-### `[registry]`
-
-Parameters for Google Cloud Agent Registry integration.
-
-| Key                 | Type    | Default    | Description                                                                         |
-| :------------------ | :------ | :--------- | :---------------------------------------------------------------------------------- |
-| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry.                         |
-| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                   |
-| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                |
-| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating. |
 
 ---
 

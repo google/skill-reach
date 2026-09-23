@@ -56,6 +56,7 @@ reach query --queries .reach/queries.json --leaks --citations
 | `--out`, `-o`    | Path   | `.reach/queries.json` | Where to write the query set (format auto-inferred from `.json`, `.jsonl`, or `.csv`).                                         |
 | `--format`, `-f` | Choice | `json`                | Explicit output format: `json`, `jsonl`, or `csv`. When `--out` is omitted with `csv` or `jsonl`, output is printed to stdout. |
 | `--force`        | Flag   | `false`               | Overwrite destination query set file if it already exists.                                                                     |
+| `--missing`      | Flag   | `false`               | Backfill queries only for skills missing from an existing destination query set.                                               |
 | `--dry-run`      | Flag   | `false`               | Preview prompts and token budget without making model calls.                                                                   |
 
 ### Inspection & View
@@ -104,9 +105,26 @@ Draft synthetic evaluation queries targeting resident skills without converting 
 ```bash
 reach query draft [TARGET] [OPTIONS]
 
+# Draft queries targeting skills in a local directory
+reach query draft ./my-skills
+
+# Draft queries only for skills currently missing benchmark queries
+reach query draft ./my-skills --missing
+
 # Draft queries with interactive browser review before saving
 reach query draft ./my-skills --review
 ```
+
+| Option                | Type    | Default  | Description                                                                          |
+| :-------------------- | :------ | :------- | :----------------------------------------------------------------------------------- |
+| `--count`, `-c`       | Integer | `4`      | Target evaluation queries generated per skill.                                       |
+| `--missing`, `-m`     | Flag    | `false`  | Only draft queries for skills in the target corpus with 0 existing queries.          |
+| `--review`            | Flag    | `false`  | Open interactive browser review session before saving.                               |
+| `--agent`             | String  | `claude` | Generation agent runtime (`antigravity`, `claude-code`, `gemini-cli`, `gemini-api`). |
+| `--model`             | String  | -        | LLM model identifier for query drafting.                                             |
+| `--top-rivals`        | Integer | -        | Maximum number of rival skills to include in prompt context.                         |
+| `--draft-concurrency` | Integer | `4`      | Parallel concurrency for query generation workers.                                   |
+| `--out`, `-o`         | Path    | -        | Output path for generated queries JSON (defaults to `.reach/queries.json`).          |
 
 ### `reach query view`
 

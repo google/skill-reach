@@ -938,3 +938,77 @@ def test_sweep_warns_when_anchor_has_zero_matching_queries(
     combined = captured.out + captured.err
     assert "Anchor coverage:" in combined
     assert "skill-05" in combined
+
+
+def test_sweep_cli_allow_truncation_flag(
+    sweep_corpus: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach sweep accepts --allow-truncation and passes it to run_scaling_sweep."""
+    import reach.cli.sweep as cli_sweep
+
+    passed_kwargs: dict[str, object] = {}
+
+    def _mock_run_scaling_sweep(*args, **kwargs):
+        passed_kwargs.update(kwargs)
+        from reach.sweep import ScalingPoint, ScalingStudy
+
+        p = ScalingPoint(
+            scale=2,
+            catalog_id="cat",
+            pass_rate=1.0,
+            pass_rate_interval=(0.8, 1.0),
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=2,
+        )
+        return ScalingStudy(
+            is_corpus_sweep=True,
+            scales=(2,),
+            points=(p,),
+            baseline_pass_rate=1.0,
+            final_pass_rate=1.0,
+            total_delta=0.0,
+            total_context_loss=0.0,
+            total_shadowing_loss=0.0,
+        )
+
+    monkeypatch.setattr(cli_sweep, "run_scaling_sweep", _mock_run_scaling_sweep)
+    corpus_dir, queries_file = sweep_corpus
+
+    # By default, allow_truncation is True
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--queries",
+            str(queries_file),
+            "--scales",
+            "2",
+            "--agent",
+            "fake",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    assert passed_kwargs.get("allow_truncation") is True
+
+    # When --no-allow-truncation is passed, allow_truncation is False
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--queries",
+            str(queries_file),
+            "--scales",
+            "2",
+            "--agent",
+            "fake",
+            "--no-allow-truncation",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    assert passed_kwargs.get("allow_truncation") is False
