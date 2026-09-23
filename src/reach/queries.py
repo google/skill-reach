@@ -125,7 +125,7 @@ class QuerySet(BaseModel):
         return frozenset(
             q.expected_skill
             for q in self.queries
-            if q.expected_skill is not None and q.kind is not QueryKind.NEIGHBOR_NEGATIVE
+            if q.expected_skill is not None and q.kind != QueryKind.NEIGHBOR_NEGATIVE
         )
 
 

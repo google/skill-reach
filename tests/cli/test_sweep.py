@@ -1178,3 +1178,35 @@ def test_sweep_auto_queries_single_target_cold_start(
     assert colocated_queries.exists()
     saved_qs = load_query_set(colocated_queries)
     assert saved_qs.covered_skills() == {"skill-03"}
+
+
+def test_sweep_auto_queries_format_json_suppresses_draft_logs(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach sweep --format json suppresses draft logs and produces valid JSON."""
+    corpus_dir, _ = sweep_corpus
+    out_file = tmp_path / "sweep.json"
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--scales",
+            "2,4",
+            "--agent",
+            "fake",
+            "--format",
+            "json",
+            "--out",
+            str(out_file),
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Drafting queries for" not in captured.err
+    data = json.loads(captured.out)
+    assert "points" in data

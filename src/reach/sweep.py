@@ -444,7 +444,7 @@ def _resolve_sweep_target_and_queries(
     target_queries = tuple(
         q
         for q in raw_query_set.queries
-        if q.expected_skill == target or q.is_out_of_scope or q.kind is QueryKind.NEIGHBOR_NEGATIVE
+        if q.expected_skill == target or q.is_out_of_scope or q.kind == QueryKind.NEIGHBOR_NEGATIVE
     )
     if not target_queries:
         target_queries = raw_query_set.queries

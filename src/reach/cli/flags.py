@@ -616,12 +616,12 @@ class GenerateFlags(BaseModel):
         cls,
         query: QuerySettings,
         *,
-        targets: tuple[str, ...] = (),
+        targets: Sequence[str] = (),
     ) -> Self:
         """Construct GenerateFlags from QuerySettings while respecting ge=1 field constraints."""
         return cls(
-            targets=targets,
-            count=query.count,
+            targets=tuple(targets),
+            count=max(1, query.count),
             top_rivals=query.top_rivals if query.top_rivals > 0 else None,
             adversarial=query.adversarial_count > 0,
             adversarial_count=max(1, query.adversarial_count),

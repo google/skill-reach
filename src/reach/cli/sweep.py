@@ -490,6 +490,8 @@ def _sweep(
 
 
 class _SweepQueryResolution(NamedTuple):
+    """Hold missing anchor target skill names and cached query set."""
+
     missing_targets: tuple[str, ...]
     existing_query_set: QuerySet | None
 
@@ -650,10 +652,11 @@ def _draft_missing_sweep_queries(
             existing_query_set=existing_qs,
         )
         if code != 0:
+            checkpoint_path(resolved_queries).unlink(missing_ok=True)
             return code
-    except (ValueError, RuntimeError) as err:
+    except (OSError, ValueError, RuntimeError) as err:
         checkpoint_path(resolved_queries).unlink(missing_ok=True)
-        draft_console.print(f"[red]Error drafting queries:[/] {err}")
+        console.print(f"[red]Error drafting queries:[/] {err}")
         return 2
     return 0
 
