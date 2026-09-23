@@ -143,6 +143,8 @@ def test_an_export_names_our_own_fields(exchange_set: QuerySet) -> None:
         "text",
         "kind",
         "expected_skill",
+        "acceptable_skills",
+        "notes",
     }
 
 
@@ -183,6 +185,69 @@ def test_a_mapping_renames_columns_without_a_converter() -> None:
     )
     assert imported.queries[0].text == "rotate our keys"
     assert imported.queries[0].expected_skill == "kms-rotation"
+
+
+def test_a_mapping_imports_delimited_acceptable_skills_and_notes() -> None:
+    """Verify custom mappings preserve neutral skills and per-query notes."""
+    document = (
+        "prompt,answer,neutral,rationale\n"
+        "rotate our keys,kms-rotation,skill-finder|kms-router,reviewed manually\n"
+    )
+    imported = import_query_set(
+        document,
+        Exchange.CSV,
+        catalog_id="c",
+        mapping=FieldMap(
+            text="prompt",
+            expected_skill="answer",
+            acceptable_skills="neutral",
+            notes="rationale",
+            separator="|",
+        ),
+    )
+    query = imported.queries[0]
+    assert query.acceptable_skills == ("skill-finder", "kms-router")
+    assert query.notes == "reviewed manually"
+
+
+def test_jsonl_import_accepts_an_acceptable_skills_array() -> None:
+    """Verify canonical JSONL arrays import without string coercion."""
+    document = json.dumps(
+        {
+            "text": "rotate our keys",
+            "expected_skill": "kms-rotation",
+            "acceptable_skills": ["skill-finder", "kms-router"],
+        },
+    )
+    imported = import_query_set(document, Exchange.JSONL, catalog_id="c")
+    assert imported.queries[0].acceptable_skills == ("skill-finder", "kms-router")
+
+
+@pytest.mark.parametrize(
+    "bad_skill",
+    [123, {"nested": "object"}],
+    ids=["integer", "object"],
+)
+def test_jsonl_import_refuses_non_string_acceptable_skills(bad_skill: object) -> None:
+    """Verify JSONL acceptable_skills arrays reject non-string entries."""
+    document = json.dumps(
+        {
+            "text": "rotate our keys",
+            "expected_skill": "kms-rotation",
+            "acceptable_skills": ["skill-finder", bad_skill],
+        },
+    )
+    with pytest.raises(
+        ValueError,
+        match="acceptable_skills array elements must be strings",
+    ):
+        import_query_set(document, Exchange.JSONL, catalog_id="c")
+
+
+def test_an_empty_separator_is_refused() -> None:
+    """Verify FieldMap rejects a separator that cannot split imported cells."""
+    with pytest.raises(ValueError, match="separator must not be empty"):
+        FieldMap(separator="")
 
 
 def test_a_row_with_no_id_is_numbered() -> None:

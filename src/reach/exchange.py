@@ -37,7 +37,7 @@ class Exchange(StrEnum):
 
 
 #: Standard field names for tabular query export.
-FIELDS = ("id", "text", "kind", "expected_skill")
+FIELDS = ("id", "text", "kind", "expected_skill", "acceptable_skills", "notes")
 
 #: Mapping of file extensions to exchange format types.
 SUFFIXES = {".csv": Exchange.CSV, ".jsonl": Exchange.JSONL}
@@ -58,8 +58,19 @@ class FieldMap(BaseModel):
     text: str = "text"
     kind: str = "kind"
     expected_skill: str = "expected_skill"
+    acceptable_skills: str = "acceptable_skills"
+    notes: str = "notes"
     separator: str = ","
     id_prefix: str = "q"
+
+    @field_validator("separator")
+    @classmethod
+    def _require_separator(cls, value: str) -> str:
+        """Ensure multi-skill cells have a non-empty delimiter."""
+        if not value:
+            msg = "separator must not be empty"
+            raise ValueError(msg)
+        return value
 
     def columns(self) -> tuple[str, ...]:
         """Return the mapped source column names in canonical field order."""
@@ -79,6 +90,8 @@ class SourceRow(BaseModel):
     text: str
     kind: QueryKind | None = None
     expected_skill: str | None = None
+    acceptable_skills: tuple[str, ...] = ()
+    notes: str = ""
 
     @field_validator("text")
     @classmethod
@@ -104,6 +117,8 @@ class SourceRow(BaseModel):
             text=self.text,
             kind=self.kind,
             expected_skill=self.expected_skill,
+            acceptable_skills=self.acceptable_skills,
+            notes=self.notes,
         )
 
 
@@ -128,7 +143,7 @@ def export_query_set(
 ) -> str:
     """Serialize a QuerySet into CSV or JSONL format using the given field mapping."""
     mapping = mapping or FieldMap()
-    rows = [_as_row(query, mapping) for query in query_set.queries]
+    rows = [_as_row(query, mapping, fmt) for query in query_set.queries]
     if fmt is Exchange.JSONL:
         return "".join(json.dumps(row) + "\n" for row in rows)
     buffer = io.StringIO()
@@ -142,13 +157,19 @@ def export_query_set(
     return buffer.getvalue()
 
 
-def _as_row(query: Query, mapping: FieldMap) -> dict[str, Any]:
+def _as_row(query: Query, mapping: FieldMap, fmt: Exchange) -> dict[str, Any]:
     """Convert a Query model into a mapped dictionary row."""
     return {
         mapping.id: query.id,
         mapping.text: query.text,
         mapping.kind: query.kind.value if query.kind else "",
         mapping.expected_skill: query.expected_skill or "",
+        mapping.acceptable_skills: (
+            list(query.acceptable_skills)
+            if fmt is Exchange.JSONL
+            else mapping.separator.join(query.acceptable_skills)
+        ),
+        mapping.notes: query.notes,
     }
 
 
@@ -255,6 +276,11 @@ def _as_query(row: dict[str, Any], mapping: FieldMap, number: int) -> Query:
             "text": _text(row.get(mapping.text, "")),
             "kind": row.get(mapping.kind),
             "expected_skill": row.get(mapping.expected_skill),
+            "acceptable_skills": _skills(
+                row.get(mapping.acceptable_skills),
+                mapping.separator,
+            ),
+            "notes": _text(row.get(mapping.notes, "")),
         },
     ).as_query(f"{mapping.id_prefix}-{number}")
 
@@ -274,3 +300,25 @@ def _why(error: Exception) -> str:
 def _text(value: object) -> str:
     """Convert input value to string or empty string if None."""
     return "" if value is None else str(value)
+
+
+def _skills(value: object, separator: str) -> tuple[str, ...]:
+    """Normalize a delimited cell or JSON array into skill names."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(skill for part in value.split(separator) if (skill := part.strip()))
+    if isinstance(value, (list, tuple)):
+        skills: list[str] = []
+        for part in value:
+            if not isinstance(part, str):
+                msg = (
+                    "acceptable_skills array elements must be strings, "
+                    f"got {type(part).__name__}"
+                )
+                raise ValueError(msg)
+            if skill := part.strip():
+                skills.append(skill)
+        return tuple(skills)
+    msg = f"acceptable_skills must be a delimited string or array, got {type(value).__name__}"
+    raise ValueError(msg)

@@ -162,6 +162,36 @@ def test_a_digest_moves_when_a_query_or_its_truth_moves(
     assert query_set_digest(after) != query_set_digest(before)
 
 
+def test_a_digest_tracks_acceptable_skills_without_caring_about_order(
+    write_queries: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """Verify neutral skill membership affects the digest while ordering does not."""
+    first = [
+        {**ROWS[0], "acceptable_skills": ["router-a", "router-b"]},
+        ROWS[1],
+    ]
+    reordered = [
+        {**ROWS[0], "acceptable_skills": ["router-b", "router-a"]},
+        ROWS[1],
+    ]
+    changed = [
+        {**ROWS[0], "acceptable_skills": ["router-a", "router-c"]},
+        ROWS[1],
+    ]
+    before = load_query_set(
+        write_queries(queries=first, root=tmp_path / "a", catalog_id="c"),
+    )
+    same = load_query_set(
+        write_queries(queries=reordered, root=tmp_path / "b", catalog_id="c"),
+    )
+    after = load_query_set(
+        write_queries(queries=changed, root=tmp_path / "c", catalog_id="c"),
+    )
+    assert query_set_digest(same) == query_set_digest(before)
+    assert query_set_digest(after) != query_set_digest(before)
+
+
 def test_a_digest_moves_when_the_labeling_catalog_changes(
     write_queries: Callable[..., Path],
     tmp_path: Path,

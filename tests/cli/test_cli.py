@@ -1080,12 +1080,21 @@ def test_labels_are_not_offered_without_asking_for_them(two_arms, capsys) -> Non
     assert treatment.stem in shown
 
 
-FOREIGN_ROWS = "prompt,answer\nrotate our keys,kms-rotation\n"
+FOREIGN_ROWS = (
+    "prompt,answer,neutral,rationale\n"
+    "rotate our keys,kms-rotation,skill-finder|kms-router,reviewed manually\n"
+)
 FOREIGN_FLAGS = [
     "--text-column",
     "prompt",
     "--expected-skill-column",
     "answer",
+    "--acceptable-skills-column",
+    "neutral",
+    "--notes-column",
+    "rationale",
+    "--separator",
+    "|",
 ]
 
 
@@ -1107,7 +1116,20 @@ def test_a_set_exports_to_stdout_when_no_file_is_named(exported: Path, capsys) -
     """Verify query export writes CSV to stdout when --out is omitted."""
     assert main(["query", str(exported), "--format", "csv"]) == 0
     header = capsys.readouterr().out.splitlines()[0]
-    assert header == "id,text,kind,expected_skill"
+    assert header == "id,text,kind,expected_skill,acceptable_skills,notes"
+
+
+def test_a_custom_separator_is_used_for_stdout_exports(exported: Path, capsys) -> None:
+    """Verify --separator controls acceptable skill joining on stdout export."""
+    assert main(["query", str(exported), "--format", "csv", "--separator", "|"]) == 0
+    assert "finding-google-skills|gcs-router" in capsys.readouterr().out
+
+
+def test_a_custom_separator_is_used_for_file_exports(exported: Path, tmp_path: Path) -> None:
+    """Verify --separator controls acceptable skill joining on file export."""
+    out = tmp_path / "rows.csv"
+    assert main(["query", str(exported), "--out", str(out), "--separator", "|"]) == 0
+    assert "finding-google-skills|gcs-router" in out.read_text(encoding="utf-8")
 
 
 def test_the_row_format_is_read_off_the_name_it_writes(exported: Path, tmp_path: Path) -> None:
@@ -1240,6 +1262,8 @@ def test_a_foreign_file_is_mapped_by_flags_rather_than_by_code(
     imported = load_query_set(destination).queries[0]
     assert imported.id == "q-1"
     assert imported.expected_skill == "kms-rotation"
+    assert imported.acceptable_skills == ("skill-finder", "kms-router")
+    assert imported.notes == "reviewed manually"
 
 
 def test_a_column_the_file_does_not_have_is_named_in_the_refusal(

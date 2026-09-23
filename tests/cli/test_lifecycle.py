@@ -95,7 +95,7 @@ def _lifecycle_draft_and_export(
 
     assert main(["query", str(drafted), "--out", str(exported)]) == 0
     header = exported.read_text(encoding="utf-8").splitlines()[0]
-    assert header == "id,text,kind,expected_skill"
+    assert header == "id,text,kind,expected_skill,acceptable_skills,notes"
 
     assert (
         main(

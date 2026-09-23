@@ -481,6 +481,8 @@ _DEFAULT_EXCHANGE_QUERIES: tuple[Query, ...] = (
         text="Tier old objects to Coldline after 30 days.",
         kind=QueryKind.IMPLICIT,
         expected_skill="gcs-lifecycle-rules",
+        acceptable_skills=("finding-google-skills", "gcs-router"),
+        notes="A neutral router may run before the target skill.",
     ),
     Query(
         id="x-unlabeled",

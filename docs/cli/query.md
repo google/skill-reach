@@ -80,16 +80,18 @@ reach query --queries .reach/queries.json --leaks --citations
 
 ### Field Mapping (Custom CSV / JSONL)
 
-| Option                    | Type   | Default | Description                                                      |
-| :------------------------ | :----- | :------ | :--------------------------------------------------------------- |
-| `--text-column`           | String | -       | Column holding query text.                                       |
-| `--id-column`             | String | -       | Column holding query ID (numbered automatically when absent).    |
-| `--kind-column`           | String | -       | Column holding query kind.                                       |
-| `--expected-skill-column` | String | -       | Column holding expected target skill name.                       |
-| `--separator`             | String | `,`     | Delimiter separating multiple skills in a cell.                  |
-| `--id-prefix`             | String | -       | Prefix prepended to query IDs to prevent collisions.             |
-| `--catalog`               | String | `all`   | Target catalog ID to associate with imported queries.            |
-| `--notes`                 | String | `""`    | Provenance notes or reviewer comments describing this query set. |
+| Option                       | Type   | Default | Description                                                      |
+| :--------------------------- | :----- | :------ | :--------------------------------------------------------------- |
+| `--text-column`              | String | -       | Column holding query text.                                       |
+| `--id-column`                | String | -       | Column holding query ID (numbered automatically when absent).    |
+| `--kind-column`              | String | -       | Column holding query kind.                                       |
+| `--expected-skill-column`    | String | -       | Column holding expected target skill name.                       |
+| `--acceptable-skills-column` | String | -       | Column holding neutral router or helper skills.                  |
+| `--notes-column`             | String | -       | Column holding per-query notes.                                  |
+| `--separator`                | String | `,`     | Delimiter separating multiple skills in a cell.                  |
+| `--id-prefix`                | String | -       | Prefix prepended to query IDs to prevent collisions.             |
+| `--catalog`                  | String | `all`   | Target catalog ID to associate with imported queries.            |
+| `--notes`                    | String | `""`    | Provenance notes or reviewer comments describing this query set. |
 
 ---
 

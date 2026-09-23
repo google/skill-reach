@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -36,6 +37,8 @@ from reach.models import Query
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from reach.exchange import FieldMap
 
 __all__ = [
     "Origin",
@@ -173,6 +176,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
+    mapping: FieldMap | None = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()
@@ -187,12 +191,18 @@ def save_query_set(
     if target_fmt == "jsonl":
         from reach.exchange import Exchange, export_query_set
 
-        resolved.write_text(export_query_set(query_set, Exchange.JSONL), encoding="utf-8")
+        resolved.write_text(
+            export_query_set(query_set, Exchange.JSONL, mapping=mapping),
+            encoding="utf-8",
+        )
         return resolved
     if target_fmt == "csv":
         from reach.exchange import Exchange, export_query_set
 
-        resolved.write_text(export_query_set(query_set, Exchange.CSV), encoding="utf-8")
+        resolved.write_text(
+            export_query_set(query_set, Exchange.CSV, mapping=mapping),
+            encoding="utf-8",
+        )
         return resolved
     return write_model(query_set, resolved)
 
@@ -202,17 +212,24 @@ def query_set_digest(query_set: QuerySet) -> str:
     return _digest_queries(query_set.catalog_id, _query_rows(query_set))
 
 
-def _query_rows(query_set: QuerySet) -> list[tuple[str, str, str, str]]:
+def _query_rows(query_set: QuerySet) -> list[tuple[str, ...]]:
     """Convert a query set into canonical row tuples for digest calculation."""
-    return [
-        (
+    rows: list[tuple[str, ...]] = []
+    for query in query_set.queries:
+        row: tuple[str, ...] = (
             query.id,
             query.text,
             query.kind or "",
             query.expected_skill or "",
         )
-        for query in query_set.queries
-    ]
+        if query.acceptable_skills:
+            acceptable = json.dumps(
+                sorted(query.acceptable_skills),
+                separators=(",", ":"),
+            )
+            row += (acceptable,)
+        rows.append(row)
+    return rows
 
 
 def _digest_queries(catalog_id: str, rows: Iterable[tuple[str, ...]]) -> str:
