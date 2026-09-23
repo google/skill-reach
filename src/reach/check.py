@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import tempfile
@@ -269,11 +270,18 @@ def _filter_check_queries(
     query_set = load_query_set(queries_path)
     all_queries = list(query_set.queries)
     if filter_skill is not None:
-        target_skills = {filter_skill} if isinstance(filter_skill, str) else set(filter_skill)
-        all_queries = [q for q in all_queries if q.expected_skill in target_skills]
+        target_skills = [filter_skill] if isinstance(filter_skill, str) else list(filter_skill)
+        all_queries = [
+            q
+            for q in all_queries
+            if q.expected_skill is not None
+            and any(fnmatch.fnmatchcase(q.expected_skill, pat) for pat in target_skills)
+        ]
     if filter_id is not None:
-        target_ids = {filter_id} if isinstance(filter_id, str) else set(filter_id)
-        all_queries = [q for q in all_queries if q.id in target_ids]
+        target_ids = [filter_id] if isinstance(filter_id, str) else list(filter_id)
+        all_queries = [
+            q for q in all_queries if any(fnmatch.fnmatchcase(q.id, pat) for pat in target_ids)
+        ]
     if changed:
         primary = [q for q in all_queries if q.expected_skill in modified]
         neighbors = _competing_neighbors_for_modified(modified, skills)

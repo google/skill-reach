@@ -735,6 +735,26 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
     )
     assert [q.id for q in filtered_id] == ["q-2"]
 
+    # Filter by skill glob pattern
+    filtered_skill_glob, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_skill="skill-*",
+    )
+    assert [q.id for q in filtered_skill_glob] == ["q-1", "q-2", "q-3"]
+
+    # Filter by query id glob pattern
+    filtered_id_glob, _ = _filter_check_queries(
+        queries_file,
+        modified=set(),
+        changed=False,
+        budget=10,
+        filter_id="q-[13]",
+    )
+    assert [q.id for q in filtered_id_glob] == ["q-1", "q-3"]
+
 
 def test_find_competing_neighbors_includes_dense_semantic_rivals(tmp_path: Path) -> None:
     """Verify find_competing_neighbors retains neighbors with semantic similarity >= 0.75."""

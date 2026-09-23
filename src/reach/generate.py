@@ -297,11 +297,18 @@ def cap_that_fits(
     adversarial: bool = False,
 ) -> int | None:
     """Calculate the maximum rival count that fits within prompt character limits."""
-    base_prompt = _build_generation_prompt(target_body, (), count, arm, adversarial=adversarial)
+    if adversarial and rival_bodies:
+        safe_target = sanitize_xml_boundary(target_body, "target_documentation")
+        base_prompt = ADVERSARIAL_PROMPT_WITH_RIVALS.format(
+            count=count, target=safe_target, rivals=""
+        )
+    else:
+        base_prompt = _build_generation_prompt(target_body, (), count, arm, adversarial=adversarial)
     room = budget_chars - len(base_prompt)
     kept = 0
     for position, body in enumerate(sorted(rival_bodies, key=len, reverse=True), 1):
-        room -= len(RIVAL_BLOCK.format(index=position, body=body))
+        safe_body = sanitize_xml_boundary(body, "rival_documentation")
+        room -= len(RIVAL_BLOCK.format(index=position, body=safe_body))
         if room < 0:
             break
         kept = position
@@ -412,7 +419,7 @@ def select_rivals(
     return tuple(by_name[name] for name in ranked_names if name in by_name)
 
 
-def _auto_clamp_rivals(
+def _auto_clamp_prompt_materials(
     target: str,
     target_body: str,
     rivals: Sequence[str],
@@ -422,22 +429,34 @@ def _auto_clamp_rivals(
     catalog: Catalog | None = None,
     skills: Sequence[Skill] = (),
     scorer: Scorer | None = None,
-) -> tuple[str, tuple[str, ...]]:
-    """Clamp rivals to fit within prompt budget if necessary."""
+    *,
+    adversarial: bool = False,
+    rival_skills: Sequence[Skill] | None = None,
+) -> tuple[str, tuple[str, ...], tuple[Skill, ...] | None]:
+    """Clamp rivals to fit within prompt budget for standard or adversarial prompts."""
     if budget is not None:
-        raw_prompt = _build_generation_prompt(target_body, rivals, count, arm)
+        raw_prompt = _build_generation_prompt(
+            target_body, rivals, count, arm=arm, adversarial=adversarial
+        )
         if len(raw_prompt) > budget:
-            cap = cap_that_fits(target_body, rivals, budget, count, arm)
+            cap = cap_that_fits(
+                target_body, rivals, budget, count, arm=arm, adversarial=adversarial
+            )
             if cap is not None and catalog is not None:
+                label = "adversarial rivals" if adversarial else "rivals"
                 logger.info(
-                    "Auto-clamping rivals for %r from %d to %d to fit prompt budget (%d chars)",
+                    "Auto-clamping %s for %r from %d to %d to fit prompt budget (%d chars)",
+                    label,
                     target,
                     len(rivals),
                     cap,
                     budget,
                 )
-                return prompt_material(target, catalog, skills, cap, scorer)
-    return target_body, tuple(rivals)
+                if rival_skills is not None:
+                    return prompt_material_with_skills(target, catalog, skills, cap, scorer)
+                t_body, r_bodies = prompt_material(target, catalog, skills, cap, scorer)
+                return t_body, r_bodies, None
+    return target_body, tuple(rivals), tuple(rival_skills) if rival_skills is not None else None
 
 
 def _generate_for_skill_with_stats(
@@ -457,8 +476,16 @@ def _generate_for_skill_with_stats(
     target_body, rivals = prompt_material(target, catalog, skills, top_rivals, scorer)
     budget = runtime.prompt_budget_chars()
     if auto_clamp and top_rivals is None and budget is not None:
-        target_body, rivals = _auto_clamp_rivals(
-            target, target_body, rivals, count, arm, budget, catalog, skills, scorer
+        target_body, rivals, _ = _auto_clamp_prompt_materials(
+            target,
+            target_body,
+            rivals,
+            count,
+            arm=arm,
+            budget=budget,
+            catalog=catalog,
+            skills=skills,
+            scorer=scorer,
         )
     prompt = assert_prompt_fits(runtime, target, target_body, rivals, count, arm)
     drafts = parse_response(runtime.complete(prompt, schema=_RESPONSE_JSON_SCHEMA))
@@ -564,25 +591,20 @@ def generate_adversarial_for_skill(
     )
     budget = driver.prompt_budget_chars()
     if auto_clamp and top_rivals is None and budget is not None:
-        raw_prompt = _build_generation_prompt(target_body, rival_bodies, count, adversarial=True)
-        if len(raw_prompt) > budget:
-            cap = cap_that_fits(target_body, rival_bodies, budget, count, adversarial=True)
-            if cap is not None:
-                logger.info(
-                    "Auto-clamping adversarial rivals for %r from %d to %d to fit prompt budget "
-                    "(%d chars)",
-                    target,
-                    len(rival_bodies),
-                    cap,
-                    budget,
-                )
-                target_body, rival_bodies, rival_skills = prompt_material_with_skills(
-                    target,
-                    catalog,
-                    skills,
-                    cap,
-                    scorer,
-                )
+        target_body, rival_bodies, clamped_skills = _auto_clamp_prompt_materials(
+            target,
+            target_body,
+            rival_bodies,
+            count,
+            budget=budget,
+            catalog=catalog,
+            skills=skills,
+            scorer=scorer,
+            adversarial=True,
+            rival_skills=rival_skills,
+        )
+        if clamped_skills is not None:
+            rival_skills = clamped_skills
     prompt = assert_prompt_fits(
         driver,
         target,
@@ -637,6 +659,7 @@ def assert_prompts_fit(
     top_rivals: int | None = None,
     *,
     auto_clamp: bool = True,
+    adversarial: bool = False,
 ) -> int:
     """Validate prompt lengths across targets, returning maximum length."""
     scorer = (
@@ -649,10 +672,27 @@ def assert_prompts_fit(
     for target in targets:
         body, rivals = prompt_material(target, catalog, skills, top_rivals, scorer)
         if auto_clamp and top_rivals is None and budget is not None:
-            body, rivals = _auto_clamp_rivals(
-                target, body, rivals, count, arm, budget, catalog, skills, scorer
+            body, rivals, _ = _auto_clamp_prompt_materials(
+                target,
+                body,
+                rivals,
+                count,
+                arm=arm,
+                budget=budget,
+                catalog=catalog,
+                skills=skills,
+                scorer=scorer,
+                adversarial=adversarial,
             )
-        prompt = assert_prompt_fits(runtime, target, body, rivals, count, arm)
+        prompt = assert_prompt_fits(
+            runtime,
+            target,
+            body,
+            rivals,
+            count=count,
+            arm=arm,
+            adversarial=adversarial,
+        )
         longest = max(longest, len(prompt))
     return longest
 
@@ -699,6 +739,7 @@ def _dispatch_generation(
         collected: list[GeneratedQuery] = []
         seen_texts: set[str] = set()
         last_err: Exception | None = None
+        had_dropped = False
         for _ in range(DEFAULT_MAX_ATTEMPTS):
             needed = count - len(collected)
             if needed <= 0:
@@ -715,6 +756,8 @@ def _dispatch_generation(
                     scorer,
                     auto_clamp=auto_clamp,
                 )
+                if raw_count > len(drafts):
+                    had_dropped = True
                 added = 0
                 for d in drafts:
                     norm = d.text.strip().lower()
@@ -723,9 +766,11 @@ def _dispatch_generation(
                         collected.append(d)
                         added += 1
                 last_err = None
-                if len(collected) >= count:
-                    break
-                if collected and (raw_count == len(drafts) or added == 0):
+                if (
+                    len(collected) >= count
+                    or (added == 0 and drafts)
+                    or (collected and not had_dropped)
+                ):
                     break
             except (ValueError, ValidationError) as err:
                 last_err = err

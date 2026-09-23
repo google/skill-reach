@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import math
 import random
 import statistics
@@ -56,6 +57,9 @@ __all__ = [
     "find_kneedle_knee",
     "run_scaling_sweep",
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 class ScalingPoint(BaseModel):
@@ -960,6 +964,10 @@ def _resolve_anchor_skills(
                 return find_cluster_medoids(queried_skills, medoid_count)
             if queried_skills:
                 return tuple(s.name for s in queried_skills)
+            logger.warning(
+                "Provided query set contains 0 benchmark queries for resident skills; "
+                "falling back to unqueried corpus medoids."
+            )
         return find_cluster_medoids(resolved_skills, medoid_count)
 
     if isinstance(requested_anchor, str):

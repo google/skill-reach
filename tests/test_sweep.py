@@ -1761,3 +1761,35 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis() -> Non
     assert "51% (21)" in out
     assert "61% (25)" in out
     assert "…" not in out
+
+
+def test_resolve_anchor_skills_warns_when_query_set_has_no_resident_queries(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify _resolve_anchor_skills warns when query_set has 0 queries for resident skills."""
+    import logging
+
+    from reach.models import Skill
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _resolve_anchor_skills
+
+    skills = [
+        Skill(name="skill-a", description="A", path=tmp_path / "skill-a"),
+        Skill(name="skill-b", description="B", path=tmp_path / "skill-b"),
+    ]
+    qs = QuerySet(
+        catalog_id="cat",
+        queries=(Query(id="q-1", text="Other query", expected_skill="other-skill"),),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    with caplog.at_level(logging.WARNING):
+        anchors = _resolve_anchor_skills(
+            requested_anchor=1,
+            resolved_skills=skills,
+            actual_scales=(1, 2),
+            query_set=qs,
+        )
+    assert anchors is not None
+    assert len(anchors) == 1
+    assert "Provided query set contains 0 benchmark queries for resident skills" in caplog.text

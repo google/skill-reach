@@ -475,3 +475,105 @@ def test_query_draft_missing_backfill_targets_only_uncovered_skills(
     assert rc == 0
     assert captured["targets"] == ("skill-b",)
     assert captured["existing_count"] == 1
+
+
+def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
+    tmp_path: Path,
+) -> None:
+    """Verify backfilling offsets colliding query IDs and preserves original provenance."""
+    from io import StringIO
+
+    from reach.cli.drafting import _execute_draft_generation
+    from reach.cli.flags import GenerateFlags
+    from reach.config import RunConfig, StudySettings
+    from reach.generate import DraftCheckpoint
+    from reach.models import Catalog, CatalogMode, Skill
+    from reach.runtime.fake import FakeGenerator
+    from reach.views import build_console
+
+    skills = [
+        Skill(
+            name="skill-a",
+            description="Perform action A.",
+            path=tmp_path / "skill-a",
+        ),
+    ]
+    catalog = Catalog(id="cat", mode=CatalogMode.ALL, skills=("skill-a",))
+    dest = tmp_path / "queries.json"
+    in_progress = tmp_path / "queries.json.drafting"
+
+    original_recorded = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    existing_prov = QuerySetProvenance(
+        origin=Origin.IMPORTED,
+        source="benchmark-v1.json",
+        recorded_at=original_recorded,
+        queries_per_target=5,
+    )
+    existing_qs = QuerySet(
+        catalog_id="cat",
+        queries=(Query(id="skill-a-1", text="Existing query 1", expected_skill="skill-a"),),
+        provenance=existing_prov,
+    )
+
+    terms = DraftCheckpoint(
+        fingerprint="test-fp",
+        bodies="bodies-hash",
+        catalog_id="cat",
+        arm="content",
+        count=1,
+        generator_model="fake",
+        targets=("skill-a",),
+        covered=("skill-a",),
+        drafted=existing_qs,
+    )
+
+    fake_drafter = FakeGenerator(
+        completion=json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Newly backfilled query",
+                        "citation": "Perform action A.",
+                        "reason": "Direct citation",
+                    }
+                ]
+            }
+        )
+    )
+
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    settings = RunConfig(study=StudySettings(queries=dest))
+    generate = GenerateFlags(count=1)
+
+    s_dir = tmp_path / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Perform action A.\n---\nPerform action A.\n",
+        encoding="utf-8",
+    )
+
+    rc = _execute_draft_generation(
+        console,
+        settings,
+        catalog,
+        skills,
+        generate,
+        fake_drafter,
+        terms,
+        drafting=("skill-a",),
+        recovered=terms,
+        destination=dest,
+        in_progress=in_progress,
+        keep=True,
+        same_invocation_probe=False,
+        then="probed {path}",
+        existing_query_set=existing_qs,
+    )
+    assert rc == 0
+    saved = load_query_set(dest)
+    assert len(saved.queries) == 2
+    assert [q.id for q in saved.queries] == ["skill-a-1", "skill-a-2"]
+    assert saved.provenance.origin == Origin.IMPORTED
+    assert saved.provenance.source == "benchmark-v1.json"
+    assert saved.provenance.recorded_at == original_recorded

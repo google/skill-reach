@@ -384,3 +384,47 @@ def test_check_cli_filter_flags(
     assert code == 0
     assert passed_kwargs.get("filter_skill") == ("tool-a",)
     assert passed_kwargs.get("filter_id") == ("q-1",)
+
+
+def test_check_cli_filter_glob_flags(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach check passes glob filter patterns to run_check."""
+    import reach.cli.check as cli_check
+
+    passed_kwargs = {}
+
+    def _mock_run_check(*args, **kwargs):
+        passed_kwargs.update(kwargs)
+        from reach.check import CheckOutcome
+        from reach.lint import LintReport
+
+        return CheckOutcome(
+            lint_report=LintReport(skills_checked=1),
+            exit_code=0,
+            queries_probed=1,
+            probes_executed=1,
+            budget=50,
+        )
+
+    monkeypatch.setattr(cli_check, "run_check", _mock_run_check)
+
+    skill_path = write_skill(name="tool-a", description="Valid description.")
+    code = main(
+        [
+            "check",
+            "--skills",
+            str(skill_path),
+            "--queries",
+            str(tmp_path / "queries.json"),
+            "--filter-skill",
+            "tool-*",
+            "--filter-id",
+            "q-*",
+        ]
+    )
+    assert code == 0
+    assert passed_kwargs.get("filter_skill") == ("tool-*",)
+    assert passed_kwargs.get("filter_id") == ("q-*",)

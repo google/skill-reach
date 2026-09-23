@@ -37,6 +37,7 @@ from reach.generate import (
     generate_query_set,
     out_of_scope_from,
     parse_response,
+    prompt_material_with_skills,
     select_rivals,
     strip_selection_surface,
     text_generator,
@@ -834,6 +835,31 @@ def test_assert_prompts_fit_auto_clamps(
     assert longest <= budget
 
 
+def test_assert_prompts_fit_auto_clamps_adversarial(
+    field_of_rivals: list[Skill],
+) -> None:
+    """Verify assert_prompts_fit auto-clamps adversarial prompts when auto_clamp is True."""
+    target_skill = field_of_rivals[0]
+    target_body, rival_bodies, _ = prompt_material_with_skills(
+        target_skill.name,
+        neighborhood("target-skill", "near-skill", "far-skill"),
+        field_of_rivals,
+    )
+    raw_adv = build_adversarial_prompt(target_body, rival_bodies, 1)
+    budget = len(raw_adv) - 10
+    runtime = drafting("q", budget=budget)
+    longest = assert_prompts_fit(
+        runtime,
+        neighborhood("target-skill", "near-skill", "far-skill"),
+        field_of_rivals,
+        ["target-skill"],
+        top_rivals=None,
+        auto_clamp=True,
+        adversarial=True,
+    )
+    assert longest <= budget
+
+
 def test_a_target_too_long_for_the_window_alone_is_not_sent_to_a_cap(target: Skill) -> None:
     """Verify target skill exceeding budget suggests manual authoring."""
     runtime = drafting("q", budget=10)
@@ -1598,4 +1624,82 @@ def test_generate_query_set_tops_up_partial_verified_drafts(
     assert [q.text for q in qs.queries] == [
         "How do I structure risk management?",
         "How do I enforce identity control?",
+    ]
+
+
+def test_generate_query_set_continues_top_up_until_count_reached(
+    target: Skill,
+    rival: Skill,
+) -> None:
+    """Verify generate_query_set continues retrying until full count is collected."""
+    responses = [
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "How do I structure risk management?",
+                        "citation": "risk management",
+                        "reason": "Verified query 1.",
+                    },
+                    {
+                        "text": "How do I configure non-existent feature?",
+                        "citation": "hallucinated citation not in body",
+                        "reason": "Dropped by citation check.",
+                    },
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "How do I enforce identity control?",
+                        "citation": "identity control",
+                        "reason": "Verified query 2 on attempt 2 (raw_count == 1, len == 1).",
+                    }
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "What does the security pillar cover?",
+                        "citation": "threat defense",
+                        "reason": "Verified query 3 on attempt 3.",
+                    }
+                ]
+            }
+        ),
+    ]
+    calls = 0
+
+    class _MultiStepTopUpGenerator(FakeGenerator):
+        def complete(
+            self,
+            prompt: str,
+            *,
+            schema: str | Mapping[str, Any] | None = None,
+        ) -> str:
+            del schema
+            nonlocal calls
+            self.prompts.append(prompt)
+            idx = min(calls, len(responses) - 1)
+            calls += 1
+            return responses[idx]
+
+    runtime = _MultiStepTopUpGenerator()
+    qs = generate_query_set(
+        neighborhood("target-skill", "rival-skill"),
+        [target, rival],
+        count=3,
+        runtime=runtime,
+        targets=["target-skill"],
+    )
+    assert calls == 3
+    assert len(qs.queries) == 3
+    assert [q.text for q in qs.queries] == [
+        "How do I structure risk management?",
+        "How do I enforce identity control?",
+        "What does the security pillar cover?",
     ]
