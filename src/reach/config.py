@@ -38,6 +38,7 @@ from reach.models import CatalogMode
 from reach.uncertainty import DEFAULT_CONFIDENCE, DEFAULT_POWER
 
 __all__ = [
+    "DEFAULT_CATALOG_BUDGET_CHARS",
     "AgentProfile",
     "CatalogSettings",
     "CheckSettings",
@@ -67,6 +68,9 @@ __all__ = [
 
 #: Default probe attempts per query.
 DEFAULT_ATTEMPTS = 5
+
+#: Default resident listing budget in characters before truncation occurs in rationing runtimes.
+DEFAULT_CATALOG_BUDGET_CHARS = 30_000
 
 #: Default Gemini model family identifier.
 DEFAULT_GEMINI_MODEL: str = "gemini-3.8-flash"
@@ -475,6 +479,7 @@ class LintSettings(BaseModel):
     max_description_length: int = Field(default=1024, ge=1)
     max_name_length: int = Field(default=64, ge=1)
     min_description_length: int = Field(default=20, ge=1)
+    catalog_budget_chars: int = Field(default=DEFAULT_CATALOG_BUDGET_CHARS, ge=1)
     similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     mutual_handoff_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     mutual_handoff_lexical_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
@@ -497,6 +502,7 @@ class LintSettings(BaseModel):
         max_desc = defaults.max_description_length
         max_name = defaults.max_name_length
         min_desc = defaults.min_description_length
+        cat_budget = defaults.catalog_budget_chars
         sim_threshold = defaults.similarity_threshold
         rules: dict[str, Any] = {}
 
@@ -507,12 +513,14 @@ class LintSettings(BaseModel):
                     "max_description_length",
                     "max_name_length",
                     "min_description_length",
+                    "catalog_budget_chars",
                 )
                 if isinstance(v := lint_section.get(k), int)
             }
             max_desc = int_vals.get("max_description_length", max_desc)
             max_name = int_vals.get("max_name_length", max_name)
             min_desc = int_vals.get("min_description_length", min_desc)
+            cat_budget = int_vals.get("catalog_budget_chars", cat_budget)
             raw_sim = lint_section.get("similarity_threshold")
             if isinstance(raw_sim, (int, float)):
                 sim_threshold = float(raw_sim)
@@ -532,6 +540,7 @@ class LintSettings(BaseModel):
             max_description_length=max_desc,
             max_name_length=max_name,
             min_description_length=min_desc,
+            catalog_budget_chars=cat_budget,
             similarity_threshold=sim_threshold,
             rules=rules,
         )

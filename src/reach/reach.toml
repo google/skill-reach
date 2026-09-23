@@ -51,25 +51,11 @@ context_window = 1_000_000
 effort = "low"
 
 
-[models.gemini-3-8-flash]
-effort = "low"
+[models.gemini-2-5-flash]
 
-[models.gemini-3-7-flash]
-effort = "low"
-
-[models.gemini-3-6-flash]
-effort = "low"
-
-[models.gemini-3-flash-preview]
-effort = "low"
+[models.gemini-2-5-pro]
 
 [models.gemini-3-1-flash-lite]
-effort = "low"
-
-[models.gemini-3-5-flash]
-effort = "low"
-
-[models.gemini-3-5-flash-lite]
 effort = "low"
 
 [models.gemini-3-1-pro]
@@ -78,10 +64,20 @@ effort = "low"
 [models.gemini-3-1-pro-preview]
 effort = "low"
 
-[models.gemini-2-5-flash]
+[models.gemini-3-5-flash]
+effort = "low"
 
-[models.gemini-2-5-pro]
+[models.gemini-3-5-flash-lite]
+effort = "low"
 
+[models.gemini-3-6-flash]
+effort = "low"
 
+[models.gemini-3-7-flash]
+effort = "low"
 
+[models.gemini-3-8-flash]
+effort = "low"
 
+[models.gemini-3-flash-preview]
+effort = "low"

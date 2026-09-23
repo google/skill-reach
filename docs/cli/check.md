@@ -147,6 +147,8 @@ reach check --format github --step-summary
 | `--max-misroute`           | Float `[0.0, 1.0]` | `0.10`            | Maximum acceptable misroute rate threshold.                                                                          |
 | `--budget`                 | Integer `>= 1`     | `50`              | Maximum empirical probes permitted across the check run.                                                             |
 | `--agent`                  | Choice             | `from reach.toml` | Agent runtime for empirical probing (`claude-code`, `antigravity-cli`, `antigravity-sdk`, `goose`, `keyword`, `pi`). |
+| `--filter-skill`           | String             | None              | Filter empirical check to target skill name(s) (glob pattern, repeatable).                                           |
+| `--filter-id`              | String             | None              | Filter empirical check to query ID(s) (glob pattern, repeatable).                                                    |
 
 ### Agent Registry Options
 

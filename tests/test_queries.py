@@ -409,3 +409,69 @@ def test_query_set_for_skill_lookup(target: str, expected_ids: tuple[str, ...]) 
     q3 = Query(id="q3", text="out of scope", kind=QueryKind.OUT_OF_SCOPE)
     qs = QuerySet(catalog_id="c", queries=(q1, q2, q3), provenance=provenance())
     assert tuple(q.id for q in qs.for_skill(target)) == expected_ids
+
+
+def test_query_draft_missing_backfill_targets_only_uncovered_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify --missing skips already-covered skills and drafts only missing skills."""
+    from io import StringIO
+
+    from reach.cli.query import _handle_draft_query_generation
+    from reach.views import Console
+
+    skills_dir = tmp_path / "skills"
+    for name in ("skill-a", "skill-b"):
+        s_dir = skills_dir / name
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Desc for {name}\n---\nBody for {name}\n",
+            encoding="utf-8",
+        )
+
+    out_file = tmp_path / ".reach" / "queries.json"
+    existing = QuerySet(
+        catalog_id="all",
+        queries=(Query(id="skill-a-1", text="query a", expected_skill="skill-a"),),
+        provenance=provenance(),
+    )
+    save_query_set(existing, out_file)
+
+    captured: dict[str, object] = {}
+
+    def fake_draft_query_set(
+        console,
+        settings,
+        skills,
+        generate,
+        *,
+        dry_run,
+        review=False,
+        existing_query_set=None,
+    ) -> int:
+        captured["targets"] = generate.targets
+        captured["existing_count"] = len(existing_query_set.queries) if existing_query_set else 0
+        return 0
+
+    monkeypatch.setattr("reach.cli.query._draft_query_set", fake_draft_query_set)
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+
+    rc = _handle_draft_query_generation(
+        console,
+        target=skills_dir,
+        count=2,
+        out=out_file,
+        format_opt=None,
+        study=None,
+        run_dir=None,
+        config=None,
+        catalog=None,
+        runtime=None,
+        generate=None,
+        missing=True,
+    )
+    assert rc == 0
+    assert captured["targets"] == ("skill-b",)
+    assert captured["existing_count"] == 1

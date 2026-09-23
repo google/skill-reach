@@ -339,3 +339,48 @@ def test_render_check_concise_reports_failed_on_strict_warnings(capsys) -> None:
     render_check_concise(build_console(), outcome)
     err = capsys.readouterr().err
     assert "FAILED (strict: 1 warnings)" in err
+
+
+def test_check_cli_filter_flags(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach check passes filter_skill and filter_id to run_check."""
+    import reach.cli.check as cli_check
+
+    passed_kwargs = {}
+
+    def _mock_run_check(*args, **kwargs):
+        passed_kwargs.update(kwargs)
+        from reach.check import CheckOutcome
+        from reach.lint import LintReport
+
+        return CheckOutcome(
+            lint_report=LintReport(skills_checked=1),
+            exit_code=0,
+            queries_probed=1,
+            probes_executed=1,
+            budget=50,
+        )
+
+    monkeypatch.setattr(cli_check, "run_check", _mock_run_check)
+
+    skill_path = write_skill(name="tool-a", description="Valid description.")
+    code = main(
+        [
+            "check",
+            "--skills",
+            str(skill_path),
+            "--queries",
+            str(tmp_path / "queries.json"),
+            "--filter-skill",
+            "tool-a",
+            "--filter-id",
+            "q-1",
+        ]
+    )
+    assert code == 0
+    assert passed_kwargs.get("filter_skill") == ("tool-a",)
+    assert passed_kwargs.get("filter_id") == ("q-1",)

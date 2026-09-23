@@ -1501,6 +1501,39 @@ def test_reach_example_toml_documents_optimize_settings() -> None:
         )
 
 
+def test_reach_example_toml_sections_and_keys_are_alphabetized() -> None:
+    """Verify active sections and keys in reach.example.toml are alphabetized."""
+    import re
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "reach.example.toml").read_text(encoding="utf-8")
+    sections = [
+        m.group(1)
+        for line in text.splitlines()
+        if (m := re.match(r"^\[([a-zA-Z0-9_.-]+)\]$", line.strip()))
+    ]
+    assert sections[0] == "general"
+    assert sections[1:] == sorted(sections[1:]), (
+        f"Sections after [general] in reach.example.toml are not alphabetized: {sections[1:]}"
+    )
+
+    config = tomllib.loads(text)
+    for sec_name, sec_val in config.items():
+        if isinstance(sec_val, dict):
+            sub_keys = [k for k, v in sec_val.items() if not isinstance(v, dict)]
+            assert sub_keys == sorted(sub_keys), (
+                f"Keys in [{sec_name}] of reach.example.toml are not alphabetized: {sub_keys}"
+            )
+            for nested_name, nested_val in sec_val.items():
+                if isinstance(nested_val, dict):
+                    nested_keys = list(nested_val.keys())
+                    assert nested_keys == sorted(nested_keys), (
+                        f"Keys in [{sec_name}.{nested_name}] of reach.example.toml "
+                        f"are not alphabetized: {nested_keys}"
+                    )
+
+
 def test_resolve_sub_settings_revalidates_overrides() -> None:
     """Verify resolve_sub_settings validates overrides and rejects out-of-range values."""
     from reach.config import CheckSettings

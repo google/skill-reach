@@ -45,10 +45,11 @@ __all__ = [
 _PASS_RATE_HIGH: float = 0.8
 _PASS_RATE_MID: float = 0.5
 _MIN_CURVE_POINTS: int = 2
+_MIN_SCALES_FOR_LOSS_DECOMPOSITION: int = 2
 _LEVEL_TOLERANCE: float = 0.125
 
 
-def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
+def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:  # noqa: PLR0912, PLR0915
     """Render a Rich table and capacity summary for whole-corpus scaling sweep."""
     header: list[tuple[str, str]] = [
         ("Corpus Capacity Scaling: ", "bold"),
@@ -88,6 +89,17 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         decision_lines.append(("\n", ""))
 
+    if len(study.scales) >= _MIN_SCALES_FOR_LOSS_DECOMPOSITION and (
+        study.total_delta != 0 or study.total_shadowing_loss != 0 or study.total_context_loss != 0
+    ):
+        loss_text = (
+            f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}): "
+            f"Δ Shadowing {study.total_shadowing_loss * 100:+.1f}% | "
+            f"Δ Context {study.total_context_loss * 100:+.1f}%"
+        )
+        decision_lines.append((loss_text, "dim"))
+        decision_lines.append(("\n", ""))
+
     if decision_lines:
         panel = Panel(
             Text.assemble(*decision_lines[:-1]),  # strip trailing newline
@@ -99,19 +111,32 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         console.print(panel)
 
+    has_negatives = any(pt.negative_probes > 0 for pt in study.points)
+    has_truncation = any(pt.disclosure_states.get("name_only_elided", 0) > 0 for pt in study.points)
+
+    compact_cols = has_truncation
     table = Table(
         box=box.SIMPLE,
         show_header=True,
+        pad_edge=False,
+        padding=(0, 0),
         title="Corpus Scaling: Multi-Class Retrieval & Capacity Degradation",
     )
-    table.add_column("Scale (K)", justify="right")
-    table.add_column("Recall", justify="right")
-    table.add_column("Precision", justify="right")
-    table.add_column("Abstention", justify="right")
-    table.add_column("F1 Score", justify="right")
-    table.add_column("95% CI (F1)", justify="center", style="dim")
-    table.add_column("Probes (In/Neg)", justify="right")
-    table.add_column("Duration", justify="right", style="dim")
+    table.add_column("Scale", justify="right", no_wrap=True)
+    table.add_column("Recall", justify="right", no_wrap=True)
+    table.add_column("Prec" if compact_cols else "Precision", justify="right", no_wrap=True)
+    if has_negatives:
+        table.add_column("Abstain", justify="right", no_wrap=True)
+    table.add_column("F1", justify="right", no_wrap=True)
+    table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
+    table.add_column("Δ Shadow", justify="right", style="red", no_wrap=True)
+    if has_truncation:
+        table.add_column("Trunc", justify="right", style="yellow", no_wrap=True)
+    table.add_column("Tokens", justify="right", style="dim", no_wrap=True)
+    table.add_column("Probes", justify="right", no_wrap=True)
+    table.add_column(
+        "Time" if compact_cols else "Duration", justify="right", style="dim", no_wrap=True
+    )
 
     for pt in study.points:
         f1_pct = f"{pt.f1_score * 100:.1f}%"
@@ -122,21 +147,42 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         rec_pct = f"{pt.recall * 100:.1f}%"
         prec_pct = f"{pt.precision * 100:.1f}%"
-        abs_pct = f"{pt.abstention_rate * 100:.1f}%" if pt.abstention_rate is not None else "—"
-        f1_ci_str = f"[{pt.f1_interval[0] * 100:.1f}% - {pt.f1_interval[1] * 100:.1f}%]"
-        probes_str = f"{pt.in_scope_probes}/{pt.negative_probes}"
-        dur_str = f"{pt.duration_ms_mean:.0f}ms" if pt.duration_ms_mean > 0 else "—"
+        f1_ci_str = f"[{pt.f1_interval[0] * 100:.1f}%-{pt.f1_interval[1] * 100:.1f}%]"
+        shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
+        tok_str = f"{pt.prompt_tokens_mean:,.0f}" if pt.prompt_tokens_mean is not None else "—"
+        probes_str = (
+            f"{pt.in_scope_probes}/{pt.negative_probes}"
+            if has_negatives
+            else str(pt.in_scope_probes)
+        )
+        if pt.duration_ms_mean <= 0:
+            dur_str = "—"
+        elif compact_cols:
+            dur_str = f"{pt.duration_ms_mean / 1000:.1f}s"
+        else:
+            dur_str = f"{pt.duration_ms_mean:.0f}ms"
 
-        table.add_row(
+        row: list[str | Text] = [
             str(pt.scale),
             rec_pct,
             prec_pct,
-            abs_pct,
-            Text(f1_pct, style=rate_style),
-            f1_ci_str,
-            probes_str,
-            dur_str,
+        ]
+        if has_negatives:
+            abs_pct = f"{pt.abstention_rate * 100:.1f}%" if pt.abstention_rate is not None else "—"
+            row.append(abs_pct)
+        row.extend(
+            [
+                Text(f1_pct, style=rate_style),
+                f1_ci_str,
+                shd_str,
+            ]
         )
+        if has_truncation:
+            elided = pt.disclosure_states.get("name_only_elided", 0)
+            total_p = max(1, pt.probes_executed)
+            row.append(f"{round(elided * 100 / total_p)}% ({elided})")
+        row.extend([tok_str, probes_str, dur_str])
+        table.add_row(*row)
 
     console.print(table)
     sparkline_parts = [f"K={pt.scale}: {pt.f1_score * 100:.0f}%" for pt in study.points]
@@ -173,14 +219,14 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         show_header=True,
         title="Reachability Decay Across Catalog Scales",
     )
-    table.add_column("Scale (N)", justify="right")
-    table.add_column("Pass Rate", justify="right")
-    table.add_column("95% CI", justify="center", style="dim")
-    table.add_column("Δ Total", justify="right")
-    table.add_column("Δ Context", justify="right", style="cyan")
-    table.add_column("Δ Shadowing", justify="right", style="red")
-    table.add_column("Probes", justify="right")
-    table.add_column("Duration", justify="right", style="dim")
+    table.add_column("Scale (N)", justify="right", no_wrap=True)
+    table.add_column("Pass Rate", justify="right", no_wrap=True)
+    table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
+    table.add_column("Δ Total", justify="right", no_wrap=True)
+    table.add_column("Δ Context", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Δ Shadowing", justify="right", style="red", no_wrap=True)
+    table.add_column("Probes", justify="right", no_wrap=True)
+    table.add_column("Duration", justify="right", style="dim", no_wrap=True)
 
     for pt in study.points:
         pct = f"{pt.pass_rate * 100:.1f}%"
@@ -226,6 +272,24 @@ def print_sweep(console: Console, study: ScalingStudy) -> None:
         _print_single_skill_sweep(console, study)
 
 
+_ZOOM_HIGH_THRESHOLD: float = 0.75
+_ZOOM_MID_THRESHOLD: float = 0.55
+_TOP_TIER_BIAS: float = 0.95
+
+
+def _select_curve_levels(values: Sequence[float]) -> list[float]:
+    """Select adaptive Y-axis tick levels so high-accuracy curves show fine slope resolution."""
+    if not values:
+        return [1.0, 0.75, 0.5, 0.25, 0.0]
+    min_v = min(values)
+    max_v = max(values)
+    if min_v >= _ZOOM_HIGH_THRESHOLD and max_v > min_v:
+        return [1.0, 0.95, 0.90, 0.85, 0.80]
+    if min_v >= _ZOOM_MID_THRESHOLD and max_v > min_v:
+        return [1.0, 0.90, 0.80, 0.70, 0.60]
+    return [1.0, 0.75, 0.5, 0.25, 0.0]
+
+
 def render_ascii_curve(
     points: Sequence[ScalingPoint],
     metric: str = "pass_rate",
@@ -236,21 +300,25 @@ def render_ascii_curve(
 
     prefix = "K" if metric == "f1" else "N"
     title = "Scaling Curve (F1):" if metric == "f1" else "Scaling Curve:"
-    levels = [1.0, 0.75, 0.5, 0.25, 0.0]
+    values = [p.f1_score if metric == "f1" else p.pass_rate for p in points]
+    levels = _select_curve_levels(values)
     scale_cols = [f"{prefix}={p.scale}" for p in points]
     col_width = max(max(len(c) for c in scale_cols) + 2, 6)
 
     nearest_level_by_point = [
         min(
             range(len(levels)),
-            key=lambda idx: abs((p.f1_score if metric == "f1" else p.pass_rate) - levels[idx]),
+            key=lambda idx: (
+                round(abs(val - levels[idx]), 6),
+                idx if val >= _TOP_TIER_BIAS else -idx,
+            ),
         )
-        for p in points
+        for val in values
     ]
 
     lines: list[str] = [title]
     for lvl_idx, lvl in enumerate(levels):
-        row_cells: list[str] = [f"{int(lvl * 100):3d}% |"]
+        row_cells: list[str] = [f"{round(lvl * 100):3d}% |"]
         for pt_idx in range(len(points)):
             symbol = "●" if nearest_level_by_point[pt_idx] == lvl_idx else " "
             row_cells.append(symbol.center(col_width))

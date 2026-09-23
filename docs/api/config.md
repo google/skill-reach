@@ -13,6 +13,7 @@ Configuration models, settings resolution, and path expansions.
         - CatalogSettings
         - CheckSettings
         - default_agent
+        - DEFAULT_CATALOG_BUDGET_CHARS
         - DiffSettings
         - digest_material
         - Digests

@@ -110,3 +110,4 @@ reach lint ./skills --format json
 | `unbounded-attractor`            | Warning          | Description contains overly broad phrases that aggressively attract out-of-scope queries.    |
 | `unknown-skill-reference`        | Warning          | Negative routing handoff (`use <other-skill>`) references a skill missing from the catalog.  |
 | `missing-mutual-handoff`         | Warning          | High-similarity or one-way competing neighbor lacks reciprocal `Don't use for...` handoff.   |
+| `catalog-budget-overflow`        | Warning          | Resident skill catalog exceeds runtime listing character budget causing description elision. |

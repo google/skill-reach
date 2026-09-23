@@ -26,39 +26,12 @@
 
 [general]
 # Default agent runtime when --agent is omitted from CLI commands.
-# Supported empirical evaluation choices: "antigravity-cli", "antigravity-sdk", "claude-code", "pi", "goose", "keyword"
+# Supported empirical evaluation choices: "antigravity-cli", "antigravity-sdk", "claude-code", "goose", "keyword", "pi"
 default_agent = "antigravity-cli"
 
 # default_agent = "claude-code"
-# default_agent = "pi"
 # default_agent = "goose"
-
-
-[discovery]
-# Project-level search order for skill directories.
-# Supports "." (single SKILL.md at root), "skills" (generic project folder),
-# explicit paths (e.g. ".agents/skills"), or named agent profiles ("claude-code", "cursor", "github", "pi", "goose").
-precedence = [
-    ".",
-    "skills",
-    ".agents/skills",
-    "claude-code",
-    "cursor",
-    "github",
-    "pi",
-    "goose",
-]
-
-[study]
-# Default parameters used by evaluation commands (`reach eval`, `reach check`, `reach optimize`, `reach sweep`).
-catalog = "auto"
-partial = false
-rescope = false
-tag = ""
-# early_stop = true
-# scales = [10, 25, 50, 100]
-# anchor = "all"
-# trusted = false
+# default_agent = "pi"
 
 [catalog]
 # Synthetic catalog generation and neighborhood sampling settings.
@@ -76,11 +49,11 @@ max_misroute = 0.10
 min_accuracy = 0.80
 min_recall = 0.80
 # Optional multi-step trajectory quality thresholds:
-# min_entrypoint = 0.80
-# min_reachability = 0.90
-# min_efficiency = 0.80
-# min_f1 = 0.85
 # max_redundancy = 0.25
+# min_efficiency = 0.80
+# min_entrypoint = 0.80
+# min_f1 = 0.85
+# min_reachability = 0.90
 since = "HEAD~1"
 strict = true
 
@@ -89,6 +62,21 @@ strict = true
 confidence = 0.95
 noise_inflation = 1.265
 power = 0.80
+
+[discovery]
+# Project-level search order for skill directories.
+# Supports "." (single SKILL.md at root), "skills" (generic project folder),
+# explicit paths (e.g. ".agents/skills"), or named agent profiles ("claude-code", "cursor", "github", "goose", "pi").
+precedence = [
+    ".",
+    "skills",
+    ".agents/skills",
+    "claude-code",
+    "cursor",
+    "github",
+    "pi",
+    "goose",
+]
 
 [lint]
 # Validation thresholds for skill names and descriptions.
@@ -100,6 +88,7 @@ mutual_handoff_similarity_threshold = 0.75
 
 [lint.rules]
 # Customize rule severities: "error", "warn", or "ignore".
+catalog-budget-overflow = "warn"
 description-too-short = "warn"
 duplicate-capability = "warn"
 duplicate-name = "error"
@@ -112,25 +101,25 @@ missing-mutual-handoff = "warn"
 missing-name = "error"
 name-mismatch = "error"
 reserved-name-collision = "warn"
+unbounded-attractor = "warn"
 unknown-skill-reference = "warn"
 unresolved-declared-dependency = "warn"
 unresolved-placeholder = "warn"
-unbounded-attractor = "warn"
 
 [optimize]
 # Automated prompt optimization budget and exploration temperature.
-budget = 30
-temperature = 0.7
-iterations = 1
-holdout = 0.2
-review = false
-auto_queries = true
 adversarial_count = 5
+auto_queries = true
+budget = 30
+holdout = 0.2
+iterations = 1
 positive_count = 5
-seed = 42
+review = false
 review_timeout = 600.0
-workers = 4
+seed = 42
+temperature = 0.7
 with_handoff = false
+workers = 4
 
 [overlap]
 # Claim extraction and overlap analysis thresholds.
@@ -147,21 +136,20 @@ backoff_s = 5.0
 pause_s = 0.0
 retries = 2
 
-[runtime]
-# Process execution timeout and runtime parameters.
-agent = "antigravity-cli"
-timeout_s = 200
-max_turns = 3
-early_exit = true
-# Explicit list of environment variables stripped from agent subprocesses (overrides defaults):
-# blocked_env_vars = ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"]
-
 [query]
 # Query generation and adversarial drafting parameters.
 adversarial_count = 1
 count = 3
 distinctive_idf_floor = 0.693147
 top_rivals = 3
+
+[registry]
+# Google Cloud Agent Registry settings.
+# When --project or --registry is passed, Reach connects to Agent Registry to evaluate remote skills.
+# cache_ttl_seconds = 300
+# location = "global"
+# project = "your-project-id"
+# publisher = "cloud.google.com"
 
 [retrieval]
 # Semantic embedding and BM25 hybrid retrieval parameters.
@@ -171,6 +159,26 @@ model = "minishlab/potion-retrieval-32M"
 rrf_k = 60
 scorer = "hybrid"
 similarity_threshold = 0.92
+
+[runtime]
+# Process execution timeout and runtime parameters.
+agent = "antigravity-cli"
+early_exit = true
+max_turns = 3
+timeout_s = 200
+# Explicit list of environment variables stripped from agent subprocesses (overrides defaults):
+# blocked_env_vars = ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"]
+
+[study]
+# Default parameters used by evaluation commands (`reach eval`, `reach check`, `reach optimize`, `reach sweep`).
+catalog = "auto"
+partial = false
+rescope = false
+tag = ""
+# anchor = "all"
+# early_stop = true
+# scales = [10, 25, 50, 100]
+# trusted = false
 
 # Custom agent profiles or path overrides.
 # Any client can declare custom local and user global skill locations:
@@ -183,19 +191,11 @@ similarity_threshold = 0.92
 # Model context windows, token ratios, and reasoning effort overrides.
 # Overrides customize token sizing and reasoning effort for supported models:
 #
-# [models.gemini-3-8-flash]
-# effort = "low"
-#
 # [models.claude-sonnet-5]
 # chars_per_token = 3.0
 # completion_window = 200_000
 # context_window = 1_000_000
 # effort = "low"
-
-[registry]
-# Google Cloud Agent Registry settings.
-# When --project or --registry is passed, Reach connects to Agent Registry to evaluate remote skills.
-# project = "your-project-id"
-# location = "global"
-# publisher = "cloud.google.com"
-# cache_ttl_seconds = 300
+#
+# [models.gemini-3-8-flash]
+# effort = "low"

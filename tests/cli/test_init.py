@@ -50,7 +50,7 @@ def test_init_generates_config_and_directories(
     content = toml_path.read_text(encoding="utf-8")
     assert "[runtime]" in content
     assert "[study]" in content
-    assert (tmp_path / ".agents" / "skills").is_dir()
+    assert (tmp_path / ".agents" / "skills").is_dir() or (tmp_path / ".claude" / "skills").is_dir()
     assert (tmp_path / ".reach").is_dir()
 
 
@@ -127,3 +127,45 @@ def test_detect_default_agent() -> None:
 
     with patch("shutil.which", side_effect=lambda x: "/usr/local/bin/agy" if x == "agy" else None):
         assert _detect_default_agent() == "antigravity-cli"
+
+
+def test_detect_skills_directory_agent_aware(tmp_path: Path) -> None:
+    """Verify skill directory detection respects agent native directory when none exist."""
+    assert (
+        _detect_skills_directory(tmp_path, agent="claude-code") == tmp_path / ".claude" / "skills"
+    )
+    assert _detect_skills_directory(tmp_path, agent="pi") == tmp_path / ".pi" / "skills"
+    assert (
+        _detect_skills_directory(tmp_path, agent="antigravity-cli")
+        == tmp_path / ".agents" / "skills"
+    )
+    assert _detect_skills_directory(tmp_path, agent="unknown") == tmp_path / ".agents" / "skills"
+
+    # If an existing directory exists, it still takes precedence
+    existing = tmp_path / "skills"
+    existing.mkdir()
+    assert _detect_skills_directory(tmp_path, agent="claude-code") == existing
+
+
+def test_init_with_agent_claude_code_creates_claude_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach init --agent claude-code creates .claude/skills when no skills dir exists."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "--agent", "claude-code"]) == 0
+    assert (tmp_path / ".claude" / "skills").is_dir()
+    toml_path = tmp_path / "reach.toml"
+    content = toml_path.read_text(encoding="utf-8")
+    assert 'skills = ".claude/skills"' in content
+
+
+def test_init_with_path_flag(tmp_path: Path) -> None:
+    """Verify reach init --path initializes reach project in specified directory."""
+    target_dir = tmp_path / "subproject"
+    assert main(["init", "--path", str(target_dir), "--agent", "claude-code"]) == 0
+    assert (target_dir / "reach.toml").is_file()
+    assert (target_dir / ".claude" / "skills").is_dir()
+    toml_path = target_dir / "reach.toml"
+    content = toml_path.read_text(encoding="utf-8")
+    assert 'skills = ".claude/skills"' in content

@@ -29,13 +29,14 @@ from reach.config import (
     default_agent,
     resolve_sub_settings,
 )
+from reach.models import Catalog, CatalogMode
 from reach.queries import load_query_set
 from reach.runtime import AgentRuntime, build_runtime
 from reach.sweep import _resolve_anchor_skills, resolve_sweep_scales, run_scaling_sweep
 from reach.views import Console, build_console, print_sweep, print_wrote, render_sweep
 
 from .app import LOOP, app
-from .discovery import _corpus, _no_skills
+from .discovery import REACH_DIR_NAME, _corpus, _no_skills, find_existing_queries_path
 from .flags import (
     POSITIVE_INT,
     RATE,
@@ -65,34 +66,19 @@ def _resolve_sweep_queries(
 ) -> Path:
     """Resolve queries file from explicit argument, configuration, or .reach fallback."""
     resolved = queries if queries is not None else configured
-    if resolved is None:
-        candidates: list[Path] = [
-            Path(".reach/queries.json"),
-            Path(".reach/queries.jsonl"),
-            Path(".reach/queries.csv"),
-        ]
-        if skills_path is not None:
-            sp = Path(skills_path).resolve()
-            search_roots = [sp] if sp.is_dir() else [sp.parent]
-            if sp.parent != sp and sp.parent not in search_roots:
-                search_roots.append(sp.parent)
-            for root in search_roots:
-                candidates.append(root / ".reach" / "queries.json")
-                candidates.append(root / ".reach" / "queries.jsonl")
-                candidates.append(root / ".reach" / "queries.csv")
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        msg = (
-            "scaling sweep requires a labeled query benchmark to test reachability across "
-            "catalog scales.\n\n"
-            "• Pass an existing queries file:\n"
-            "    reach sweep ./skills --queries .reach/queries.json\n\n"
-            "• Or draft benchmark queries first:\n"
-            "    reach query draft --skills ./skills --out .reach/queries.json"
-        )
-        raise ValueError(msg)
-    return resolved
+    if resolved is not None:
+        return resolved
+    if found := find_existing_queries_path(skills_path):
+        return found
+    msg = (
+        "scaling sweep requires a labeled query benchmark to test reachability across "
+        "catalog scales.\n\n"
+        "• Pass an existing queries file:\n"
+        "    reach sweep ./skills --queries .reach/queries.json\n\n"
+        "• Or draft benchmark queries first:\n"
+        "    reach query draft --skills ./skills --out .reach/queries.json"
+    )
+    raise ValueError(msg)
 
 
 def _resolve_sweep_out_path(
@@ -107,9 +93,9 @@ def _resolve_sweep_out_path(
         return configured
     if queries_path is not None:
         qp = Path(queries_path)
-        if qp.parent.name == ".reach" and qp.parent.is_dir():
+        if qp.parent.name == REACH_DIR_NAME and qp.parent.is_dir():
             return qp.parent / "sweep.json"
-    return Path(".reach/sweep.json")
+    return Path(REACH_DIR_NAME) / "sweep.json"
 
 
 def _write_sweep_file(
@@ -153,6 +139,9 @@ def _output_sweep(
         print(rendered)
 
 
+_MAX_SAMPLE_SKILLS = 3
+
+
 def _print_anchor_coverage(
     *,
     console: Console,
@@ -163,21 +152,41 @@ def _print_anchor_coverage(
     scales: Sequence[int] | None,
     target: str | None,
 ) -> None:
-    """Print anchor query coverage summary and warn on 0-query anchor skills."""
+    """Print corpus and anchor query coverage summary and warn on 0-query skills."""
     if target is not None or not queries_path.exists():
         return
+    try:
+        raw_qs = load_query_set(queries_path)
+    except (OSError, ValueError):
+        return
+
+    queried_corpus = {q.expected_skill for q in raw_qs.queries if q.expected_skill is not None}
+    missing_corpus = sorted(s.name for s in skills if s.name not in queried_corpus)
+    if missing_corpus:
+        sample = ", ".join(missing_corpus[:_MAX_SAMPLE_SKILLS])
+        more = (
+            f", +{len(missing_corpus) - _MAX_SAMPLE_SKILLS} more"
+            if len(missing_corpus) > _MAX_SAMPLE_SKILLS
+            else ""
+        )
+        console.print(
+            f"[yellow]Warning:[/] {len(missing_corpus)} of {len(skills)} corpus skill(s) "
+            f"have 0 queries in [cyan]{queries_path}[/] ([bold]{sample}{more}[/]). "
+            f"Run [bold]reach query draft --missing[/] to backfill."
+        )
+
     try:
         actual_scales = resolve_sweep_scales(len(skills), scales)
         resolved_anchors = _resolve_anchor_skills(
             anchor if anchor is not None else configured_anchor,
             skills,
             actual_scales,
+            query_set=raw_qs,
         )
     except ValueError:
         return
     if not resolved_anchors:
         return
-    raw_qs = load_query_set(queries_path)
     counts = {a: sum(1 for q in raw_qs.queries if q.expected_skill == a) for a in resolved_anchors}
     covered = sum(1 for count in counts.values() if count > 0)
     total_matched = sum(counts.values())
@@ -307,6 +316,17 @@ def _sweep(
             help="Working directory for probe execution",
         ),
     ] = None,
+    allow_truncation: Annotated[
+        bool,
+        Parameter(
+            name="--allow-truncation",
+            negative="--no-allow-truncation",
+            help=(
+                "Probe scaling steps even if catalogs exceed the runtime listing "
+                "budget (default: True)"
+            ),
+        ),
+    ] = True,
     yes: YesFlag = False,
     config: ConfigFlag = None,
 ) -> int:
@@ -378,6 +398,22 @@ def _sweep(
             scales=parsed_scales or effective_config.study.scales,
             target=target,
         )
+        if driver.rations_catalog and allow_truncation and found:
+            fit = driver.fit(
+                Catalog(
+                    id="sweep:corpus:full",
+                    mode=CatalogMode.SWEEP,
+                    skills=tuple(s.name for s in found),
+                ),
+                found,
+            )
+            if not fit.whole:
+                console.print(
+                    f"[yellow]Notice:[/] full catalog ({fit.asked:,} chars) exceeds "
+                    f"[bold]{driver.name}[/] listing budget ({fit.allowed:,} chars); "
+                    f"{fit.truncated} of {len(found)} descriptions will be truncated to "
+                    "bare names at higher scales."
+                )
         console.print()
 
     if code := confirm_skill_execution(
@@ -422,6 +458,7 @@ def _sweep(
             skills=found,
             attempts=attempts,
             early_stop=early_stop,
+            allow_truncation=allow_truncation,
             on_scale_complete=_on_scale_complete,
         )
     except ValueError as err:

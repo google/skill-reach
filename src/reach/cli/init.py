@@ -23,13 +23,14 @@ from typing import Annotated
 
 from cyclopts import Parameter
 
+from reach.config import KNOWN_CLIENT_SKILLS_DIRS
 from reach.views import build_console
 
 from .app import SETUP, app
 from .flags import SWITCH, AgentName, Quiet, agent_help_text
 
 
-def _detect_skills_directory(root: Path) -> Path:
+def _detect_skills_directory(root: Path, agent: str | None = None) -> Path:
     """Discover existing skill directory or determine canonical default."""
     candidates = [
         root / ".agents" / "skills",
@@ -40,6 +41,10 @@ def _detect_skills_directory(root: Path) -> Path:
     for cand in candidates:
         if cand.is_dir():
             return cand
+    if agent:
+        native = KNOWN_CLIENT_SKILLS_DIRS.get(agent)
+        if native:
+            return root / native
     return root / ".agents" / "skills"
 
 
@@ -81,6 +86,13 @@ catalog = "auto"
 @app.command(name="init", group=SETUP)
 def _init(
     *,
+    path: Annotated[
+        Path | None,
+        Parameter(
+            name=["--path", "-p"],
+            help="Project root directory to initialize (defaults to current working directory)",
+        ),
+    ] = None,
     agent: Annotated[
         AgentName | None,
         Parameter(
@@ -108,7 +120,7 @@ def _init(
 ) -> int:
     """Scaffold reach.toml configuration and initialize skill directories."""
     console = build_console(quiet=quiet)
-    cwd = Path.cwd()
+    cwd = (path or Path.cwd()).resolve()
     config_file = cwd / "reach.toml"
 
     if config_file.exists() and not force:
@@ -118,12 +130,11 @@ def _init(
         )
         return 1
 
-    resolved_skills = skills or _detect_skills_directory(cwd)
+    resolved_agent = agent or _detect_default_agent()
+    resolved_skills = skills or _detect_skills_directory(cwd, agent=resolved_agent)
     resolved_skills_str = str(
         resolved_skills.relative_to(cwd) if resolved_skills.is_relative_to(cwd) else resolved_skills
     )
-
-    resolved_agent = agent or _detect_default_agent()
 
     # Ensure directories exist
     resolved_skills.mkdir(parents=True, exist_ok=True)

@@ -34,6 +34,7 @@ from reach.generate import (
     citations_path,
     generate_query_set,
     read_checkpoint,
+    read_citations,
     text_generator,
     write_checkpoint,
     write_citations,
@@ -285,6 +286,7 @@ def _draft_query_set(
     keep: bool = True,
     same_invocation_probe: bool = False,
     review: bool = False,
+    existing_query_set: QuerySet | None = None,
 ) -> int:
     """Draft synthetic query sets and persist checkpoint files."""
     catalog = _sole_catalog(settings, skills)
@@ -293,6 +295,21 @@ def _draft_query_set(
     in_progress = checkpoint_path(destination)
     generator_model = _effective_generator_model(settings, generate)
     drafter = _build_drafter_runtime(settings, generate, generator_model)
+    covered_existing: tuple[str, ...] = ()
+    existing_citations: tuple[Citation, ...] = ()
+    if existing_query_set is not None:
+        covered_existing = tuple(
+            sorted({q.expected_skill for q in existing_query_set.queries if q.expected_skill})
+        )
+        c_path = citations_path(destination)
+        if c_path.exists():
+            existing_citations = read_citations(c_path).root
+
+    all_targets = (
+        tuple(dict.fromkeys(covered_existing + requested))
+        if existing_query_set is not None
+        else requested
+    )
     terms = DraftCheckpoint(
         fingerprint=settings.fingerprint,
         bodies=bodies_digest(skills),
@@ -301,9 +318,11 @@ def _draft_query_set(
         count=generate.count,
         generator_model=generator_model,
         top_rivals=generate.top_rivals,
-        targets=requested,
-        covered=(),
-        drafted=QuerySet(
+        targets=all_targets,
+        covered=covered_existing,
+        drafted=existing_query_set
+        if existing_query_set is not None
+        else QuerySet(
             catalog_id=catalog.id,
             queries=(),
             provenance=_drafted_by(
@@ -314,10 +333,13 @@ def _draft_query_set(
                 generator_model=generator_model,
             ),
         ),
+        citations=existing_citations,
         adversarial=generate.adversarial,
         adversarial_count=generate.adversarial_count,
     )
     recovered, drafting = _init_or_recover_checkpoint(in_progress, terms, requested, console)
+    if recovered is None and existing_query_set is not None:
+        recovered = terms
 
     print_generation(
         console,

@@ -1486,3 +1486,278 @@ def test_run_scaling_sweep_invalidates_workdir_cache_on_anchor_or_skill_edit(
     )
     skills_v2 = load_skills(skills_dir)
     assert _probe_count("skill-00,skill-03", skills_v2) == 4
+
+
+def test_run_scaling_sweep_listing_budget_guard(tmp_path: Path) -> None:
+    """Verify run_scaling_sweep guards against catalog overflow on rationing runtimes."""
+    from reach.catalog import load_skills
+    from reach.config import RunConfig, StudySettings
+    from reach.runtime import CatalogFit
+
+    class RationingFakeRuntime(FakeRuntime):
+        @property
+        def rations_catalog(self) -> bool:
+            return True
+
+        def fit(self, catalog, skills) -> CatalogFit:
+            return CatalogFit(
+                truncated=1,
+                allowed=50,
+                asked=200,
+                unit="characters",
+                remedy="Reduce catalog size",
+            )
+
+    skills_dir = tmp_path / "corpus"
+    _create_mock_skills(skills_dir, 4)
+    skills = load_skills(skills_dir)
+    qs = QuerySet(
+        catalog_id="corpus",
+        queries=tuple(
+            Query(
+                id=f"q-{idx}",
+                text=f"query for skill-{idx:02d}",
+                kind=QueryKind.IMPLICIT,
+                expected_skill=f"skill-{idx:02d}",
+            )
+            for idx in range(4)
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    cfg = RunConfig(study=StudySettings(workdir=tmp_path / "work"))
+    answers = {f"query for skill-{idx:02d}": f"skill-{idx:02d}" for idx in range(4)}
+    rt = RationingFakeRuntime(answers, model="mock-model", materialize=False)
+
+    # By default (allow_truncation=True), sweep proceeds and measures real runtime capacity
+    study = run_scaling_sweep(
+        skills=skills,
+        query_set=qs,
+        scales=(2, 4),
+        attempts=1,
+        runtime=rt,
+        config=cfg,
+    )
+    assert len(study.points) == 2
+
+    # When allow_truncation=False is explicitly passed, sweep raises ValueError
+    # pointing to --allow-truncation
+    with pytest.raises(ValueError, match=r"bare name.*--allow-truncation"):
+        run_scaling_sweep(
+            skills=skills,
+            query_set=qs,
+            scales=(2, 4),
+            attempts=1,
+            runtime=rt,
+            config=cfg,
+            allow_truncation=False,
+        )
+
+
+def test_resolve_anchor_skills_filters_to_queried_skills_and_warns_missing_corpus(
+    tmp_path: Path,
+) -> None:
+    """Verify auto-medoids prefer queried skills and _print_anchor_coverage warns."""
+    from io import StringIO
+
+    from reach.cli.sweep import _print_anchor_coverage
+    from reach.queries import save_query_set
+    from reach.sweep import _resolve_anchor_skills
+    from reach.views import Console
+
+    skills = [
+        Skill(
+            name=f"skill-{idx:02d}",
+            description=f"Unique topic-{idx:02d} workflow handler",
+            path=tmp_path / f"skill-{idx:02d}" / "SKILL.md",
+        )
+        for idx in range(5)
+    ]
+    # Only skill-00 and skill-01 have queries; skill-02, skill-03, skill-04 have 0 queries
+    partial_qs = QuerySet(
+        catalog_id="all",
+        queries=(
+            Query(
+                id="q0",
+                text="query for skill-00",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
+            ),
+            Query(
+                id="q1",
+                text="query for skill-01",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-01",
+            ),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    anchors = _resolve_anchor_skills(None, skills, (2, 5), query_set=partial_qs)
+    assert anchors is not None
+    assert set(anchors) == {"skill-00", "skill-01"}
+
+    q_path = tmp_path / "queries.json"
+    save_query_set(partial_qs, q_path)
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+    _print_anchor_coverage(
+        console=console,
+        queries_path=q_path,
+        anchor=None,
+        configured_anchor=None,
+        skills=skills,
+        scales=(2, 5),
+        target=None,
+    )
+    out = buf.getvalue()
+    assert "3 of 5 corpus skill(s) have 0 queries" in out
+    assert "reach query draft --missing" in out
+    assert "2/2 anchor skills" in out
+
+
+def test_resolve_anchor_skills_clamps_to_queried_skills_when_fewer_than_scale(
+    tmp_path: Path,
+) -> None:
+    """Verify _resolve_anchor_skills clamps to queried skills when fewer than initial scale."""
+    from reach.models import Query, QueryKind, Skill
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _resolve_anchor_skills
+
+    skills = [
+        Skill(name=f"skill-{i:02d}", description=f"Skill {i}", path=tmp_path / f"s{i}")
+        for i in range(6)
+    ]
+    partial_qs = QuerySet(
+        catalog_id="partial",
+        queries=(
+            Query(id="q0", text="use s0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
+            Query(id="q1", text="use s1", kind=QueryKind.IMPLICIT, expected_skill="skill-01"),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    # Requested medoid count is 4 (actual_scales[0] == 4), but only 2 skills have queries
+    anchors = _resolve_anchor_skills(None, skills, (4, 6), query_set=partial_qs)
+    assert anchors is not None
+    assert len(anchors) == 2
+    assert set(anchors) == {"skill-00", "skill-01"}
+
+
+def test_render_ascii_curve_auto_scales_high_accuracy_band() -> None:
+    """Verify render_ascii_curve zooms into [80%..100%] when all points are >= 75%."""
+    from reach.sweep import ScalingPoint
+    from reach.views.sweep import render_ascii_curve
+
+    def _pt(scale: int, f1: float) -> ScalingPoint:
+        return ScalingPoint(
+            scale=scale,
+            catalog_id=f"c{scale}",
+            pass_rate=f1,
+            pass_rate_interval=(f1 - 0.05, min(1.0, f1 + 0.05)),
+            f1_score=f1,
+            delta_vs_baseline=0.975 - f1,
+            delta_context=0.0,
+            delta_shadowing=0.975 - f1,
+            probes_executed=41,
+        )
+
+    pts = (_pt(10, 0.975), _pt(50, 0.937), _pt(100, 0.914), _pt(147, 0.875))
+    lines = render_ascii_curve(pts, metric="f1")
+    joined = "\n".join(lines)
+    assert " 95% |" in joined
+    assert " 90% |" in joined
+    assert " 85% |" in joined
+    assert " 80% |" in joined
+    marker_rows = [line for line in lines if "●" in line]
+    assert len(marker_rows) >= 3
+
+
+def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis() -> None:
+    """Verify print_sweep renders Δ Shadow, Truncated, and Loss Decomposition within 80 columns."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from reach.sweep import ScalingPoint, ScalingStudy
+    from reach.views.sweep import print_sweep
+
+    study = ScalingStudy(
+        target_skill=None,
+        is_corpus_sweep=True,
+        anchor_skills=("a1", "a2"),
+        scales=(10, 100, 147),
+        knee_scale=25,
+        sla_90_scale=100,
+        sla_90_interpolated=114.5,
+        sla_85_scale=147,
+        sla_85_interpolated=147.0,
+        baseline_pass_rate=0.951,
+        final_pass_rate=0.854,
+        total_delta=0.097,
+        total_context_loss=0.024,
+        total_shadowing_loss=0.098,
+        total_corpus_skills=147,
+        points=(
+            ScalingPoint(
+                scale=10,
+                catalog_id="s10",
+                pass_rate=0.951,
+                pass_rate_interval=(0.88, 0.99),
+                recall=0.951,
+                precision=1.0,
+                f1_score=0.975,
+                f1_interval=(0.935, 1.0),
+                delta_vs_baseline=0.0,
+                delta_context=0.0,
+                delta_shadowing=0.0,
+                in_scope_probes=41,
+                probes_executed=41,
+                duration_ms_mean=3393.0,
+                disclosure_states={"full": 41},
+            ),
+            ScalingPoint(
+                scale=100,
+                catalog_id="s100",
+                pass_rate=0.902,
+                pass_rate_interval=(0.80, 0.96),
+                recall=0.902,
+                precision=0.925,
+                f1_score=0.914,
+                f1_interval=(0.825, 0.988),
+                delta_vs_baseline=0.049,
+                delta_context=0.0,
+                delta_shadowing=0.073,
+                in_scope_probes=41,
+                probes_executed=41,
+                duration_ms_mean=4472.0,
+                disclosure_states={"full": 20, "name_only_elided": 21},
+            ),
+            ScalingPoint(
+                scale=147,
+                catalog_id="s147",
+                pass_rate=0.854,
+                pass_rate_interval=(0.74, 0.93),
+                recall=0.854,
+                precision=0.897,
+                f1_score=0.875,
+                f1_interval=(0.769, 0.975),
+                delta_vs_baseline=0.097,
+                delta_shadowing=0.098,
+                delta_context=0.024,
+                in_scope_probes=41,
+                probes_executed=41,
+                duration_ms_mean=4394.0,
+                disclosure_states={"full": 16, "name_only_elided": 25},
+            ),
+        ),
+    )
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=80)
+    print_sweep(console, study)
+    out = buf.getvalue()
+    assert "Loss Decomposition (K=10→147): Δ Shadowing +9.8% | Δ Context +2.4%" in out
+    assert "Δ Shadow" in out
+    assert "Trunc" in out
+    assert "51% (21)" in out
+    assert "61% (25)" in out
+    assert "…" not in out

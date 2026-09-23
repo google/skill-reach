@@ -1410,6 +1410,110 @@ def test_a_dry_draft_says_what_it_would_buy_and_writes_nothing(
     assert "drafting 9 queries for 3 targets" in capsys.readouterr().err
 
 
+def test_query_draft_positional_skill_target_narrows_to_single_skill(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Verify positional skill name in query draft restricts generation to that single target."""
+    destination = tmp_path / "drafted.json"
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                "gcs-lifecycle-rules",
+                "--skills",
+                str(skill_repo),
+                "--queries",
+                str(destination),
+                "--agent",
+                "fake",
+                "--dry-run",
+            ],
+        )
+        == 0
+    )
+    err = capsys.readouterr().err
+    assert "drafting 3 queries for 1 targets" in err
+
+
+def test_query_draft_positional_skill_path_resolves_catalog_and_skill(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Verify positional path to specific skill directory resolves both corpus and target."""
+    skill_dir = skill_repo / "storage" / "gcs-lifecycle-rules"
+    destination = tmp_path / "drafted.json"
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                str(skill_dir),
+                "--queries",
+                str(destination),
+                "--agent",
+                "fake",
+                "--dry-run",
+            ],
+        )
+        == 0
+    )
+    err = capsys.readouterr().err
+    assert "drafting 3 queries for 1 targets" in err
+
+
+def test_query_draft_positional_corpus_dir_drafts_all_skills(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Verify positional path to corpus directory drafts queries for all skills."""
+    destination = tmp_path / "drafted.json"
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                str(skill_repo),
+                "--queries",
+                str(destination),
+                "--agent",
+                "fake",
+                "--dry-run",
+            ],
+        )
+        == 0
+    )
+    err = capsys.readouterr().err
+    assert "drafting 9 queries for 3 targets" in err
+
+
+def test_query_draft_nonexistent_skill_path_fails(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Verify non-existent positional path reports clear error."""
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                "./does-not-exist/some-skill",
+                "--queries",
+                str(tmp_path / "drafted.json"),
+                "--agent",
+                "fake",
+            ],
+        )
+        == 2
+    )
+    assert "skill path does not exist" in capsys.readouterr().err
+
+
 def test_query_draft_with_adversarial_flag_dry_run(
     skill_repo: Path,
     tmp_path: Path,

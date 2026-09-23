@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from reach.generate import (
     FRAMING_RULE,
     GeneratedQuery,
     GeneratorArm,
+    assert_prompts_fit,
     build_adversarial_prompt,
     build_prompt,
     generate_for_skill,
@@ -765,6 +766,74 @@ def test_the_cap_a_refusal_suggests_is_one_that_really_fits(
     assert len(runtime.prompts) == 1
 
 
+def test_generate_for_skill_auto_clamps_when_top_rivals_omitted(
+    field_of_rivals: list[Skill],
+) -> None:
+    """Verify generate_for_skill auto-clamps rivals when auto_clamp is True."""
+    runtime = drafting("q", budget=whole_field_prompt(field_of_rivals) - 1)
+    generate_for_skill(
+        "target-skill",
+        neighborhood("target-skill", "near-skill", "far-skill"),
+        field_of_rivals,
+        runtime=runtime,
+        top_rivals=None,
+        auto_clamp=True,
+    )
+    assert len(runtime.prompts) == 1
+    assert len(runtime.prompts[0]) <= whole_field_prompt(field_of_rivals) - 1
+
+
+def test_generate_for_skill_does_not_auto_clamp_when_top_rivals_explicit(
+    field_of_rivals: list[Skill],
+) -> None:
+    """Verify explicit top_rivals takes precedence and raises if budget is exceeded."""
+    runtime = drafting("q", budget=whole_field_prompt(field_of_rivals) - 1)
+    with pytest.raises(ValueError, match="top-rivals"):
+        generate_for_skill(
+            "target-skill",
+            neighborhood("target-skill", "near-skill", "far-skill"),
+            field_of_rivals,
+            runtime=runtime,
+            top_rivals=2,
+            auto_clamp=True,
+        )
+
+
+def test_generate_query_set_auto_clamps_by_default(
+    field_of_rivals: list[Skill],
+) -> None:
+    """Verify generate_query_set auto-clamps rivals by default when top_rivals is None."""
+    runtime = drafting("q", budget=whole_field_prompt(field_of_rivals) - 1)
+    qs = generate_query_set(
+        neighborhood("target-skill", "near-skill", "far-skill"),
+        field_of_rivals,
+        count=1,
+        runtime=runtime,
+        targets=["target-skill"],
+        top_rivals=None,
+    )
+    assert len(qs.queries) >= 1
+    assert len(runtime.prompts) == 1
+    assert len(runtime.prompts[0]) <= whole_field_prompt(field_of_rivals) - 1
+
+
+def test_assert_prompts_fit_auto_clamps(
+    field_of_rivals: list[Skill],
+) -> None:
+    """Verify assert_prompts_fit auto-clamps when auto_clamp is True and top_rivals is None."""
+    budget = whole_field_prompt(field_of_rivals) - 1
+    runtime = drafting("q", budget=budget)
+    longest = assert_prompts_fit(
+        runtime,
+        neighborhood("target-skill", "near-skill", "far-skill"),
+        field_of_rivals,
+        ["target-skill"],
+        top_rivals=None,
+        auto_clamp=True,
+    )
+    assert longest <= budget
+
+
 def test_a_target_too_long_for_the_window_alone_is_not_sent_to_a_cap(target: Skill) -> None:
     """Verify target skill exceeding budget suggests manual authoring."""
     runtime = drafting("q", budget=10)
@@ -953,6 +1022,7 @@ def test_generate_retries_transient_value_error_and_succeeds(
     query_set = generate_query_set(
         _catalog_of("target-skill"),
         [target, rival],
+        count=1,
         runtime=runtime,
     )
     assert attempts == 2
@@ -1464,3 +1534,68 @@ def test_generate_adversarial_for_skill_enforces_prompt_budget(
             count=1,
             runtime=_TightBudgetGenerator(),
         )
+
+
+def test_generate_query_set_tops_up_partial_verified_drafts(
+    target: Skill,
+    rival: Skill,
+) -> None:
+    """Verify generate_query_set retries to top up drafts when unverified citations occur."""
+    responses = [
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "How do I structure risk management?",
+                        "citation": "risk management",
+                        "reason": "Direct security pillar question.",
+                    },
+                    {
+                        "text": "How do I configure non-existent feature?",
+                        "citation": "hallucinated citation not in body",
+                        "reason": "Dropped by citation check.",
+                    },
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "How do I enforce identity control?",
+                        "citation": "identity control",
+                        "reason": "Top-up query on second attempt.",
+                    }
+                ]
+            }
+        ),
+    ]
+    calls = 0
+
+    class _PartialThenTopUpGenerator(FakeGenerator):
+        def complete(
+            self,
+            prompt: str,
+            *,
+            schema: str | Mapping[str, Any] | None = None,
+        ) -> str:
+            del schema
+            nonlocal calls
+            self.prompts.append(prompt)
+            idx = min(calls, len(responses) - 1)
+            calls += 1
+            return responses[idx]
+
+    runtime = _PartialThenTopUpGenerator()
+    qs = generate_query_set(
+        neighborhood("target-skill", "rival-skill"),
+        [target, rival],
+        count=2,
+        runtime=runtime,
+        targets=["target-skill"],
+    )
+    assert calls == 2
+    assert [q.text for q in qs.queries] == [
+        "How do I structure risk management?",
+        "How do I enforce identity control?",
+    ]

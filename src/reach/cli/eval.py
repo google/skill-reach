@@ -54,7 +54,14 @@ from reach.views import (
 )
 
 from .app import LOOP, app
-from .discovery import _asks_for_a_mode, _corpus, _run_dir_defaults
+from .discovery import (
+    QUERIES_FILENAME,
+    REACH_DIR_NAME,
+    _asks_for_a_mode,
+    _corpus,
+    _run_dir_defaults,
+    find_existing_queries_path,
+)
 from .drafting import DRAFTED_THEN, _draft_query_set, _rivals_in_view, _sole_catalog
 from .flags import (
     CATALOG_GROUP,
@@ -360,8 +367,8 @@ def _default_reach_dir(study: StudyFlags) -> Path:
     if study.skills is not None:
         skills_path = Path(study.skills)
         base = skills_path.parent if skills_path.name == "SKILL.md" else skills_path
-        return base / ".reach"
-    return Path(".reach")
+        return base / REACH_DIR_NAME
+    return Path(REACH_DIR_NAME)
 
 
 def _apply_execution_mode_defaults(
@@ -383,7 +390,7 @@ def _apply_execution_mode_defaults(
         if not generate.targets:
             generate = generate.model_copy(update={"targets": (quick.target,)})
     elif auto and scratch is not None:
-        default_queries = _default_reach_dir(study) / "queries.json"
+        default_queries = _default_reach_dir(study) / QUERIES_FILENAME
         if study.queries is None:
             study = study.model_copy(update={"queries": default_queries})
         if study.workdir is None:
@@ -411,9 +418,8 @@ def _validate_queries_available(
     """Ensure benchmark queries exist or raise a user-friendly instructional error."""
     if quick is not None or auto or config is not None or study.queries is not None:
         return study
-    for candidate in (_default_reach_dir(study) / "queries.json", Path(".reach/queries.json")):
-        if candidate.is_file():
-            return study.model_copy(update={"queries": candidate})
+    if found := find_existing_queries_path(study.skills, prefer_local=False):
+        return study.model_copy(update={"queries": found})
 
     corpus_hint = f" --skills {study.skills}" if study.skills is not None else ""
     msg = (
