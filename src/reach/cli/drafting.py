@@ -35,6 +35,7 @@ from reach.generate import (
     generate_query_set,
     read_checkpoint,
     read_citations,
+    skill_body_digest,
     text_generator,
     write_checkpoint,
     write_citations,
@@ -52,7 +53,7 @@ from reach.views import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
     from reach.config import RunConfig
@@ -169,6 +170,63 @@ def _build_drafter_runtime(
     )
 
 
+def _prune_refreshed_targets(
+    existing_query_set: QuerySet,
+    existing_citations: tuple[Citation, ...],
+    refresh_targets: Sequence[str],
+) -> tuple[QuerySet, tuple[Citation, ...]]:
+    """Remove queries and citations belonging to skills scheduled for re-drafting."""
+    refresh_set = frozenset(refresh_targets)
+    if not refresh_set:
+        return existing_query_set, existing_citations
+    retained_citations = tuple(c for c in existing_citations if c.skill not in refresh_set)
+    return existing_query_set.without_skills(refresh_set), retained_citations
+
+
+def _update_draft_provenance(
+    query_set: QuerySet,
+    *,
+    settings: RunConfig,
+    catalog: Catalog,
+    skills: Sequence[Skill],
+    generate: GenerateFlags,
+    terms: DraftCheckpoint,
+    drafted_targets: set[str],
+    covered_set: set[str],
+    same_invocation_probe: bool,
+    existing_query_set: QuerySet | None,
+) -> QuerySet:
+    """Attach or merge per-skill body digests and generation metadata on QuerySet provenance."""
+    if existing_query_set is None:
+        drafted_digests = {s.name: skill_body_digest(s) for s in skills if s.name in covered_set}
+        return query_set.model_copy(
+            update={
+                "provenance": _drafted_by(
+                    settings,
+                    catalog,
+                    generate,
+                    terms.bodies,
+                    generator_model=terms.generator_model,
+                    reviewed=False if same_invocation_probe else None,
+                    skill_digests=drafted_digests,
+                ),
+            },
+        )
+    if existing_query_set.provenance is not None:
+        updated_prov = existing_query_set.provenance.with_updated_digests(
+            skills,
+            drafted_targets=drafted_targets,
+            covered_targets=covered_set,
+            bodies_hash=terms.bodies,
+            extra_updates={
+                "config_fingerprint": settings.fingerprint,
+                "tool_version": metadata.version("skill-reach"),
+            },
+        )
+        return query_set.model_copy(update={"provenance": updated_prov})
+    return query_set
+
+
 def _execute_draft_generation(
     console: Console,
     settings: RunConfig,
@@ -248,31 +306,18 @@ def _execute_draft_generation(
         adversarial=generate.adversarial,
         adversarial_count=generate.adversarial_count,
     )
-    query_set = whole(drafted)
-    if existing_query_set is None:
-        query_set = query_set.model_copy(
-            update={
-                "provenance": _drafted_by(
-                    settings,
-                    catalog,
-                    generate,
-                    terms.bodies,
-                    generator_model=terms.generator_model,
-                    reviewed=False if same_invocation_probe else None,
-                ),
-            },
-        )
-    elif existing_query_set.provenance is not None:
-        query_set = query_set.model_copy(
-            update={
-                "provenance": existing_query_set.provenance.model_copy(
-                    update={
-                        "config_fingerprint": settings.fingerprint,
-                        "tool_version": metadata.version("skill-reach"),
-                    }
-                ),
-            },
-        )
+    query_set = _update_draft_provenance(
+        whole(drafted),
+        settings=settings,
+        catalog=catalog,
+        skills=skills,
+        generate=generate,
+        terms=terms,
+        drafted_targets=set(drafting),
+        covered_set=set(covered) | set(drafting),
+        same_invocation_probe=same_invocation_probe,
+        existing_query_set=existing_query_set,
+    )
     if review and query_set.queries:
         from reach.review import launch_query_review
 
@@ -329,10 +374,15 @@ def _draft_query_set(
     covered_existing: tuple[str, ...] = ()
     existing_citations: tuple[Citation, ...] = ()
     if existing_query_set is not None:
-        covered_existing = tuple(sorted(existing_query_set.covered_skills()))
         c_path = citations_path(destination)
         if c_path.exists():
             existing_citations = read_citations(c_path).root
+        existing_query_set, existing_citations = _prune_refreshed_targets(
+            existing_query_set,
+            existing_citations,
+            requested,
+        )
+        covered_existing = tuple(sorted(existing_query_set.covered_skills()))
 
     all_targets = (
         tuple(dict.fromkeys(covered_existing + requested))
@@ -360,6 +410,7 @@ def _draft_query_set(
                 generate,
                 bodies_digest(skills),
                 generator_model=generator_model,
+                skill_digests={s.name: skill_body_digest(s) for s in skills if s.name in requested},
             ),
         ),
         citations=existing_citations,
@@ -436,6 +487,7 @@ def _drafted_by(
     *,
     generator_model: str | None = None,
     reviewed: bool | None = None,
+    skill_digests: Mapping[str, str] | None = None,
 ) -> QuerySetProvenance:
     """Construct QuerySetProvenance detailing synthetic generation parameters."""
     return QuerySetProvenance(
@@ -446,6 +498,7 @@ def _drafted_by(
         queries_per_target=generate.count,
         rivals_in_view=_rivals_in_view(catalog, generate),
         bodies_digest=bodies,
+        skill_digests=dict(skill_digests) if skill_digests else {},
         config_fingerprint=settings.fingerprint,
         reviewed=reviewed,
         adversarial=generate.adversarial,

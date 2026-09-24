@@ -250,7 +250,61 @@ def _render_query_view(
         flags=flags,
         citations=trail,
     )
+    _print_out_of_sync_view_warning(console, query_set, found)
     return 0
+
+
+_MAX_SYNC_SAMPLE = 3
+
+
+def _format_sync_sample(names: frozenset[str], label: str) -> str:
+    """Format a truncated summary of missing or updated skill names."""
+    from reach.queries import format_skill_sample
+
+    ordered = sorted(names)
+    return f"{len(ordered)} {label} ({format_skill_sample(ordered, limit=_MAX_SYNC_SAMPLE)})"
+
+
+def _print_out_of_sync_view_warning(
+    console: Console,
+    query_set: QuerySet,
+    found: Sequence[Skill],
+) -> None:
+    """Print warning banner when viewing a query set that is out of sync with corpus skills."""
+    if not found:
+        return
+    missing_names, stale_names = query_set.out_of_sync_skills(found)
+    if not missing_names and not stale_names:
+        return
+    details: list[str] = []
+    if missing_names:
+        details.append(_format_sync_sample(missing_names, "missing"))
+    if stale_names:
+        details.append(_format_sync_sample(stale_names, "updated"))
+    console.print(
+        f"\n[yellow]Warning:[/] query set is out of sync with corpus: "
+        f"{'; '.join(details)}. Run [bold]reach query draft --sync[/] to update."
+    )
+
+
+def _format_existing_destination_sync_hint(destination: Path, settings: RunConfig) -> str:
+    """Inspect existing query set on disk and return an out-of-sync count suffix if applicable."""
+    from reach.queries import format_sync_counts
+
+    try:
+        existing_qs_check = load_query_set(destination)
+        skills_check, _, _ = _corpus(
+            build_console(quiet=True),
+            build_runtime(settings.runtime),
+            settings,
+        )
+        missing_c, stale_c = existing_qs_check.out_of_sync_skills(skills_check)
+        counts = format_sync_counts(len(missing_c), len(stale_c))
+        if counts:
+            return f" ({counts} skill(s) out of sync)"
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return ""
 
 
 def _resolve_query_source_file(
@@ -424,7 +478,7 @@ def _resolve_target_and_study(
         return None, study, 2
 
 
-def _resolve_missing_backfill(
+def _resolve_sync_targets(
     console: Console,
     destination: Path,
     skills_found: Sequence[Skill],
@@ -433,27 +487,46 @@ def _resolve_missing_backfill(
     count: int | None,
     generate: GenerateFlags | None,
 ) -> tuple[GenerateFlags | None, int | None]:
-    """Filter generation targets to unqueried skills when running in --missing mode."""
+    """Filter generation targets to missing or stale skills when running in --sync mode."""
+    from reach.queries import Origin, format_sync_counts
+
     covered_names = existing_query_set.covered_skills()
+    stale_names = existing_query_set.stale_skills(skills_found)
     requested_targets = effective_generate.targets
     candidate_skills = (
         [s for s in skills_found if s.name in requested_targets]
         if requested_targets
         else list(skills_found)
     )
-    missing_names = tuple(s.name for s in candidate_skills if s.name not in covered_names)
-    if not missing_names:
+    missing_list = tuple(s.name for s in candidate_skills if s.name not in covered_names)
+    stale_list = tuple(s.name for s in candidate_skills if s.name in stale_names)
+    sync_targets = tuple(dict.fromkeys(missing_list + stale_list))
+    if not sync_targets:
+        if existing_query_set.provenance.origin == Origin.GENERATED:
+            candidate_covered = frozenset(
+                s.name for s in candidate_skills if s.name in covered_names
+            )
+            if candidate_covered - existing_query_set.provenance.skill_digests.keys():
+                updated_qs = existing_query_set.with_updated_digests(
+                    skills_found,
+                    covered_targets=candidate_covered,
+                )
+                save_query_set(updated_qs, destination)
         console.print(
-            f"[green]✓[/] All {len(candidate_skills)} skill(s) already have queries in "
+            f"[green]✓[/] All {len(candidate_skills)} skill(s) are in sync in "
             f"[cyan]{destination}[/] ({len(existing_query_set.queries)} queries)."
         )
         return None, 0
+
+    counts = format_sync_counts(len(missing_list), len(stale_list))
+    breakdown = f" ({counts})" if counts else ""
+    up_to_date = len(candidate_skills) - len(sync_targets)
     console.print(
-        f"[dim]Backfilling[/] [bold]{len(missing_names)}[/] [dim]missing skill(s) into[/] "
+        f"[dim]Syncing[/] [bold]{len(sync_targets)}[/] [dim]skill(s){breakdown} into[/] "
         f"[cyan]{destination}[/] "
-        f"[dim]({len(covered_names)}/{len(skills_found)} already covered)[/]"
+        f"[dim]({up_to_date}/{len(candidate_skills)} already in sync)[/]"
     )
-    updates: dict[str, object] = {"targets": missing_names}
+    updates: dict[str, object] = {"targets": sync_targets}
     if existing_query_set.provenance is not None:
         prov = existing_query_set.provenance
         if count is None and prov.queries_per_target:
@@ -480,48 +553,49 @@ def _handle_draft_query_generation(
     dry_run: bool = False,
     review: bool = False,
     force: bool = False,
-    missing: bool = False,
+    sync: bool = False,
 ) -> int:
     """Synthesize new synthetic benchmark queries for discovered skills."""
+    if sync and force:
+        console.print("[red]Error:[/] Cannot combine --sync with --force.")
+        return 2
     target_skill_name, study, exit_code = _resolve_target_and_study(console, target, study)
     if exit_code is not None:
         return exit_code
 
-    if target_skill_name is not None:
-        existing_targets = generate.targets if generate is not None else ()
-        if not existing_targets:
-            generate = (generate or GenerateFlags()).model_copy(
-                update={"targets": (target_skill_name,)}
-            )
+    if target_skill_name is not None and not (generate and generate.targets):
+        generate = (generate or GenerateFlags()).model_copy(
+            update={"targets": (target_skill_name,)}
+        )
 
     if count is not None:
         generate = (generate or GenerateFlags()).model_copy(update={"count": count})
 
-    effective_out = out
-    if effective_out is None and format_opt == "jsonl":
-        effective_out = Path(".reach/queries.jsonl")
-    elif effective_out is None and format_opt == "csv":
-        effective_out = Path(".reach/queries.csv")
-
+    effective_out = (
+        Path(f".reach/queries.{format_opt}")
+        if out is None and format_opt in ("jsonl", "csv")
+        else out
+    )
     resolved_study = _resolve_draft_study_flags(study, run_dir, config, dry_run, out=effective_out)
     settings = _build_draft_settings(config, catalog, runtime, resolved_study, registry=registry)
 
     destination = settings.require_queries()
     existing_query_set: QuerySet | None = None
     if destination.exists():
-        if missing:
+        if sync:
             existing_query_set = load_query_set(destination)
         elif not force:
+            sync_hint = _format_existing_destination_sync_hint(destination, settings)
             msg = (
-                f"Query set already exists at {destination}. Move it aside, "
-                "use --missing to backfill missing skills, use --force to overwrite, "
-                "or point --out / --queries somewhere else."
+                f"Query set already exists at {destination}{sync_hint}. Move it aside, "
+                "use --sync to backfill missing and refresh updated skills, "
+                "use --force to overwrite, or point --out / --queries somewhere else."
             )
             raise ValueError(msg)
     skills_found, _roots, _found = _corpus(console, build_runtime(settings.runtime), settings)
     effective_generate = generate or GenerateFlags()
-    if missing and existing_query_set is not None:
-        updated_generate, exit_code = _resolve_missing_backfill(
+    if sync and existing_query_set is not None:
+        updated_generate, exit_code = _resolve_sync_targets(
             console,
             destination,
             skills_found,
@@ -656,12 +730,12 @@ def _query(
             help="Overwrite destination query set file if it already exists",
         ),
     ] = False,
-    missing: Annotated[
+    sync: Annotated[
         bool,
         SWITCH,
         Parameter(
-            name="--missing",
-            help="Backfill queries only for skills missing from an existing destination query set",
+            name="--sync",
+            help="Backfill missing skills and refresh updated skills in an existing query set",
         ),
     ] = False,
     draft_only: Annotated[bool, Parameter(show=False)] = False,
@@ -675,7 +749,7 @@ def _query(
         show_leaks=show_leaks,
         show_citations=show_citations,
         out=out,
-        draft_only=draft_only or missing,
+        draft_only=draft_only or sync,
     )
 
     if source_file is not None:
@@ -710,7 +784,7 @@ def _query(
         dry_run=dry_run,
         review=review,
         force=force,
-        missing=missing,
+        sync=sync,
     )
 
 
@@ -785,12 +859,12 @@ def _query_draft(
             help="Overwrite destination query set file if it already exists",
         ),
     ] = False,
-    missing: Annotated[
+    sync: Annotated[
         bool,
         SWITCH,
         Parameter(
-            name="--missing",
-            help="Backfill queries only for skills missing from an existing destination query set",
+            name="--sync",
+            help="Backfill missing skills and refresh updated skills in an existing query set",
         ),
     ] = False,
     quiet: Quiet = False,
@@ -811,7 +885,7 @@ def _query_draft(
         dry_run=dry_run,
         review=review,
         force=force,
-        missing=missing,
+        sync=sync,
         quiet=quiet,
         draft_only=True,
     )

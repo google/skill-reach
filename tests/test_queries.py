@@ -411,18 +411,20 @@ def test_query_set_for_skill_lookup(target: str, expected_ids: tuple[str, ...]) 
     assert tuple(q.id for q in qs.for_skill(target)) == expected_ids
 
 
-def test_query_draft_missing_backfill_targets_only_uncovered_skills(
+def test_query_draft_sync_targets_missing_and_stale_skills(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify --missing skips already-covered skills and drafts only missing skills."""
+    """Verify --sync skips in-sync skills and targets both missing and updated skills."""
     from io import StringIO
 
     from reach.cli.query import _handle_draft_query_generation
+    from reach.generate import skill_body_digest
+    from reach.models import Skill
     from reach.views import Console
 
     skills_dir = tmp_path / "skills"
-    for name in ("skill-a", "skill-b"):
+    for name in ("skill-a", "skill-b", "skill-c"):
         s_dir = skills_dir / name
         s_dir.mkdir(parents=True)
         (s_dir / "SKILL.md").write_text(
@@ -430,11 +432,34 @@ def test_query_draft_missing_backfill_targets_only_uncovered_skills(
             encoding="utf-8",
         )
 
+    skill_a = Skill(name="skill-a", description="Desc for skill-a", path=skills_dir / "skill-a")
+    digest_a = skill_body_digest(skill_a)
+
+    # Edit skill-b's body so its recorded digest becomes stale, while editing skill-a's
+    # frontmatter description only (which should NOT mark skill-a stale).
+    (skills_dir / "skill-a" / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Optimized desc\n---\nBody for skill-a\n",
+        encoding="utf-8",
+    )
+    (skills_dir / "skill-b" / "SKILL.md").write_text(
+        "---\nname: skill-b\ndescription: Desc for skill-b\n---\nUpdated body for skill-b!\n",
+        encoding="utf-8",
+    )
+
     out_file = tmp_path / ".reach" / "queries.json"
     existing = QuerySet(
         catalog_id="all",
-        queries=(Query(id="skill-a-1", text="query a", expected_skill="skill-a"),),
-        provenance=provenance(),
+        queries=(
+            Query(id="skill-a-1", text="query a", expected_skill="skill-a"),
+            Query(id="skill-b-1", text="old query b", expected_skill="skill-b"),
+        ),
+        provenance=QuerySetProvenance(
+            origin=Origin.GENERATED,
+            skill_digests={
+                "skill-a": digest_a,
+                "skill-b": "000000000000",
+            },
+        ),
     )
     save_query_set(existing, out_file)
 
@@ -470,11 +495,132 @@ def test_query_draft_missing_backfill_targets_only_uncovered_skills(
         catalog=None,
         runtime=None,
         generate=None,
-        missing=True,
+        sync=True,
     )
     assert rc == 0
-    assert captured["targets"] == ("skill-b",)
-    assert captured["existing_count"] == 1
+    # skill-c is missing, skill-b is stale, skill-a (frontmatter-only change) is still in sync
+    assert captured["targets"] == ("skill-c", "skill-b")
+    assert captured["existing_count"] == 2
+    out_text = buf.getvalue()
+    assert "1 missing" in out_text
+    assert "1 updated" in out_text
+
+
+def test_draft_query_set_prunes_stale_queries_and_updates_skill_digests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _draft_query_set replaces stale skill queries and updates skill_digests."""
+    from io import StringIO
+
+    from reach.cli.drafting import _draft_query_set
+    from reach.cli.flags import GenerateFlags
+    from reach.config import CatalogSettings, RunConfig, StudySettings
+    from reach.generate import (
+        Citation,
+        CitationTrail,
+        citations_path,
+        read_citations,
+        skill_body_digest,
+        write_citations,
+    )
+    from reach.models import CatalogMode, Skill
+    from reach.runtime.fake import FakeGenerator
+    from reach.views import build_console
+
+    for name, body in (("skill-a", "Body A v1"), ("skill-b", "Body B v2 updated")):
+        s_dir = tmp_path / name
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Desc {name}\n---\n{body}\n",
+            encoding="utf-8",
+        )
+
+    skill_a = Skill(name="skill-a", description="Desc skill-a", path=tmp_path / "skill-a")
+    skill_b = Skill(name="skill-b", description="Desc skill-b", path=tmp_path / "skill-b")
+    skills = (skill_a, skill_b)
+
+    dest = tmp_path / "queries.json"
+    existing_qs = QuerySet(
+        catalog_id="all",
+        queries=(
+            Query(id="skill-a-1", text="Keep query A", expected_skill="skill-a"),
+            Query(id="skill-b-1", text="Stale query B", expected_skill="skill-b"),
+            Query(
+                id="adv-skill-b-1",
+                text="Stale adv B",
+                expected_skill="skill-a",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+        ),
+        provenance=QuerySetProvenance(
+            origin=Origin.GENERATED,
+            skill_digests={
+                "skill-a": skill_body_digest(skill_a),
+                "skill-b": "old-sha-1234",
+            },
+        ),
+    )
+    save_query_set(existing_qs, dest)
+    write_citations(
+        CitationTrail(
+            (
+                Citation(skill="skill-a", text="Keep query A", citation="Body A v1"),
+                Citation(skill="skill-b", text="Stale query B", citation="Body B old"),
+            )
+        ),
+        citations_path(dest),
+    )
+
+    fake_drafter = FakeGenerator(
+        completion=json.dumps(
+            {
+                "queries": [
+                    {
+                        "text": "Fresh query B",
+                        "citation": "Body B v2 updated",
+                        "reason": "Updated body",
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "reach.cli.drafting._build_drafter_runtime",
+        lambda *_a, **_k: fake_drafter,
+    )
+
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    settings = RunConfig(
+        catalog=CatalogSettings(mode=CatalogMode.ALL),
+        study=StudySettings(queries=dest),
+    )
+    generate = GenerateFlags(count=1, targets=("skill-b",))
+
+    rc = _draft_query_set(
+        console,
+        settings,
+        skills,
+        generate,
+        dry_run=False,
+        existing_query_set=existing_qs,
+    )
+    assert rc == 0
+    saved = load_query_set(dest)
+    assert [(q.id, q.text) for q in saved.queries] == [
+        ("skill-a-1", "Keep query A"),
+        ("skill-b-1", "Fresh query B"),
+    ]
+    assert saved.provenance.skill_digests == {
+        "skill-a": skill_body_digest(skill_a),
+        "skill-b": skill_body_digest(skill_b),
+    }
+    saved_citations = read_citations(citations_path(dest)).root
+    assert [(c.skill, c.text) for c in saved_citations] == [
+        ("skill-a", "Keep query A"),
+        ("skill-b", "Fresh query B"),
+    ]
 
 
 def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
@@ -689,3 +835,200 @@ def test_query_set_covered_skills_filters_negatives_and_unassigned() -> None:
         )
     )
     assert qs.covered_skills() == frozenset({"skill-a", "skill-b"})
+
+
+@pytest.mark.parametrize(
+    ("origin", "recorded_digest", "expected_stale"),
+    [
+        (Origin.AUTHORED, None, frozenset()),
+        (Origin.GENERATED, None, frozenset()),
+        (Origin.GENERATED, "MATCH", frozenset()),
+        (Origin.GENERATED, "000000stale0", frozenset({"skill-a"})),
+    ],
+)
+def test_stale_skills_provenance_states(
+    tmp_path: Path,
+    origin: Origin,
+    recorded_digest: str | None,
+    expected_stale: frozenset[str],
+) -> None:
+    """Verify stale_skills evaluates per-skill SHA digests and handles missing SKILL.md."""
+    from reach.generate import skill_body_digest
+    from reach.models import Skill
+
+    s_dir = tmp_path / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Desc A\n---\nBody A\n",
+        encoding="utf-8",
+    )
+    skill_a = Skill(name="skill-a", description="Desc A", path=s_dir)
+    missing_disk_skill = Skill(
+        name="ghost-skill", description="Ghost desc", path=tmp_path / "nonexistent"
+    )
+    assert len(skill_body_digest(missing_disk_skill)) == 12
+
+    digests: dict[str, str] = {}
+    if recorded_digest == "MATCH":
+        digests["skill-a"] = skill_body_digest(skill_a)
+    elif recorded_digest is not None:
+        digests["skill-a"] = recorded_digest
+
+    qs = QuerySet(
+        queries=(Query(id="q1", text="t1", expected_skill="skill-a"),),
+        provenance=QuerySetProvenance(origin=origin, skill_digests=digests),
+    )
+    assert qs.stale_skills((skill_a,)) == expected_stale
+
+
+def test_provenance_skill_digests_string_constraints_and_partial_sync(
+    tmp_path: Path,
+) -> None:
+    """Verify Pydantic StringConstraints on skill_digests and partial-sync digest preservation."""
+    from pydantic import ValidationError
+
+    from reach.generate import skill_body_digest
+    from reach.models import Skill
+
+    # 1. StringConstraints normalizes whitespace/casing and rejects empty skill keys or digests
+    prov = QuerySetProvenance(skill_digests={"  skill-a ": " ABCDEF123456 "})
+    assert prov.skill_digests == {"skill-a": "abcdef123456"}
+    with pytest.raises(ValidationError):
+        QuerySetProvenance(skill_digests={"": "abcdef123456"})
+    with pytest.raises(ValidationError):
+        QuerySetProvenance(skill_digests={"skill-a": "   "})
+
+    # 2. Partial sync updates only drafted_targets and preserves un-redrafted skills' digests
+    for name, body in (("skill-a", "Modified body A on disk"), ("skill-b", "Fresh body B")):
+        s_dir = tmp_path / name
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Desc {name}\n---\n{body}\n",
+            encoding="utf-8",
+        )
+    skill_a = Skill(name="skill-a", description="Desc skill-a", path=tmp_path / "skill-a")
+    skill_b = Skill(name="skill-b", description="Desc skill-b", path=tmp_path / "skill-b")
+
+    initial_prov = QuerySetProvenance(
+        origin=Origin.GENERATED,
+        skill_digests={"skill-a": "old-recorded-sha", "skill-b": "old-b-sha"},
+    )
+    updated_prov = initial_prov.with_updated_digests(
+        (skill_a, skill_b),
+        drafted_targets=("skill-b",),
+        covered_targets=("skill-a", "skill-b"),
+    )
+    # skill-a was NOT re-drafted, so its old recorded SHA is preserved (remaining stale)
+    assert updated_prov.skill_digests["skill-a"] == "old-recorded-sha"
+    assert updated_prov.skill_digests["skill-b"] == skill_body_digest(skill_b)
+
+
+def _invoke_draft_cli(
+    skills_dir: Path,
+    out_file: Path,
+    *,
+    sync: bool = False,
+    force: bool = False,
+) -> tuple[int, str]:
+    """Run _handle_draft_query_generation with a captured test console."""
+    from io import StringIO
+
+    from reach.cli.query import _handle_draft_query_generation
+    from reach.views import build_console
+
+    buf = StringIO()
+    console = build_console(file=buf, force_terminal=False, width=120)
+    rc = _handle_draft_query_generation(
+        console,
+        target=skills_dir,
+        count=1,
+        out=out_file,
+        format_opt=None,
+        study=None,
+        run_dir=None,
+        config=None,
+        catalog=None,
+        runtime=None,
+        generate=None,
+        force=force,
+        sync=sync,
+    )
+    return rc, buf.getvalue()
+
+
+def test_query_draft_sync_sad_paths_and_backfill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify --sync sad paths (--force conflict) and zero-LLM digest backfill."""
+    from io import StringIO
+
+    from reach.cli.query import _render_query_view
+    from reach.generate import skill_body_digest
+    from reach.models import Skill
+    from reach.views import build_console
+
+    skills_dir = tmp_path / "skills"
+    s_dir = skills_dir / "skill-a"
+    s_dir.mkdir(parents=True)
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Desc A\n---\nBody A\n",
+        encoding="utf-8",
+    )
+    skill_a = Skill(name="skill-a", description="Desc A", path=s_dir)
+    out_file = tmp_path / ".reach" / "queries.json"
+
+    # 1. Sad path: --sync combined with --force fails with exit code 2
+    rc_conflict, out_conflict = _invoke_draft_cli(skills_dir, out_file, sync=True, force=True)
+    assert rc_conflict == 2
+    assert "Cannot combine --sync with --force" in out_conflict
+
+    # 2. GENERATED query set without skill_digests backfills digests in-place without LLM calls
+    save_query_set(
+        QuerySet(
+            catalog_id="all",
+            queries=(Query(id="skill-a-1", text="query a", expected_skill="skill-a"),),
+            provenance=QuerySetProvenance(origin=Origin.GENERATED, skill_digests={}),
+        ),
+        out_file,
+    )
+
+    def fail_if_drafted(*_a, **_k):
+        pytest.fail("LLM drafter should not be called when backfilling missing digests")
+
+    monkeypatch.setattr("reach.cli.query._draft_query_set", fail_if_drafted)
+
+    rc_backfill, out_backfill = _invoke_draft_cli(skills_dir, out_file, sync=True)
+    assert rc_backfill == 0
+    assert "All 1 skill(s) are in sync" in out_backfill
+    reloaded = load_query_set(out_file)
+    assert reloaded.provenance.skill_digests == {"skill-a": skill_body_digest(skill_a)}
+
+    # 3. Subsequent --sync when already in sync is a clean no-op
+    rc_noop, out_noop = _invoke_draft_cli(skills_dir, out_file, sync=True)
+    assert rc_noop == 0
+    assert "All 1 skill(s) are in sync" in out_noop
+
+    # 4. Modifying skill-a body triggers out-of-sync warning in view mode and draft collision
+    (s_dir / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Desc A\n---\nModified body A\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"1 updated skill\(s\) out of sync"):
+        _invoke_draft_cli(skills_dir, out_file, sync=False, force=False)
+
+    buf_view = StringIO()
+    console_view = build_console(file=buf_view, force_terminal=False, width=120)
+    rc_view = _render_query_view(
+        console_view,
+        reloaded,
+        out_file,
+        skills=skills_dir,
+        agent=None,
+        global_scope=False,
+        show_leaks=False,
+        show_citations=False,
+    )
+    assert rc_view == 0
+    assert "query set is out of sync with corpus" in buf_view.getvalue()
+    assert "1 updated (skill-a)" in buf_view.getvalue()

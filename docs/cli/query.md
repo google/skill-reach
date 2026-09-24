@@ -56,7 +56,7 @@ reach query --queries .reach/queries.json --leaks --citations
 | `--out`, `-o`    | Path   | `.reach/queries.json` | Where to write the query set (format auto-inferred from `.json`, `.jsonl`, or `.csv`).                                         |
 | `--format`, `-f` | Choice | `json`                | Explicit output format: `json`, `jsonl`, or `csv`. When `--out` is omitted with `csv` or `jsonl`, output is printed to stdout. |
 | `--force`        | Flag   | `false`               | Overwrite destination query set file if it already exists.                                                                     |
-| `--missing`      | Flag   | `false`               | Backfill queries only for skills missing from an existing destination query set.                                               |
+| `--sync`         | Flag   | `false`               | Backfill missing skills and refresh updated skills in an existing destination query set.                                       |
 | `--dry-run`      | Flag   | `false`               | Preview prompts and token budget without making model calls.                                                                   |
 
 ### Inspection & View
@@ -108,8 +108,8 @@ reach query draft [TARGET] [OPTIONS]
 # Draft queries targeting skills in a local directory
 reach query draft ./my-skills
 
-# Draft queries only for skills currently missing benchmark queries
-reach query draft ./my-skills --missing
+# Sync missing skills and refresh updated skills in an existing query set
+reach query draft ./my-skills --sync
 
 # Draft queries with interactive browser review before saving
 reach query draft ./my-skills --review
@@ -118,7 +118,7 @@ reach query draft ./my-skills --review
 | Option                | Type    | Default  | Description                                                                          |
 | :-------------------- | :------ | :------- | :----------------------------------------------------------------------------------- |
 | `--count`, `-c`       | Integer | `4`      | Target evaluation queries generated per skill.                                       |
-| `--missing`, `-m`     | Flag    | `false`  | Only draft queries for skills in the target corpus with 0 existing queries.          |
+| `--sync`              | Flag    | `false`  | Backfill missing skills and refresh updated skills in an existing query set.         |
 | `--review`            | Flag    | `false`  | Open interactive browser review session before saving.                               |
 | `--agent`             | String  | `claude` | Generation agent runtime (`antigravity`, `claude-code`, `gemini-cli`, `gemini-api`). |
 | `--model`             | String  | -        | LLM model identifier for query drafting.                                             |
@@ -179,3 +179,27 @@ Each entry in a `.reach/queries.json` (or `.yaml` / `.jsonl` / `.csv` dataset) c
 | `expected_skill`    | `str \| None`       | `None`       | Ground-truth target skill expected to be invoked, or `None` for out-of-scope queries.                                                                     |
 | `acceptable_skills` | `tuple[str, ...]`   | `()`         | Optional neutral helper or router skills (e.g. `finding-google-skills`) that consume turns at runtime but are neither rewarded as TP nor penalized as FP. |
 | `notes`             | `str`               | `""`         | Author notes, rationale, or difficulty context.                                                                                                           |
+
+### Provenance & Per-Skill Sync Digests (`QuerySetProvenance`)
+
+When saved as JSON (`.reach/queries.json`), the top-level [`QuerySet`](../api/queries.md) wrapper includes a `provenance` block (`QuerySetProvenance`) that tracks how queries were synthesized and records per-skill content digests:
+
+```json
+{
+  "catalog_id": "all",
+  "queries": [...],
+  "provenance": {
+    "origin": "generated",
+    "generator_model": "gemini-3.8-flash",
+    "queries_per_target": 3,
+    "bodies_digest": "8f21b39e4c01",
+    "skill_digests": {
+      "cloud-run-basics": "2a2f37e47243",
+      "gcloud": "7d17b03e9bff"
+    }
+  }
+}
+```
+
+- **`skill_digests` (`dict[str, str]`)**: Maps each drafted skill name to a 12-character SHA-256 digest of its `SKILL.md` markdown body **excluding** YAML frontmatter. Optimizing a skill's frontmatter `description` (`reach optimize`) does not mark its benchmark queries stale, whereas modifying a skill's instructions or examples triggers a warning in `reach query` and selectively refreshes that skill when running `reach query draft --sync` or `reach sweep`.
+- **`bodies_digest` (`str`)**: Aggregate 12-character SHA-256 digest across all `(skill_name, skill_body_digest)` pairs at generation time.

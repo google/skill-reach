@@ -983,12 +983,26 @@ class DraftCheckpoint(BaseModel):
         return tuple(t for t in self.targets if t not in landed)
 
 
+def skill_body_digest(skill: Skill) -> str:
+    """Calculate a 12-character SHA-256 digest of a single skill's markdown body."""
+    skill_file = skill.path / "SKILL.md"
+    if skill_file.is_file():
+        raw = skill_file.read_text(encoding="utf-8")
+        split = split_frontmatter(raw)
+        body = split[1].strip() if split is not None else raw.strip()
+    else:
+        body = skill.description.strip()
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
+
+def skill_bodies_map(skills: Sequence[Skill]) -> dict[str, str]:
+    """Build a sorted mapping of skill names to their 12-character markdown body digests."""
+    return {skill.name: skill_body_digest(skill) for skill in sorted(skills, key=lambda s: s.name)}
+
+
 def bodies_digest(skills: Sequence[Skill]) -> str:
-    """Calculate a 12-character SHA-256 digest of skill body contents."""
-    material = "\n".join(
-        (skill.path / "SKILL.md").read_text(encoding="utf-8")
-        for skill in sorted(skills, key=lambda s: s.name)
-    )
+    """Calculate a 12-character SHA-256 digest of skill body contents across the corpus."""
+    material = "\n".join(f"{name}:{digest}" for name, digest in skill_bodies_map(skills).items())
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 

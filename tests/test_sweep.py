@@ -1612,7 +1612,7 @@ def test_resolve_anchor_skills_filters_to_queried_skills_and_warns_missing_corpu
     )
     out = buf.getvalue()
     assert "3 of 5 corpus skill(s) have 0 queries" in out
-    assert "reach query draft --missing" in out
+    assert "reach query draft --sync" in out
     assert "2/2 anchor skills" in out
 
 
