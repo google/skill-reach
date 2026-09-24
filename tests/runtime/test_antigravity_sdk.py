@@ -1885,3 +1885,27 @@ def test_suppress_retryable_step_warnings_filters_503_unless_debug() -> None:
     finally:
         root_logger.removeHandler(handler)
         root_logger.setLevel(orig_level)
+
+
+def test_antigravity_sdk_select_records_duration_ms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify AntigravitySdkRuntime.select measures wall-clock time and populates duration_ms."""
+    from reach.runtime import SelectionOutcome
+    from reach.runtime.antigravity_sdk import AntigravitySdkRuntime
+
+    rt = AntigravitySdkRuntime(RuntimeSettings(agent="antigravity-sdk"))
+
+    async def _fake_select_async(
+        query_text: str,
+        workdir: Path,
+        target_skill: str | None = None,
+    ) -> SelectionOutcome:
+        return SelectionOutcome(invoked_skills=("alpha",))
+
+    monkeypatch.setattr(rt, "_select_async", _fake_select_async)
+    outcome = rt.select("test query", workdir=tmp_path)
+    assert outcome.invoked_skill == "alpha"
+    assert outcome.duration_ms is not None
+    assert outcome.duration_ms >= 1

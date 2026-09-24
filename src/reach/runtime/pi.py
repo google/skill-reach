@@ -132,7 +132,7 @@ class PiCost(BaseModel):
 class PiUsage(BaseModel):
     """Represent token and cost usage metrics from Pi assistant messages."""
 
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
     input: NonNegativeInt = 0
     cache_read: NonNegativeInt = Field(default=0, alias="cacheRead")

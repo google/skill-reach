@@ -523,7 +523,9 @@ def test_goose_generator_command_and_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "-t" not in captured["command"]
 
 
-def test_parse_goose_output_prompt_tokens_and_gemini_provider_normalization() -> None:
+def test_parse_goose_output_prompt_tokens_and_gemini_provider_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify parse_goose_output extracts prompt_tokens and maps gemini-* to google."""
     from reach.runtime.goose import (
         GooseGenerator,
@@ -533,7 +535,11 @@ def test_parse_goose_output_prompt_tokens_and_gemini_provider_normalization() ->
         parse_goose_output,
     )
 
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
     assert GooseOptions(provider="gemini").provider == "google"
+    assert GooseOptions(provider="  anthropic  ").provider == "anthropic"
 
     rt = GooseRuntime(RuntimeSettings(agent="goose", options={"model": "gemini-3.8-flash"}))
     cmd = rt.build_command("test query")

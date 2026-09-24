@@ -513,6 +513,11 @@ def resolve_sweep_scales(
         return generate_log_scales(total_skills)
 
     scales = sorted({min(s, total_skills) for s in requested if s >= 1})
+    if not scales:
+        msg = (
+            f"No valid sweep scales resolved from requested={requested}; must specify integers >= 1"
+        )
+        raise ValueError(msg)
     return tuple(scales)
 
 

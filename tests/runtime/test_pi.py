@@ -646,3 +646,28 @@ def test_parse_session_entries_extracts_prompt_tokens() -> None:
     assert summary.invoked_skills == ("alpha",)
     assert summary.prompt_tokens == 8574
     assert summary.cost_usd == pytest.approx(0.0065)
+
+    from reach.runtime.pi import PiUsage
+
+    assert PiUsage(input=10, cache_read=5, cache_write=2).total_prompt_tokens == 17
+
+
+def test_pi_select_records_duration_ms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify PiRuntime.select populates wall-clock duration_ms on outcomes."""
+    import subprocess
+
+    from reach.runtime.pi import PiRuntime
+
+    def _fake_probe(
+        *args: object, **kwargs: object
+    ) -> tuple[subprocess.CompletedProcess[str], None]:
+        return subprocess.CompletedProcess(["pi"], returncode=1, stdout="", stderr="boom"), None
+
+    monkeypatch.setattr("reach.runtime.pi.run_subprocess_probe", _fake_probe)
+    rt = PiRuntime(RuntimeSettings(agent="pi"))
+    outcome = rt.select("test query", workdir=tmp_path)
+    assert outcome.duration_ms is not None
+    assert outcome.duration_ms >= 1

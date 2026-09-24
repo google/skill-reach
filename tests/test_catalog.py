@@ -664,6 +664,9 @@ def test_resolve_sweep_scales() -> None:
     with pytest.raises(ValueError, match="total_skills must be positive"):
         resolve_sweep_scales(0)
 
+    with pytest.raises(ValueError, match="must specify integers >= 1"):
+        resolve_sweep_scales(10, requested=(0, -5))
+
 
 def test_build_scaling_catalogs(tmp_path: Path) -> None:
     """Verify build_scaling_catalogs generates deterministically sized catalogs."""

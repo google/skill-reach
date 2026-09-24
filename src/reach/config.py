@@ -664,6 +664,9 @@ class PlanSettings(BaseModel):
     def resolve_sweep_attempts(self, cli_attempts: int | None = None) -> int:
         """Return effective sweep attempts, defaulting to 1 unless explicitly configured."""
         if cli_attempts is not None:
+            if cli_attempts < 1:
+                msg = f"Sweep attempts must be at least 1, got {cli_attempts}"
+                raise ValueError(msg)
             return cli_attempts
         return self.attempts if "attempts" in self.model_fields_set else 1
 

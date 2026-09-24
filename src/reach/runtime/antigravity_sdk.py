@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -215,7 +216,10 @@ class _SuppressRetryableStepErrorFilter(logging.Filter):
             return True
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             return True
-        msg = record.getMessage()
+        try:
+            msg = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return True
         if "System step error" not in msg:
             return True
         lower_msg = msg.lower()
@@ -847,8 +851,6 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe and return SelectionOutcome."""
-        import time
-
         t0 = time.monotonic()
         try:
             try:

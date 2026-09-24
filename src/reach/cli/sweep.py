@@ -464,7 +464,7 @@ def _sweep(
                 else f"recall={point.recall:.1%}"
             )
             failed_suffix = (
-                f", [red]{point.probes_errored} failed[/]" if point.probes_errored > 0 else ""
+                f", [red]{point.probes_errored} errored[/]" if point.probes_errored > 0 else ""
             )
             console.print(
                 f"  [dim]\\[{step}/{total}][/] Scale [bold]K={point.scale}[/]: "

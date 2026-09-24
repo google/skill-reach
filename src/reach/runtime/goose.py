@@ -59,9 +59,12 @@ if TYPE_CHECKING:
 
 def _normalize_goose_provider(provider: str | None) -> str | None:
     """Normalize 'gemini' provider alias to Goose's canonical 'google' provider."""
-    if provider and provider.strip().lower() == "gemini":
+    if provider is None:
+        return None
+    cleaned = provider.strip()
+    if cleaned.lower() == "gemini":
         return "google"
-    return provider
+    return cleaned or None
 
 
 class GooseOptions(CliOptions):
@@ -81,7 +84,11 @@ class GooseOptions(CliOptions):
     @property
     def effective_provider(self) -> str | None:
         """Return canonical Goose provider, inferring from model when provider is unset."""
-        return _normalize_goose_provider(self.provider or detect_model_provider(self.model))
+        if self.provider:
+            return self.provider
+        if self.model.strip().lower().startswith("gemini"):
+            return "google"
+        return _normalize_goose_provider(detect_model_provider(self.model, api_key=self.api_key))
 
 
 def resolve_skill_from_tool_call(
