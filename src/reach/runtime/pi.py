@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, ValidationError
 
 from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
 from reach.runtime import (
@@ -120,26 +121,57 @@ def _extract_pi_message_content(
     return reasoning, observed_tools, invoked
 
 
-def _extract_pi_message_cost(msg: dict[str, Any]) -> float | None:
-    """Extract total cost from message usage metadata."""
-    usage = msg.get("usage")
-    if isinstance(usage, dict):
-        cost = usage.get("cost")
-        if isinstance(cost, dict) and "total" in cost:
-            with contextlib.suppress(ValueError, TypeError):
-                return float(cost["total"])
-    return None
+class PiCost(BaseModel):
+    """Represent cost breakdown from Pi message usage metadata."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    total: NonNegativeFloat | None = None
+
+
+class PiUsage(BaseModel):
+    """Represent token and cost usage metrics from Pi assistant messages."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input: NonNegativeInt = 0
+    cache_read: NonNegativeInt = Field(default=0, alias="cacheRead")
+    cache_write: NonNegativeInt = Field(default=0, alias="cacheWrite")
+    prompt_tokens: NonNegativeInt | None = None
+    cost: PiCost | None = None
+
+    @property
+    def total_prompt_tokens(self) -> int | None:
+        """Calculate total input/prompt tokens across direct and cached prompt segments."""
+        pi_input = self.input + self.cache_read + self.cache_write
+        if pi_input > 0:
+            return pi_input
+        return self.prompt_tokens
+
+
+def _extract_pi_message_usage(msg: dict[str, Any]) -> tuple[float | None, int | None]:
+    """Extract total cost and prompt tokens from message usage metadata via PiUsage."""
+    usage_raw = msg.get("usage")
+    if not isinstance(usage_raw, dict):
+        return None, None
+    try:
+        usage = PiUsage.model_validate(usage_raw)
+    except ValidationError:
+        return None, None
+    cost_val = usage.cost.total if usage.cost is not None else None
+    return cost_val, usage.total_prompt_tokens
 
 
 def parse_session_entries(
     entries: Iterable[dict[str, Any]],
     resident: Iterable[str],
 ) -> SessionSummary:
-    """Parse session entries from Pi JSONL to extract skill selection and cost."""
+    """Parse session entries from Pi JSONL to extract skill selection, cost, and tokens."""
     invoked: list[str] = []
     reasoning: list[str] = []
     observed_tools: list[str] = []
     cost_usd: float | None = None
+    prompt_tokens: int | None = None
     resolved_model = ""
     assistant_turns = 0
 
@@ -154,8 +186,11 @@ def parse_session_entries(
         if "model" in msg and isinstance(msg["model"], str):
             resolved_model = msg["model"]
 
-        if (cost := _extract_pi_message_cost(msg)) is not None:
+        cost, toks = _extract_pi_message_usage(msg)
+        if cost is not None:
             cost_usd = cost
+        if toks is not None:
+            prompt_tokens = toks
 
         m_reasoning, m_tools, m_invoked = _extract_pi_message_content(msg, resident)
         reasoning.extend(m_reasoning)
@@ -168,6 +203,7 @@ def parse_session_entries(
         reasoning=tuple(reasoning),
         observed_tools=tuple(observed_tools),
         cost_usd=cost_usd,
+        prompt_tokens=prompt_tokens,
         resolved_model=resolved_model,
         status=SessionStatus.SUCCESS if has_entries else None,
         error=None,
@@ -271,6 +307,60 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             session_root.rmdir()
         super().post_probe(workdir)
 
+    def _select_unmeasured(
+        self,
+        query_text: str,
+        workdir: Path,
+        target_skill: str | None = None,
+    ) -> SelectionOutcome:
+        """Execute query evaluation probe without attaching wall-clock duration."""
+        session_dir = ensure_private_directory(probe_slot_dir(Path(workdir) / SESSION_DIRNAME))
+        existing_files = set(session_dir.glob("*.jsonl"))
+
+        cmd = self.build_command(query_text, session_dir)
+        env = self.build_env(workdir)
+        completed, err = run_subprocess_probe(cmd, workdir, self.timeout_s, env=env)
+        if err is not None or completed is None:
+            return SelectionOutcome(
+                error=format_subprocess_error("pi", err, self.timeout_s),
+                observed_catalog=self._resident,
+            )
+
+        if completed.returncode != 0:
+            return SelectionOutcome(
+                error=process_failure_reason(completed),
+                observed_catalog=self._resident,
+            )
+
+        session_file = _newest_transcript(session_dir, exclude=existing_files)
+        if session_file is None:
+            session_file = _newest_transcript(session_dir)
+
+        if session_file is None:
+            return SelectionOutcome(
+                error="pi produced no session transcript file",
+                observed_catalog=self._resident,
+            )
+
+        try:
+            lines = session_file.read_text(encoding="utf-8").splitlines()
+            entries = list(iter_json_lines(lines))
+            summary = parse_session_entries(entries, self._resident)
+            outcome = self.make_tracker(target_skill).apply_to_outcome(
+                summary.to_outcome(
+                    self._resident,
+                    fallback_model=self.model,
+                ),
+            )
+            if validation_error := self.validate_outcome(summary, workdir):
+                return outcome.model_copy(update={"error": validation_error})
+            return outcome
+        except (OSError, ValueError) as exc:
+            return SelectionOutcome(
+                error=f"failed to parse pi session log: {exc}",
+                observed_catalog=self._resident,
+            )
+
     @override
     def select(
         self,
@@ -279,55 +369,11 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe and return SelectionOutcome."""
-        # Probes run concurrently against one workdir, so each thread owns a session slot.
-        session_dir = ensure_private_directory(probe_slot_dir(Path(workdir) / SESSION_DIRNAME))
-
-        existing_files = set(session_dir.glob("*.jsonl"))
-
-        cmd = self.build_command(query_text, session_dir)
-        env = self.build_env(workdir)
+        t0 = time.monotonic()
         try:
-            completed, err = run_subprocess_probe(cmd, workdir, self.timeout_s, env=env)
-            if err is not None or completed is None:
-                return SelectionOutcome(
-                    error=format_subprocess_error("pi", err, self.timeout_s),
-                    observed_catalog=self._resident,
-                )
-
-            if completed.returncode != 0:
-                return SelectionOutcome(
-                    error=process_failure_reason(completed),
-                    observed_catalog=self._resident,
-                )
-
-            session_file = _newest_transcript(session_dir, exclude=existing_files)
-            if session_file is None:
-                session_file = _newest_transcript(session_dir)
-
-            if session_file is None:
-                return SelectionOutcome(
-                    error="pi produced no session transcript file",
-                    observed_catalog=self._resident,
-                )
-
-            try:
-                lines = session_file.read_text(encoding="utf-8").splitlines()
-                entries = list(iter_json_lines(lines))
-                summary = parse_session_entries(entries, self._resident)
-                outcome = self.make_tracker(target_skill).apply_to_outcome(
-                    summary.to_outcome(
-                        self._resident,
-                        fallback_model=self.model,
-                    ),
-                )
-                if validation_error := self.validate_outcome(summary, workdir):
-                    return outcome.model_copy(update={"error": validation_error})
-                return outcome
-            except (OSError, ValueError) as exc:
-                return SelectionOutcome(
-                    error=f"failed to parse pi session log: {exc}",
-                    observed_catalog=self._resident,
-                )
+            outcome = self._select_unmeasured(query_text, workdir, target_skill=target_skill)
+            elapsed_ms = max(1, int((time.monotonic() - t0) * 1000))
+            return outcome.model_copy(update={"duration_ms": outcome.duration_ms or elapsed_ms})
         finally:
             self.post_probe(workdir)
 

@@ -16,14 +16,21 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, override
 
-from pydantic import Field
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeFloat,
+    NonNegativeInt,
+    ValidationError,
+)
 
-from reach.config import RuntimeSettings
+from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
@@ -33,6 +40,7 @@ from reach.runtime import (
 )
 from reach.runtime._env import (
     apply_provider_api_key,
+    detect_model_provider,
     sync_google_and_gemini_keys,
 )
 from reach.runtime._fs import (
@@ -49,18 +57,31 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
 
+def _normalize_goose_provider(provider: str | None) -> str | None:
+    """Normalize 'gemini' provider alias to Goose's canonical 'google' provider."""
+    if provider and provider.strip().lower() == "gemini":
+        return "google"
+    return provider
+
+
 class GooseOptions(CliOptions):
     """Hold configuration options for driving the Goose agent CLI."""
 
     executable: str = "goose"
     model: str = Field(
-        default_factory=lambda: agent_default_model("goose") or "gemini-3.6-flash",
+        default_factory=lambda: agent_default_model("goose") or DEFAULT_GEMINI_MODEL,
         description="The model identifier to evaluate.",
     )
+    provider: Annotated[str | None, AfterValidator(_normalize_goose_provider)] = None
     home_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "home_dir"
     no_profile: bool = True
     with_builtin: str = "skills"
+
+    @property
+    def effective_provider(self) -> str | None:
+        """Return canonical Goose provider, inferring from model when provider is unset."""
+        return _normalize_goose_provider(self.provider or detect_model_provider(self.model))
 
 
 def resolve_skill_from_tool_call(
@@ -193,11 +214,44 @@ def _extract_message_details(
     return invoked, reasoning, observed_tools, resolved_model
 
 
+class GooseMetadata(BaseModel):
+    """Represent session metadata and token counts emitted by Goose JSON output."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input_tokens: NonNegativeInt = 0
+    cache_read_input_tokens: NonNegativeInt = 0
+    cache_write_input_tokens: NonNegativeInt = 0
+    prompt_tokens: NonNegativeInt | None = None
+    cost_usd: NonNegativeFloat | None = None
+
+    @property
+    def total_prompt_tokens(self) -> int | None:
+        """Calculate total input/prompt tokens across direct and cached prompt segments."""
+        goose_input = (
+            self.input_tokens + self.cache_read_input_tokens + self.cache_write_input_tokens
+        )
+        if goose_input > 0:
+            return goose_input
+        return self.prompt_tokens
+
+
+def _extract_goose_metadata(meta_obj: object) -> tuple[float | None, int | None]:
+    """Extract cost_usd and total prompt tokens via GooseMetadata."""
+    if not isinstance(meta_obj, dict):
+        return None, None
+    try:
+        meta = GooseMetadata.model_validate(meta_obj)
+    except ValidationError:
+        return None, None
+    return meta.cost_usd, meta.total_prompt_tokens
+
+
 def parse_goose_output(
     data: dict[str, Any] | str,
     resident: Iterable[str],
 ) -> SessionSummary:
-    """Parse Goose output payload to extract skill invocations, tools, and cost."""
+    """Parse Goose output payload to extract skill invocations, tools, cost, and tokens."""
     payload, err = _parse_goose_payload(data)
     if err is not None or payload is None:
         return SessionSummary(error=err or "unexpected goose output format")
@@ -220,11 +274,7 @@ def parse_goose_output(
                 if m_model:
                     resolved_model = m_model
 
-    cost_usd: float | None = None
-    meta = payload.get("metadata")
-    if isinstance(meta, dict) and "cost_usd" in meta:
-        with contextlib.suppress(ValueError, TypeError):
-            cost_usd = float(meta["cost_usd"])
+    cost_usd, prompt_tokens = _extract_goose_metadata(payload.get("metadata"))
 
     return SessionSummary(
         invoked_skills=tuple(invoked),
@@ -232,6 +282,7 @@ def parse_goose_output(
         reasoning=tuple(reasoning),
         observed_tools=tuple(observed_tools),
         cost_usd=cost_usd,
+        prompt_tokens=prompt_tokens,
         resolved_model=resolved_model,
         status=SessionStatus.SUCCESS,
         error=None,
@@ -282,7 +333,8 @@ class GooseRuntime(CliAgentRuntime[GooseOptions]):
             cmd += ["--with-builtin", opts.with_builtin]
         if opts.model:
             cmd += ["--model", opts.model]
-        cmd += opts.provider_args("--provider")
+        if opts.effective_provider:
+            cmd += ["--provider", opts.effective_provider]
         if opts.extra_args:
             cmd += list(opts.extra_args)
         return cmd
@@ -392,8 +444,8 @@ class GooseGenerator(BaseTextGenerator[GooseOptions]):
             cmd.append("--no-profile")
         if self.model:
             cmd += ["--model", self.model]
-        if opts.provider:
-            cmd += ["--provider", opts.provider]
+        if opts.effective_provider:
+            cmd += ["--provider", opts.effective_provider]
         return [*cmd, *opts.extra_args]
 
     @override

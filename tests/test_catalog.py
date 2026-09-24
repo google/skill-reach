@@ -657,7 +657,7 @@ def test_resolve_sweep_scales() -> None:
 
     # Explicit requested overrides are respected and clamped to total_skills
     assert resolve_sweep_scales(14, requested=(1, 5, 10, 20)) == (1, 5, 10, 14)
-    assert resolve_sweep_scales(100, requested=(5, 15, 30)) == (5, 15, 30, 100)
+    assert resolve_sweep_scales(100, requested=(5, 15, 30)) == (5, 15, 30)
     assert resolve_sweep_scales(100, requested=(100,)) == (100,)
     assert resolve_sweep_scales(50, requested=(10, 20, 150)) == (10, 20, 50)
 

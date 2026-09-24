@@ -272,7 +272,7 @@ def test_build_command_arguments() -> None:
     settings = RuntimeSettings(
         agent="goose",
         options={
-            "model": "gemini-3-flash-preview",
+            "model": "gemini-3.8-flash",
             "provider": "gemini_oauth",
             "max_turns": 2,
             "extra_args": ("--debug",),
@@ -295,7 +295,7 @@ def test_build_command_arguments() -> None:
     assert "--with-builtin" in cmd
     assert "skills" in cmd
     assert "--model" in cmd
-    assert "gemini-3-flash-preview" in cmd
+    assert "gemini-3.8-flash" in cmd
     assert "--provider" in cmd
     assert "gemini_oauth" in cmd
     assert "--debug" in cmd
@@ -481,19 +481,19 @@ def test_goose_runtime_initializes_base_attributes() -> None:
 def test_goose_generator_command_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify GooseGenerator command line assembly, environment, and schema formatting."""
     opts = GooseOptions(
-        model="gemini-3-flash-preview",
+        model="gemini-3.8-flash",
         provider="google",
         api_key="test-secret-key",
         no_profile=True,
     )
-    generator = GooseGenerator(model="gemini-3-flash-preview", options=opts)
+    generator = GooseGenerator(model="gemini-3.8-flash", options=opts)
 
     cmd = generator.build_completion_command("test prompt")
     assert cmd[:6] == ["goose", "run", "-q", "-i", "-", "--no-session"]
     assert "-t" not in cmd
     assert "--no-profile" in cmd
     assert "--model" in cmd
-    assert cmd[cmd.index("--model") + 1] == "gemini-3-flash-preview"
+    assert cmd[cmd.index("--model") + 1] == "gemini-3.8-flash"
     assert "--provider" in cmd
     assert cmd[cmd.index("--provider") + 1] == "google"
 
@@ -521,3 +521,66 @@ def test_goose_generator_command_and_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured["env"]["OTEL_SDK_DISABLED"] == "true"
     assert "Respond with valid JSON adhering to this JSON schema:" in captured["input"]
     assert "-t" not in captured["command"]
+
+
+def test_parse_goose_output_prompt_tokens_and_gemini_provider_normalization() -> None:
+    """Verify parse_goose_output extracts prompt_tokens and maps gemini-* to google."""
+    from reach.runtime.goose import (
+        GooseGenerator,
+        GooseOptions,
+        GooseRuntime,
+        _extract_goose_metadata,
+        parse_goose_output,
+    )
+
+    assert GooseOptions(provider="gemini").provider == "google"
+
+    rt = GooseRuntime(RuntimeSettings(agent="goose", options={"model": "gemini-3.8-flash"}))
+    cmd = rt.build_command("test query")
+    assert "--provider" in cmd
+    assert cmd[cmd.index("--provider") + 1] == "google"
+
+    rt_explicit = GooseRuntime(
+        RuntimeSettings(agent="goose", options={"model": "gemini-3.8-flash", "provider": "gemini"})
+    )
+    assert rt_explicit.options.provider == "google"
+    cmd_explicit = rt_explicit.build_command("test query")
+    assert cmd_explicit[cmd_explicit.index("--provider") + 1] == "google"
+
+    gen = GooseGenerator(model="gemini-3.8-flash")
+    gen_cmd = gen.build_completion_command("draft queries")
+    assert "--provider" in gen_cmd
+    assert gen_cmd[gen_cmd.index("--provider") + 1] == "google"
+
+    assert _extract_goose_metadata({"input_tokens": -5, "cost_usd": 0.01}) == (None, None)
+
+    payload = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolRequest",
+                        "toolCall": {
+                            "value": {
+                                "name": "load_skill",
+                                "arguments": {"name": "alpha"},
+                            }
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {
+            "total_tokens": 755,
+            "input_tokens": 700,
+            "output_tokens": 30,
+            "cache_read_input_tokens": 20,
+            "cache_write_input_tokens": 5,
+            "cost_usd": 0.00064,
+        },
+    }
+    summary = parse_goose_output(payload, resident=("alpha",))
+    assert summary.invoked_skills == ("alpha",)
+    assert summary.prompt_tokens == 725
+    assert summary.cost_usd == pytest.approx(0.00064)

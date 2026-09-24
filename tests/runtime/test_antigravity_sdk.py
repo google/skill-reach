@@ -1845,3 +1845,43 @@ def test_select_async_hook_rewrites_skill_directory_to_skill_md_for_multi_turn_r
     report = classification_report([result], [query])
     assert report.entrypoint_hits == 0
     assert report.trajectory_hits == 1
+
+
+def test_suppress_retryable_step_warnings_filters_503_unless_debug() -> None:
+    """Verify _suppress_retryable_step_warnings filters 503 and 429 root warnings unless DEBUG."""
+    import logging
+
+    from reach.runtime.antigravity_sdk import _suppress_retryable_step_warnings
+
+    root_logger = logging.getLogger()
+    orig_level = root_logger.level
+    records: list[logging.LogRecord] = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _ListHandler()
+    root_logger.addHandler(handler)
+    try:
+        root_logger.setLevel(logging.WARNING)
+        with _suppress_retryable_step_warnings():
+            root_logger.warning(
+                "System step error (HTTP 503): Encountered retryable error from model provider."
+            )
+            root_logger.warning("System step error (HTTP 503): Service Unavailable")
+            root_logger.warning("System step error (HTTP 429): Too Many Requests")
+            root_logger.warning("Unrelated warning message")
+        assert [r.getMessage() for r in records] == ["Unrelated warning message"]
+
+        records.clear()
+        root_logger.setLevel(logging.DEBUG)
+        with _suppress_retryable_step_warnings():
+            root_logger.warning(
+                "System step error (HTTP 503): Encountered retryable error from model provider."
+            )
+        assert len(records) == 1
+        assert "HTTP 503" in records[0].getMessage()
+    finally:
+        root_logger.removeHandler(handler)
+        root_logger.setLevel(orig_level)

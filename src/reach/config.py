@@ -83,7 +83,7 @@ BUILTIN_AGENT_DEFAULT_MODELS: dict[str, str] = {
     "antigravity-cli": DEFAULT_GEMINI_MODEL,
     "antigravity-sdk": DEFAULT_GEMINI_MODEL,
     "claude-code": DEFAULT_CLAUDE_MODEL,
-    "goose": "gemini-3.6-flash",
+    "goose": DEFAULT_GEMINI_MODEL,
     "pi": DEFAULT_GEMINI_MODEL,
 }
 
@@ -660,6 +660,12 @@ class PlanSettings(BaseModel):
     backoff_s: float = Field(default=5.0, ge=0)
     pause_s: float = Field(default=0.0, ge=0)
     workers: int = Field(default=1, ge=1)
+
+    def resolve_sweep_attempts(self, cli_attempts: int | None = None) -> int:
+        """Return effective sweep attempts, defaulting to 1 unless explicitly configured."""
+        if cli_attempts is not None:
+            return cli_attempts
+        return self.attempts if "attempts" in self.model_fields_set else 1
 
 
 class StudySettings(BaseModel):

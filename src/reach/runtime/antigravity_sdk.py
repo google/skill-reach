@@ -19,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import threading
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
@@ -201,6 +203,46 @@ _HTTP_TOO_MANY_REQUESTS = 429
 
 
 _HTTP_ERROR_THRESHOLD = 400
+
+
+class _SuppressRetryableStepErrorFilter(logging.Filter):
+    """Filter transient retryable SDK step warnings unless root logger is at DEBUG level."""
+
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False for transient retryable step warnings unless DEBUG logging is enabled."""
+        if record.levelno != logging.WARNING:
+            return True
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            return True
+        msg = record.getMessage()
+        if "System step error" not in msg:
+            return True
+        lower_msg = msg.lower()
+        return not any(token in lower_msg for token in ("retryable error", "http 503", "http 429"))
+
+
+_RETRYABLE_STEP_FILTER = _SuppressRetryableStepErrorFilter()
+_FILTER_LOCK = threading.Lock()
+_FILTER_REFCOUNT = 0
+
+
+@contextlib.contextmanager
+def _suppress_retryable_step_warnings() -> Iterator[None]:
+    """Attach _SuppressRetryableStepErrorFilter to the root logger while SDK calls are active."""
+    global _FILTER_REFCOUNT  # noqa: PLW0603
+    root_logger = logging.getLogger()
+    with _FILTER_LOCK:
+        if _FILTER_REFCOUNT == 0 and _RETRYABLE_STEP_FILTER not in root_logger.filters:
+            root_logger.addFilter(_RETRYABLE_STEP_FILTER)
+        _FILTER_REFCOUNT += 1
+    try:
+        yield
+    finally:
+        with _FILTER_LOCK:
+            _FILTER_REFCOUNT = max(0, _FILTER_REFCOUNT - 1)
+            if _FILTER_REFCOUNT == 0 and _RETRYABLE_STEP_FILTER in root_logger.filters:
+                root_logger.removeFilter(_RETRYABLE_STEP_FILTER)
 
 
 _DIR_READ_ERR_PATTERN = re.compile(r"read\s+([^\r\n]+?):\s*is a directory", flags=re.IGNORECASE)
@@ -713,26 +755,27 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
         stop_reason: Any = "END_TURN"
 
         try:
-            async with Agent(config) as agent:
-                agent_holder.append(agent)
-                try:
-                    response = await agent.chat(query_text)
-                    data = await response.structured_output()
-                    text_fn: Any = getattr(response, "text", None)
-                    raw_text = await text_fn() if text_fn is not None else None
-                    text_out = str(raw_text).strip() if isinstance(raw_text, str) else ""
-                    stream_tools = [_tool_name(call.name) async for call in response.tool_calls]
-                    stop_reason = getattr(response, "stop_reason", "END_TURN")
-                except (Exception, asyncio.CancelledError):
-                    if not tracker.early_exit_hit:
-                        raise
-                observed_tools, history_error = _inspect_conversation_history(
-                    agent,
-                    self._resident,
-                    tracker,
-                    stream_tools or hook_observed_tools,
-                    post_step_ran=bool(post_step_seen),
-                )
+            with _suppress_retryable_step_warnings():
+                async with Agent(config) as agent:
+                    agent_holder.append(agent)
+                    try:
+                        response = await agent.chat(query_text)
+                        data = await response.structured_output()
+                        text_fn: Any = getattr(response, "text", None)
+                        raw_text = await text_fn() if text_fn is not None else None
+                        text_out = str(raw_text).strip() if isinstance(raw_text, str) else ""
+                        stream_tools = [_tool_name(call.name) async for call in response.tool_calls]
+                        stop_reason = getattr(response, "stop_reason", "END_TURN")
+                    except (Exception, asyncio.CancelledError):
+                        if not tracker.early_exit_hit:
+                            raise
+                    observed_tools, history_error = _inspect_conversation_history(
+                        agent,
+                        self._resident,
+                        tracker,
+                        stream_tools or hook_observed_tools,
+                        post_step_ran=bool(post_step_seen),
+                    )
         except (AntigravityValidationError, Exception) as err:
             if isinstance(err, RuntimeError):
                 raise
@@ -804,17 +847,29 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe and return SelectionOutcome."""
+        import time
+
+        t0 = time.monotonic()
         try:
-            return _run_sync(
-                asyncio.wait_for(
-                    self._select_async(query_text, workdir, target_skill=target_skill),
-                    timeout=self.timeout_s,
-                ),
-            )
-        except TimeoutError:
-            return SelectionOutcome(error="timeout", observed_catalog=self._resident)
-        except Exception as exc:  # noqa: BLE001
-            return SelectionOutcome(error=str(exc), observed_catalog=self._resident)
+            try:
+                outcome = _run_sync(
+                    asyncio.wait_for(
+                        self._select_async(query_text, workdir, target_skill=target_skill),
+                        timeout=self.timeout_s,
+                    ),
+                )
+            except TimeoutError:
+                outcome = SelectionOutcome(
+                    error="timeout",
+                    observed_catalog=self._resident,
+                )
+            except Exception as exc:  # noqa: BLE001
+                outcome = SelectionOutcome(
+                    error=str(exc),
+                    observed_catalog=self._resident,
+                )
+            elapsed_ms = max(1, int((time.monotonic() - t0) * 1000))
+            return outcome.model_copy(update={"duration_ms": outcome.duration_ms or elapsed_ms})
         finally:
             self.post_probe(workdir)
 
@@ -895,30 +950,31 @@ class AntigravitySdkGenerator(_AntigravitySdkConfigMixin, BaseTextGenerator[Anti
                 kwargs["capabilities"] = caps
 
             config = LocalAgentConfig(**kwargs)
-            async with Agent(config) as agent:
-                response = await agent.chat(prompt)
-                if schema_dict is not None:
-                    attr = getattr(response, "structured_output", None)
-                    structured = attr() if callable(attr) else attr
-                    if asyncio.iscoroutine(structured):
-                        structured = await structured
-                    if structured is not None:
-                        if hasattr(structured, "model_dump_json"):
-                            return structured.model_dump_json()
-                        if hasattr(structured, "model_dump"):
-                            return json.dumps(structured.model_dump())
-                        return json.dumps(structured)
-                    err_msg = _extract_history_error(agent) or (
-                        "empty structured output (likely rate-limited)"
-                    )
-                    raise ValueError(err_msg)
-                text_out = await response.text()
-                if not (text_out or "").strip():
-                    err_msg = _extract_history_error(agent) or (
-                        "empty response (likely rate-limited)"
-                    )
-                    raise ValueError(err_msg)
-                return text_out
+            with _suppress_retryable_step_warnings():
+                async with Agent(config) as agent:
+                    response = await agent.chat(prompt)
+                    if schema_dict is not None:
+                        attr = getattr(response, "structured_output", None)
+                        structured = attr() if callable(attr) else attr
+                        if asyncio.iscoroutine(structured):
+                            structured = await structured
+                        if structured is not None:
+                            if hasattr(structured, "model_dump_json"):
+                                return structured.model_dump_json()
+                            if hasattr(structured, "model_dump"):
+                                return json.dumps(structured.model_dump())
+                            return json.dumps(structured)
+                        err_msg = _extract_history_error(agent) or (
+                            "empty structured output (likely rate-limited)"
+                        )
+                        raise ValueError(err_msg)
+                    text_out = await response.text()
+                    if not (text_out or "").strip():
+                        err_msg = _extract_history_error(agent) or (
+                            "empty response (likely rate-limited)"
+                        )
+                        raise ValueError(err_msg)
+                    return text_out
 
         try:
             text = _run_sync(asyncio.wait_for(_complete_async(), timeout=self.timeout_s))

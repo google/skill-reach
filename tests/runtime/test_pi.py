@@ -613,3 +613,36 @@ def test_pi_generator_includes_valid_thinking() -> None:
     cmd = gen.build_completion_command("test")
     assert "--thinking" in cmd
     assert cmd[cmd.index("--thinking") + 1] == "low"
+
+
+def test_parse_session_entries_extracts_prompt_tokens() -> None:
+    """Verify parse_session_entries extracts prompt_tokens and cost_usd via PiUsage."""
+    from reach.runtime.pi import parse_session_entries
+
+    entries = [
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "model": "gemini-3.8-flash",
+                "usage": {
+                    "input": 8500,
+                    "output": 12,
+                    "cacheRead": 70,
+                    "cacheWrite": 4,
+                    "cost": {"total": 0.0065},
+                },
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "name": "read",
+                        "arguments": {"path": ".pi/skills/alpha/SKILL.md"},
+                    }
+                ],
+            },
+        }
+    ]
+    summary = parse_session_entries(entries, resident=("alpha",))
+    assert summary.invoked_skills == ("alpha",)
+    assert summary.prompt_tokens == 8574
+    assert summary.cost_usd == pytest.approx(0.0065)

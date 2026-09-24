@@ -1272,7 +1272,7 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
         skills=skills,
         query_set=qs,
         target_skill="skill-00",
-        scales=(12, 25, 50),
+        scales=(12, 25, 50, 70),
         workers=16,
         runtime=runtime,
         on_scale_complete=on_step,
@@ -1830,3 +1830,85 @@ def test_resolve_anchor_skills_unclamped_computes_full_corpus_medoids(
     )
     assert unclamped is not None
     assert len(unclamped) == 3
+
+
+@pytest.mark.parametrize(
+    ("base_config", "cli_attempts", "expected"),
+    [
+        pytest.param(RunConfig(), None, 1, id="unset-defaults-to-1"),
+        pytest.param(
+            RunConfig(plan=PlanSettings(attempts=3)),
+            None,
+            3,
+            id="explicit-config-respected",
+        ),
+        pytest.param(RunConfig(plan=PlanSettings(attempts=3)), 2, 2, id="cli-override-precedence"),
+    ],
+)
+def test_prepare_sweep_config_defaults_attempts_to_1_unless_explicit(
+    base_config: RunConfig,
+    cli_attempts: int | None,
+    expected: int,
+) -> None:
+    """Verify _prepare_sweep_config defaults attempts=1 unless explicitly set via CLI or config."""
+    from reach.sweep import _prepare_sweep_config
+
+    resolved_cfg = _prepare_sweep_config(base_config, attempts=cli_attempts, early_stop=None)
+    assert resolved_cfg.plan.attempts == expected
+
+
+def test_run_scaling_sweep_early_aborts_on_100_percent_runtime_errors_at_first_scale(
+    tmp_path: Path,
+) -> None:
+    """Verify run_scaling_sweep aborts after scale 1 when all probes error out."""
+    from reach.runtime import SelectionOutcome
+
+    skills_dir = tmp_path / "skills"
+    _create_mock_skills(skills_dir, 6)
+
+    queries = [
+        Query(
+            id=f"q-{i}",
+            text=f"Requesting task number {i:02d}",
+            expected_skill=f"skill-{i:02d}",
+            kind=QueryKind.IMPLICIT,
+        )
+        for i in range(6)
+    ]
+    q_file = tmp_path / "queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="synthetic",
+            queries=tuple(queries),
+            provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        ),
+        q_file,
+    )
+
+    config = RunConfig(
+        study=StudySettings(
+            skills=skills_dir,
+            queries=q_file,
+            workdir=tmp_path / "ws",
+            early_stop=True,
+        ),
+        plan=PlanSettings(retries=0),
+        catalog=CatalogSettings(mode=CatalogMode.SWEEP),
+    )
+
+    crashing_runtime = FakeRuntime(
+        default=SelectionOutcome(error="Provider gemini is not supported"),
+        model="mock-model",
+    )
+
+    study = run_scaling_sweep(
+        config=config,
+        target_skill=None,
+        scales=(2, 4, 6),
+        runtime=crashing_runtime,
+    )
+
+    assert len(study.points) == 1
+    assert study.points[0].scale == 2
+    assert study.points[0].probes_executed == 2
+    assert study.points[0].probes_errored == 2

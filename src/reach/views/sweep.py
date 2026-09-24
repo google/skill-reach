@@ -150,11 +150,12 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         f1_ci_str = f"[{pt.f1_interval[0] * 100:.1f}%-{pt.f1_interval[1] * 100:.1f}%]"
         shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
         tok_str = f"{pt.prompt_tokens_mean:,.0f}" if pt.prompt_tokens_mean is not None else "—"
-        probes_str = (
+        base_probes_str = (
             f"{pt.in_scope_probes}/{pt.negative_probes}"
             if has_negatives
             else str(pt.in_scope_probes)
         )
+        probes_cell = _format_probes_cell(base_probes_str, pt.probes_errored)
         if pt.duration_ms_mean <= 0:
             dur_str = "—"
         elif compact_cols:
@@ -181,7 +182,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             elided = pt.disclosure_states.get("name_only_elided", 0)
             total_p = max(1, pt.probes_executed)
             row.append(f"{round(elided * 100 / total_p)}% ({elided})")
-        row.extend([tok_str, probes_str, dur_str])
+        row.extend([tok_str, probes_cell, dur_str])
         table.add_row(*row)
 
     console.print(table)
@@ -192,6 +193,13 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         console.print()
         for line in render_ascii_curve(study.points, metric="f1"):
             console.print(Text(line, style="dim"))
+
+
+def _format_probes_cell(base_probes_str: str, probes_errored: int) -> str | Text:
+    """Format the Probes table cell, highlighting runtime errors in red when present."""
+    if probes_errored > 0:
+        return Text(f"{base_probes_str} ({probes_errored} err)", style="red")
+    return base_probes_str
 
 
 def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
@@ -241,6 +249,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         ctx_str = f"{pt.delta_context * 100:+.1f}%" if pt.delta_context != 0 else "0.0%"
         shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
         probes_str = f"{pt.probes_executed - pt.probes_failed}/{pt.probes_executed}"
+        probes_cell = _format_probes_cell(probes_str, pt.probes_errored)
         dur_str = f"{pt.duration_ms_mean:.0f}ms" if pt.duration_ms_mean > 0 else "—"
 
         table.add_row(
@@ -250,7 +259,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             tot_str,
             ctx_str,
             shd_str,
-            probes_str,
+            probes_cell,
             dur_str,
         )
 
@@ -270,6 +279,13 @@ def print_sweep(console: Console, study: ScalingStudy) -> None:
         _print_corpus_capacity_sweep(console, study)
     else:
         _print_single_skill_sweep(console, study)
+    total_failed = sum(pt.probes_errored for pt in study.points)
+    if total_failed > 0:
+        total_exec = sum(pt.probes_executed for pt in study.points)
+        console.print(
+            f"\n[yellow]Warning:[/] {total_failed} of {total_exec} probe(s) failed due to "
+            "runtime or agent errors across evaluated scales."
+        )
 
 
 _ZOOM_HIGH_THRESHOLD: float = 0.75

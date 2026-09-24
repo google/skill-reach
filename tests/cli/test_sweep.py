@@ -187,10 +187,10 @@ def test_sweep_json_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
     data = json.loads(out)
     assert data["is_corpus_sweep"] is True
     assert "points" in data
-    # resolve_sweep_scales appends total skills (6) if not already included
-    assert len(data["points"]) == 3
+    # resolve_sweep_scales preserves explicit scales (1, 3) without appending total skills (6)
+    assert len(data["points"]) == 2
     assert data["points"][0]["scale"] == 1
-    assert data["points"][-1]["scale"] == 6
+    assert data["points"][-1]["scale"] == 3
     assert data["points"][0]["abstention_rate"] is None
     assert data["points"][0]["prompt_tokens_mean"] is None
 
@@ -334,7 +334,7 @@ def test_sweep_custom_attempts_executes_expected_probe_count(
     assert exit_code == 0
     out = capsys.readouterr().out
     data = json.loads(out)
-    assert len(data["points"]) == 2  # scale 1 and scale 6 (total skills)
+    assert len(data["points"]) == 1  # scale 1 (exact requested scale)
     # Target skill has 1 query, with attempts=3, 3 probes should be executed
     assert data["points"][0]["probes_executed"] == 3
 
@@ -394,7 +394,7 @@ def test_sweep_out_flag_writes_file(
     assert out_json.exists()
     saved = json.loads(out_json.read_text(encoding="utf-8"))
     assert "points" in saved
-    assert len(saved["points"]) == 3
+    assert len(saved["points"]) == 2
 
     # Verify console notification
     captured = capsys.readouterr()
@@ -1308,3 +1308,64 @@ def test_sweep_auto_queries_refreshes_stale_anchor_skills(
     assert "Outdated query for skill 05 before body edit" not in texts
     skill_05 = Skill(name="skill-05", description="Desc 5", path=corpus_dir / "skill-05")
     assert updated_qs.provenance.skill_digests["skill-05"] == skill_body_digest(skill_05)
+
+
+@pytest.mark.parametrize(
+    ("is_corpus", "target_skill", "expected_cell"),
+    [
+        pytest.param(True, None, "10 (10 err)", id="corpus-sweep"),
+        pytest.param(False, "skill-00", "0/10 (10 err)", id="single-skill-sweep"),
+    ],
+)
+def test_print_sweep_displays_errored_probes_and_warning_banner(
+    is_corpus: bool,
+    target_skill: str | None,
+    expected_cell: str,
+) -> None:
+    """Verify print_sweep renders (N err) in Probes column and prints warning banner."""
+    import io
+
+    from rich.console import Console
+
+    from reach.sweep import ScalingPoint, ScalingStudy
+    from reach.views.sweep import print_sweep
+
+    buf = io.StringIO()
+    console = Console(file=buf, width=120, force_terminal=False)
+    study = ScalingStudy(
+        target_skill=target_skill,
+        is_corpus_sweep=is_corpus,
+        scales=(10,),
+        points=(
+            ScalingPoint(
+                scale=10,
+                catalog_id="sweep:corpus:10",
+                pass_rate=0.0,
+                pass_rate_interval=(0.0, 0.27),
+                recall=0.0,
+                precision=1.0,
+                f1_score=0.0,
+                f1_interval=(0.0, 0.0),
+                in_scope_probes=10,
+                negative_probes=0,
+                delta_vs_baseline=0.0,
+                delta_context=0.0,
+                delta_shadowing=0.0,
+                probes_executed=10,
+                probes_failed=10,
+                probes_errored=10,
+                duration_ms_mean=150.0,
+            ),
+        ),
+        baseline_pass_rate=0.0,
+        final_pass_rate=0.0,
+        total_delta=0.0,
+        total_context_loss=0.0,
+        total_shadowing_loss=0.0,
+        noise_floor=0.05,
+        total_corpus_skills=147,
+    )
+    print_sweep(console, study)
+    rendered = buf.getvalue()
+    assert expected_cell in rendered
+    assert "Warning: 10 of 10 probe(s) failed due to runtime or agent errors" in rendered
