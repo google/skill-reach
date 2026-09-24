@@ -16,7 +16,7 @@
 
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -43,8 +43,6 @@ __all__ = [
     "Origin",
     "QuerySet",
     "QuerySetProvenance",
-    "SkillDigestHex",
-    "SkillNameKey",
     "format_skill_sample",
     "format_sync_counts",
     "load_query_set",
@@ -59,7 +57,7 @@ SkillDigestHex = Annotated[
 
 
 def format_sync_counts(missing_count: int, stale_count: int) -> str:
-    """Format human-readable missing and updated skill count breakdown."""
+    """Return a human-readable missing and updated skill count summary."""
     parts: list[str] = []
     if missing_count:
         parts.append(f"{missing_count} missing")
@@ -69,7 +67,7 @@ def format_sync_counts(missing_count: int, stale_count: int) -> str:
 
 
 def format_skill_sample(names: Sequence[str], *, limit: int = 5) -> str:
-    """Format a truncated comma-separated sample of skill names."""
+    """Return a truncated comma-separated sample of skill names."""
     sample = ", ".join(names[:limit])
     more = f", +{len(names) - limit} more" if len(names) > limit else ""
     return f"{sample}{more}"
@@ -79,12 +77,18 @@ def _is_generated_for_skill(query: Query, skill_names: frozenset[str]) -> bool:
     """Return True when a positive or adversarial query belongs to one of `skill_names`."""
     if query.expected_skill in skill_names:
         return True
-    adv_prefixes = tuple(f"adv-{name}-" for name in skill_names)
-    return bool(adv_prefixes) and query.id.startswith(adv_prefixes)
+    if not query.id.startswith("adv-"):
+        return False
+    remainder = query.id.removeprefix("adv-")
+    for name in skill_names:
+        prefix = f"{name}-"
+        if remainder.startswith(prefix) and remainder.removeprefix(prefix).isdigit():
+            return True
+    return False
 
 
 class Origin(StrEnum):
-    """Enumerate origins of query sets."""
+    """Define origins of query sets."""
 
     AUTHORED = "authored"
     GENERATED = "generated"
@@ -124,7 +128,7 @@ class QuerySetProvenance(BaseModel):
         drafted_targets: Iterable[str] = (),
         covered_targets: Iterable[str] = (),
         bodies_hash: str | None = None,
-        extra_updates: dict[str, object] | None = None,
+        extra_updates: Mapping[str, object] | None = None,
     ) -> Self:
         """Return a validated copy with updated `skill_digests` for `drafted_targets`."""
         from reach.generate import bodies_digest, skill_body_digest
@@ -200,10 +204,10 @@ class QuerySet(BaseModel):
         """Return covered skill names whose markdown body differs from recorded provenance SHA."""
         from reach.generate import skill_body_digest
 
+        if self.provenance is None or not self.provenance.skill_digests:
+            return frozenset()
         covered = self.covered_skills()
         recorded = self.provenance.skill_digests
-        if not recorded:
-            return frozenset()
         return frozenset(
             s.name
             for s in skills
@@ -235,11 +239,12 @@ class QuerySet(BaseModel):
         drafted_targets: Iterable[str] = (),
         covered_targets: Iterable[str] = (),
         bodies_hash: str | None = None,
-        extra_updates: dict[str, object] | None = None,
+        extra_updates: Mapping[str, object] | None = None,
     ) -> Self:
         """Return a copy with `provenance.skill_digests` updated for `drafted_targets`."""
         effective_covered = frozenset(covered_targets) or self.covered_skills()
-        updated_prov = self.provenance.with_updated_digests(
+        base_prov = self.provenance or QuerySetProvenance(origin=Origin.GENERATED)
+        updated_prov = base_prov.with_updated_digests(
             skills,
             drafted_targets=drafted_targets,
             covered_targets=effective_covered,

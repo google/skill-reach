@@ -985,11 +985,14 @@ class DraftCheckpoint(BaseModel):
 
 def skill_body_digest(skill: Skill) -> str:
     """Calculate a 12-character SHA-256 digest of a single skill's markdown body."""
-    skill_file = skill.path / "SKILL.md"
+    skill_file = (skill.path / "SKILL.md").resolve()
     if skill_file.is_file():
-        raw = skill_file.read_text(encoding="utf-8")
-        split = split_frontmatter(raw)
-        body = split[1].strip() if split is not None else raw.strip()
+        try:
+            raw = skill_file.read_text(encoding="utf-8", errors="replace")
+            split = split_frontmatter(raw)
+            body = split[1].strip() if split is not None else raw.strip()
+        except OSError:
+            body = skill.description.strip()
     else:
         body = skill.description.strip()
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]

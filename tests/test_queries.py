@@ -922,6 +922,26 @@ def test_provenance_skill_digests_string_constraints_and_partial_sync(
     assert updated_prov.skill_digests["skill-a"] == "old-recorded-sha"
     assert updated_prov.skill_digests["skill-b"] == skill_body_digest(skill_b)
 
+    # 3. without_skills('cloud') prunes adv-cloud-01 without pruning adv-cloud-run-01
+    qs_prefix = QuerySet(
+        queries=(
+            Query(
+                id="adv-cloud-01",
+                text="t1",
+                expected_skill="other",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                id="adv-cloud-run-01",
+                text="t2",
+                expected_skill="other",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+        ),
+    )
+    pruned_prefix = qs_prefix.without_skills(("cloud",))
+    assert [q.id for q in pruned_prefix.queries] == ["adv-cloud-run-01"]
+
 
 def _invoke_draft_cli(
     skills_dir: Path,

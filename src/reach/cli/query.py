@@ -289,6 +289,8 @@ def _print_out_of_sync_view_warning(
 
 def _format_existing_destination_sync_hint(destination: Path, settings: RunConfig) -> str:
     """Inspect existing query set on disk and return an out-of-sync count suffix if applicable."""
+    from pydantic import ValidationError
+
     from reach.queries import format_sync_counts
 
     try:
@@ -302,8 +304,8 @@ def _format_existing_destination_sync_hint(destination: Path, settings: RunConfi
         counts = format_sync_counts(len(missing_c), len(stale_c))
         if counts:
             return f" ({counts} skill(s) out of sync)"
-    except Exception:  # noqa: BLE001, S110
-        pass
+    except (OSError, ValueError, ValidationError):
+        return ""
     return ""
 
 
@@ -502,7 +504,10 @@ def _resolve_sync_targets(
     stale_list = tuple(s.name for s in candidate_skills if s.name in stale_names)
     sync_targets = tuple(dict.fromkeys(missing_list + stale_list))
     if not sync_targets:
-        if existing_query_set.provenance.origin == Origin.GENERATED:
+        if (
+            existing_query_set.provenance is not None
+            and existing_query_set.provenance.origin == Origin.GENERATED
+        ):
             candidate_covered = frozenset(
                 s.name for s in candidate_skills if s.name in covered_names
             )
