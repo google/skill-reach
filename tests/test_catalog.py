@@ -657,12 +657,15 @@ def test_resolve_sweep_scales() -> None:
 
     # Explicit requested overrides are respected and clamped to total_skills
     assert resolve_sweep_scales(14, requested=(1, 5, 10, 20)) == (1, 5, 10, 14)
-    assert resolve_sweep_scales(100, requested=(5, 15, 30)) == (5, 15, 30, 100)
+    assert resolve_sweep_scales(100, requested=(5, 15, 30)) == (5, 15, 30)
     assert resolve_sweep_scales(100, requested=(100,)) == (100,)
     assert resolve_sweep_scales(50, requested=(10, 20, 150)) == (10, 20, 50)
 
     with pytest.raises(ValueError, match="total_skills must be positive"):
         resolve_sweep_scales(0)
+
+    with pytest.raises(ValueError, match="must specify integers >= 1"):
+        resolve_sweep_scales(10, requested=(0, -5))
 
 
 def test_build_scaling_catalogs(tmp_path: Path) -> None:

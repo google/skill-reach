@@ -69,7 +69,7 @@ Reach provides two levels of integration across the AI agent ecosystem:
 
 - **Anthropic Claude Code** (`--agent claude-code`): Live multi-turn evaluation and prompt listing budget checks via the `claude` CLI. Supports Google Cloud Model Garden on Agent Platform.
 - **Google Antigravity** (`--agent antigravity-cli`, `--agent antigravity-sdk`): Live sandboxed evaluation and structured output validation via the `agy` CLI or native Python SDK. Supports Gemini API or Google Cloud Agent Platform.
-- **Goose** (`--agent goose`): Live autonomous agent evaluation via the `goose` CLI ([`aaif-goose/goose`](https://github.com/aaif-goose/goose)). Supports native Gemini models (e.g. `gemini-3.6-flash`, `gemini-3.1-flash-lite`).
+- **Goose** (`--agent goose`): Live autonomous agent evaluation via the `goose` CLI ([`aaif-goose/goose`](https://github.com/aaif-goose/goose)).
 - **Pi Agent Harness** (`--agent pi`): Live single-turn and multi-turn evaluation via the headless `pi` CLI ([`earendil-works/pi`](https://github.com/earendil-works/pi)) with progressive disclosure skill loading.
 - **Lexical Baseline**: `--agent keyword` (in-memory lexical BM25 matching driver that evaluates prompt routing without subprocesses, tools, or API tokens).
 

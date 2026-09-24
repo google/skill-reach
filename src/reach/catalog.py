@@ -512,9 +512,12 @@ def resolve_sweep_scales(
     if not requested:
         return generate_log_scales(total_skills)
 
-    scales = sorted({s for s in requested if 1 <= s < total_skills})
-    if total_skills not in scales:
-        scales.append(total_skills)
+    scales = sorted({min(s, total_skills) for s in requested if s >= 1})
+    if not scales:
+        msg = (
+            f"No valid sweep scales resolved from requested={requested}; must specify integers >= 1"
+        )
+        raise ValueError(msg)
     return tuple(scales)
 
 

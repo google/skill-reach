@@ -224,9 +224,9 @@ skills_dir = ".claude/skills"
 user_skills_dir = ".claude/skills"
 
 [agents.goose]
-default_model = "gemini-3.6-flash"
+default_model = "gemini-3.8-flash"
 executable = "goose"
-models = ["gemini-3.6-flash", "gemini-3.1-flash-lite"]
+models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite"]
 skills_dir = ".agents/skills"
 user_skills_dir = ".agents/skills"
 

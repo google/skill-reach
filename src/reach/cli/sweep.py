@@ -463,11 +463,19 @@ def _sweep(
                 if partial_study.is_corpus_sweep
                 else f"recall={point.recall:.1%}"
             )
+            failed_suffix = (
+                f", [red]{point.probes_errored} errored[/]" if point.probes_errored > 0 else ""
+            )
             console.print(
                 f"  [dim]\\[{step}/{total}][/] Scale [bold]K={point.scale}[/]: "
                 f"pass_rate={point.pass_rate:.1%}, {secondary} "
-                f"[dim]({point.probes_executed} probes)[/]"
+                f"[dim]({point.probes_executed} probes{failed_suffix})[/]"
             )
+            if early_stop and step == 1 and total > 1 and point.all_probes_errored:
+                console.print(
+                    f"  [red]Aborting sweep:[/] all {point.probes_executed} probe(s) failed "
+                    f"at initial scale K={point.scale}."
+                )
 
     try:
         study = run_scaling_sweep(
@@ -576,20 +584,23 @@ def _prepare_and_confirm_sweep(
             query_set=fresh_qs,
         )
         if driver.rations_catalog and allow_truncation and found:
+            actual_scales_fit = resolve_sweep_scales(len(found), scales)
+            max_scale = max(actual_scales_fit) if actual_scales_fit else len(found)
+            fit_skills = found[:max_scale]
             fit = driver.fit(
                 Catalog(
-                    id="sweep:corpus:full",
+                    id=f"sweep:corpus:{max_scale}",
                     mode=CatalogMode.SWEEP,
-                    skills=tuple(s.name for s in found),
+                    skills=tuple(s.name for s in fit_skills),
                 ),
-                found,
+                fit_skills,
             )
             if not fit.whole:
                 console.print(
-                    f"[yellow]Notice:[/] full catalog ({fit.asked:,} chars) exceeds "
-                    f"[bold]{driver.name}[/] listing budget ({fit.allowed:,} chars); "
-                    f"{fit.truncated} of {len(found)} descriptions will be truncated to "
-                    "bare names at higher scales."
+                    f"[yellow]Notice:[/] max sweep catalog ({fit.asked:,} chars at "
+                    f"K={max_scale}) exceeds [bold]{driver.name}[/] listing budget "
+                    f"({fit.allowed:,} chars); {fit.truncated} of {len(fit_skills)} "
+                    "descriptions will be truncated to bare names at higher scales."
                 )
         console.print()
     return 0

@@ -26,7 +26,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
 
 from reach.catalog import (
     CorpusScalingPlan,
@@ -91,8 +91,14 @@ class ScalingPoint(BaseModel):
     delta_shadowing: float
     probes_executed: int
     probes_failed: int = 0
+    probes_errored: NonNegativeInt = 0
     prompt_tokens_mean: float | None = None
     duration_ms_mean: float = 0.0
+
+    @property
+    def all_probes_errored(self) -> bool:
+        """Return True when at least one probe ran and every probe failed with a runtime error."""
+        return self.probes_executed > 0 and self.probes_errored == self.probes_executed
 
 
 class ScalingStudy(BaseModel):
@@ -862,6 +868,7 @@ def _build_scaling_point(
         delta_shadowing=round(decomp_stats.delta_shadowing, 4),
         probes_executed=pass_stats.executed,
         probes_failed=pass_stats.fails,
+        probes_errored=sum(1 for r in results if r.error),
         prompt_tokens_mean=telemetry.prompt_tokens_mean,
         duration_ms_mean=telemetry.duration_ms_mean,
     )
@@ -875,13 +882,12 @@ def _prepare_sweep_config(
 ) -> RunConfig:
     """Apply CLI overrides to execution configuration."""
     cfg = config or RunConfig()
-    plan_update = {"attempts": attempts} if attempts is not None else {}
+    plan_update = {"attempts": cfg.plan.resolve_sweep_attempts(attempts)}
     study_update: dict[str, object] = {}
     if early_stop is not None:
         study_update["early_stop"] = early_stop
 
-    if plan_update:
-        cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
+    cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
         cfg = cfg.model_copy(update={"study": cfg.study.model_copy(update=study_update)})
     return cfg
@@ -1228,6 +1234,9 @@ def run_scaling_sweep(
                 anchor_skills=resolved_anchors,
             )
             on_scale_complete(step_idx, total_scales, point, partial_study)
+
+        if effective_config.study.early_stop and step_idx == 1 and point.all_probes_errored:
+            break
 
         if (
             effective_config.study.early_stop
