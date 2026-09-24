@@ -14,20 +14,20 @@
 
 """Load, save, and validate labeled evaluation query sets and calculate digests."""
 
-from __future__ import annotations
-
 import hashlib
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     ValidationError,
     model_validator,
 )
@@ -36,22 +36,59 @@ from reach._io import write_model
 from reach.models import Query, QueryKind
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from reach.exchange import FieldMap
+    from reach.models import Skill
 
 __all__ = [
     "Origin",
     "QuerySet",
     "QuerySetProvenance",
+    "format_skill_sample",
+    "format_sync_counts",
     "load_query_set",
     "query_set_digest",
     "save_query_set",
 ]
 
+SkillNameKey = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+SkillDigestHex = Annotated[
+    str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=1)
+]
+
+
+def format_sync_counts(missing_count: int, stale_count: int) -> str:
+    """Return a human-readable missing and updated skill count summary."""
+    parts: list[str] = []
+    if missing_count:
+        parts.append(f"{missing_count} missing")
+    if stale_count:
+        parts.append(f"{stale_count} updated")
+    return ", ".join(parts)
+
+
+def format_skill_sample(names: Sequence[str], *, limit: int = 5) -> str:
+    """Return a truncated comma-separated sample of skill names."""
+    sample = ", ".join(names[:limit])
+    more = f", +{len(names) - limit} more" if len(names) > limit else ""
+    return f"{sample}{more}"
+
+
+def _is_generated_for_skill(query: Query, skill_names: frozenset[str]) -> bool:
+    """Return True when a positive or adversarial query belongs to one of `skill_names`."""
+    if query.expected_skill in skill_names:
+        return True
+    if not query.id.startswith("adv-"):
+        return False
+    remainder = query.id.removeprefix("adv-")
+    for name in skill_names:
+        prefix = f"{name}-"
+        if remainder.startswith(prefix) and remainder.removeprefix(prefix).isdigit():
+            return True
+    return False
+
 
 class Origin(StrEnum):
-    """Enumerate origins of query sets."""
+    """Define origins of query sets."""
 
     AUTHORED = "authored"
     GENERATED = "generated"
@@ -59,7 +96,13 @@ class Origin(StrEnum):
 
 
 class QuerySetProvenance(BaseModel):
-    """Record creation metadata, generator parameters, and review status."""
+    """Record creation metadata, generator settings, per-skill SHA digests, and review status.
+
+    `skill_digests` maps each drafted skill name to a 12-character SHA-256 digest of its
+    `SKILL.md` body (excluding YAML frontmatter `description` so description tuning does
+    not invalidate benchmark queries). `reach query draft --sync` and `reach sweep`
+    compare `skill_digests` against the workspace corpus to detect updated skills.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -71,11 +114,40 @@ class QuerySetProvenance(BaseModel):
     queries_per_target: int | None = None
     rivals_in_view: int | None = None
     bodies_digest: str = ""
+    skill_digests: dict[SkillNameKey, SkillDigestHex] = Field(default_factory=dict)
     config_fingerprint: str = ""
     source: str = ""
     reviewed: bool | None = None
     adversarial: bool | None = None
     adversarial_per_target: int | None = None
+
+    def with_updated_digests(
+        self,
+        skills: Sequence["Skill"],
+        *,
+        drafted_targets: Iterable[str] = (),
+        covered_targets: Iterable[str] = (),
+        bodies_hash: str | None = None,
+        extra_updates: Mapping[str, object] | None = None,
+    ) -> Self:
+        """Return a validated copy with updated `skill_digests` for `drafted_targets`."""
+        from reach.generate import bodies_digest, skill_body_digest
+
+        drafted_set = frozenset(drafted_targets)
+        covered_set = frozenset(covered_targets) | drafted_set
+        merged_digests = dict(self.skill_digests)
+        for skill in skills:
+            if skill.name in drafted_set or (
+                skill.name in covered_set and skill.name not in merged_digests
+            ):
+                merged_digests[skill.name] = skill_body_digest(skill)
+
+        payload = self.model_dump()
+        if extra_updates:
+            payload.update(extra_updates)
+        payload["skill_digests"] = dict(sorted(merged_digests.items()))
+        payload["bodies_digest"] = bodies_hash if bodies_hash is not None else bodies_digest(skills)
+        return type(self).model_validate(payload)
 
 
 class QuerySet(BaseModel):
@@ -127,6 +199,59 @@ class QuerySet(BaseModel):
             for q in self.queries
             if q.expected_skill is not None and q.kind != QueryKind.NEIGHBOR_NEGATIVE
         )
+
+    def stale_skills(self, skills: Sequence["Skill"]) -> frozenset[str]:
+        """Return covered skill names whose markdown body differs from recorded provenance SHA."""
+        from reach.generate import skill_body_digest
+
+        if self.provenance is None or not self.provenance.skill_digests:
+            return frozenset()
+        covered = self.covered_skills()
+        recorded = self.provenance.skill_digests
+        return frozenset(
+            s.name
+            for s in skills
+            if s.name in covered and s.name in recorded and recorded[s.name] != skill_body_digest(s)
+        )
+
+    def out_of_sync_skills(
+        self,
+        skills: Sequence["Skill"],
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """Return (missing_skills, stale_skills) relative to the provided skill corpus."""
+        covered = self.covered_skills()
+        missing = frozenset(s.name for s in skills if s.name not in covered)
+        stale = self.stale_skills(skills)
+        return missing, stale
+
+    def without_skills(self, skill_names: Iterable[str]) -> Self:
+        """Return a copy with positive and adversarial queries for `skill_names` removed."""
+        target_set = frozenset(skill_names)
+        if not target_set:
+            return self
+        retained = tuple(q for q in self.queries if not _is_generated_for_skill(q, target_set))
+        return self.model_copy(update={"queries": retained})
+
+    def with_updated_digests(
+        self,
+        skills: Sequence["Skill"],
+        *,
+        drafted_targets: Iterable[str] = (),
+        covered_targets: Iterable[str] = (),
+        bodies_hash: str | None = None,
+        extra_updates: Mapping[str, object] | None = None,
+    ) -> Self:
+        """Return a copy with `provenance.skill_digests` updated for `drafted_targets`."""
+        effective_covered = frozenset(covered_targets) or self.covered_skills()
+        base_prov = self.provenance or QuerySetProvenance(origin=Origin.GENERATED)
+        updated_prov = base_prov.with_updated_digests(
+            skills,
+            drafted_targets=drafted_targets,
+            covered_targets=effective_covered,
+            bodies_hash=bodies_hash,
+            extra_updates=extra_updates,
+        )
+        return self.model_copy(update={"provenance": updated_prov})
 
 
 def _apply_catalog_id_fallback(parsed: QuerySet, catalog_id: str) -> QuerySet:
@@ -184,7 +309,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
-    mapping: FieldMap | None = None,
+    mapping: "FieldMap | None" = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()

@@ -180,19 +180,26 @@ def _print_anchor_coverage(
         except (OSError, ValueError):
             return
 
+    from reach.queries import format_skill_sample
+
     queried_corpus = raw_qs.covered_skills()
     missing_corpus = sorted(s.name for s in skills if s.name not in queried_corpus)
     if missing_corpus:
-        sample = ", ".join(missing_corpus[:_MAX_SAMPLE_SKILLS])
-        more = (
-            f", +{len(missing_corpus) - _MAX_SAMPLE_SKILLS} more"
-            if len(missing_corpus) > _MAX_SAMPLE_SKILLS
-            else ""
-        )
+        sample = format_skill_sample(missing_corpus, limit=_MAX_SAMPLE_SKILLS)
         console.print(
             f"[yellow]Warning:[/] {len(missing_corpus)} of {len(skills)} corpus skill(s) "
-            f"have 0 queries in [cyan]{queries_path}[/] ([bold]{sample}{more}[/]). "
-            f"Run [bold]reach query draft --missing[/] to backfill."
+            f"have 0 queries in [cyan]{queries_path}[/] ([bold]{sample}[/]). "
+            f"Run [bold]reach query draft --sync[/] to update."
+        )
+
+    stale_corpus = sorted(raw_qs.stale_skills(skills))
+    if stale_corpus:
+        sample_s = format_skill_sample(stale_corpus, limit=_MAX_SAMPLE_SKILLS)
+        console.print(
+            f"[yellow]Warning:[/] {len(stale_corpus)} of {len(skills)} corpus skill(s) "
+            f"have updated bodies since queries were drafted in [cyan]{queries_path}[/] "
+            f"([bold]{sample_s}[/]). "
+            f"Run [bold]reach query draft --sync[/] to refresh."
         )
 
     try:
@@ -490,10 +497,16 @@ def _sweep(
 
 
 class _SweepQueryResolution(NamedTuple):
-    """Hold missing anchor target skill names and cached query set."""
+    """Hold missing and stale anchor target skill names and cached query set."""
 
     missing_targets: tuple[str, ...]
     existing_query_set: QuerySet | None
+    stale_targets: tuple[str, ...] = ()
+
+    @property
+    def sync_targets(self) -> tuple[str, ...]:
+        """Return deduplicated union of missing and stale target skill names."""
+        return tuple(dict.fromkeys(self.missing_targets + self.stale_targets))
 
 
 def _prepare_and_confirm_sweep(
@@ -510,7 +523,7 @@ def _prepare_and_confirm_sweep(
     format: Format,
     yes: bool,
 ) -> int:
-    """Confirm skill execution, draft missing anchor queries, and print preflight notices."""
+    """Confirm skill execution, draft missing/stale anchor queries, and print preflight notices."""
     resolution = (
         _resolve_missing_sweep_targets(
             queries_path=resolved_queries,
@@ -535,13 +548,14 @@ def _prepare_and_confirm_sweep(
         return code
 
     fresh_qs: QuerySet | None = resolution.existing_query_set
-    if resolution.missing_targets:
+    if resolution.sync_targets:
         if code := _draft_missing_sweep_queries(
             console=console,
             effective_config=effective_config,
             found=found,
             resolved_queries=resolved_queries,
             missing_targets=resolution.missing_targets,
+            stale_targets=resolution.stale_targets,
             format=format,
             existing_qs=resolution.existing_query_set,
         ):
@@ -590,7 +604,7 @@ def _resolve_missing_sweep_targets(
     scales: Sequence[int] | None,
     target: str | None,
 ) -> _SweepQueryResolution:
-    """Identify anchor or target skills that lack positive queries in the query file."""
+    """Identify anchor or target skills that are missing or stale in the query file."""
     existing_query_set = load_query_set(queries_path) if queries_path.is_file() else None
     query_set = existing_query_set or QuerySet(queries=())
     if target is not None:
@@ -611,8 +625,10 @@ def _resolve_missing_sweep_targets(
             resolved_anchors if resolved_anchors is not None else tuple(s.name for s in skills)
         )
     queried_names = query_set.covered_skills()
+    stale_names = query_set.stale_skills(skills)
     missing = tuple(name for name in anchor_names if name not in queried_names)
-    return _SweepQueryResolution(missing, existing_query_set)
+    stale = tuple(name for name in anchor_names if name in stale_names)
+    return _SweepQueryResolution(missing, existing_query_set, stale)
 
 
 def _draft_missing_sweep_queries(
@@ -623,19 +639,33 @@ def _draft_missing_sweep_queries(
     resolved_queries: Path,
     missing_targets: tuple[str, ...],
     format: Format,
+    stale_targets: tuple[str, ...] = (),
     existing_qs: QuerySet | None = None,
 ) -> int:
-    """Draft or backfill missing anchor queries and save them to resolved_queries."""
+    """Draft missing anchor queries or refresh stale anchor queries into resolved_queries."""
+    sync_targets = tuple(dict.fromkeys(missing_targets + stale_targets))
     draft_console = console if format == "text" else build_console(quiet=True)
     if format == "text":
-        draft_console.print(
-            f"[dim]Drafting queries for {len(missing_targets)} unqueried anchor "
-            f"skill(s) ({', '.join(missing_targets)}) ->[/] [cyan]{resolved_queries}[/]"
-        )
+        if missing_targets and stale_targets:
+            draft_console.print(
+                f"[dim]Syncing queries for {len(sync_targets)} anchor skill(s) "
+                f"({len(missing_targets)} missing, {len(stale_targets)} updated: "
+                f"{', '.join(sync_targets)}) ->[/] [cyan]{resolved_queries}[/]"
+            )
+        elif stale_targets:
+            draft_console.print(
+                f"[dim]Refreshing queries for {len(stale_targets)} updated anchor "
+                f"skill(s) ({', '.join(stale_targets)}) ->[/] [cyan]{resolved_queries}[/]"
+            )
+        else:
+            draft_console.print(
+                f"[dim]Drafting queries for {len(missing_targets)} unqueried anchor "
+                f"skill(s) ({', '.join(missing_targets)}) ->[/] [cyan]{resolved_queries}[/]"
+            )
 
     flags = GenerateFlags.from_query_settings(
         effective_config.query,
-        targets=missing_targets,
+        targets=sync_targets,
     )
     draft_settings = effective_config.with_overrides(
         catalog={"mode": CatalogMode.ALL},

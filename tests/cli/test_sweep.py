@@ -1210,3 +1210,101 @@ def test_sweep_auto_queries_format_json_suppresses_draft_logs(
     assert "Drafting queries for" not in captured.err
     data = json.loads(captured.out)
     assert "points" in data
+
+
+def test_sweep_auto_queries_refreshes_stale_anchor_skills(
+    sweep_corpus: tuple[Path, Path],
+    generator: FakeGenerator,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach sweep refreshes anchor skills whose SKILL.md body SHA is stale."""
+    from reach.generate import skill_body_digest
+    from reach.models import Skill
+    from reach.queries import load_query_set
+
+    corpus_dir, _ = sweep_corpus
+    skill_00 = Skill(name="skill-00", description="Desc 0", path=corpus_dir / "skill-00")
+    fresh_digest_00 = skill_body_digest(skill_00)
+
+    stale_queries_file = tmp_path / "stale_queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="synthetic",
+            queries=(
+                Query(
+                    id="skill-00-1",
+                    text="Keep unchanged query for skill 00",
+                    expected_skill="skill-00",
+                    kind=QueryKind.IMPLICIT,
+                ),
+                Query(
+                    id="skill-05-1",
+                    text="Outdated query for skill 05 before body edit",
+                    expected_skill="skill-05",
+                    kind=QueryKind.IMPLICIT,
+                ),
+            ),
+            provenance=QuerySetProvenance(
+                origin=Origin.GENERATED,
+                skill_digests={
+                    "skill-00": fresh_digest_00,
+                    "skill-05": "000000stale0",
+                },
+            ),
+        ),
+        stale_queries_file,
+    )
+
+    # Edge case: --no-auto-queries warns about the updated body and runs offline
+    # without calling the LLM drafter or mutating stale_queries.json on disk.
+    code_no_auto = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--queries",
+            str(stale_queries_file),
+            "--scales",
+            "2,4",
+            "--anchor",
+            "skill-00,skill-05",
+            "--agent",
+            "fake",
+            "--no-auto-queries",
+            "--no-early-stop",
+        ]
+    )
+    assert code_no_auto == 0
+    err_no_auto = capsys.readouterr().err
+    assert "have updated bodies since queries were drafted" in err_no_auto
+    assert "skill-05" in err_no_auto
+    assert "reach query draft --sync" in err_no_auto
+    assert load_query_set(stale_queries_file).provenance.skill_digests["skill-05"] == "000000stale0"
+
+    code = main(
+        [
+            "sweep",
+            str(corpus_dir),
+            "--queries",
+            str(stale_queries_file),
+            "--scales",
+            "2,4",
+            "--anchor",
+            "skill-00,skill-05",
+            "--agent",
+            "fake",
+            "--no-early-stop",
+        ]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "Refreshing queries for 1 updated anchor skill(s) (skill-05)" in combined
+
+    updated_qs = load_query_set(stale_queries_file)
+    # skill-00's original query is preserved, while skill-05's stale query was replaced
+    texts = [q.text for q in updated_qs.queries]
+    assert "Keep unchanged query for skill 00" in texts
+    assert "Outdated query for skill 05 before body edit" not in texts
+    skill_05 = Skill(name="skill-05", description="Desc 5", path=corpus_dir / "skill-05")
+    assert updated_qs.provenance.skill_digests["skill-05"] == skill_body_digest(skill_05)
