@@ -26,9 +26,9 @@ import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Self, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self, override
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, StringConstraints
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings, resolve_path
@@ -152,6 +152,32 @@ class AntigravityCliOptions(AntigravityOptions, CliOptions):
     go_max_procs: int = 4
 
 
+class AntigravityUsage(BaseModel):
+    """Represent token usage payload emitted by Antigravity CLI (agy)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+    @property
+    def prompt_tokens(self) -> int | None:
+        """Return input prompt tokens."""
+        return self.input_tokens
+
+
+def _extract_usage_prompt_tokens(usage_obj: object) -> int | None:
+    """Extract input prompt tokens from usage object via AntigravityUsage schema."""
+    if not isinstance(usage_obj, dict):
+        return None
+    try:
+        usage = AntigravityUsage.model_validate(usage_obj)
+        return usage.prompt_tokens
+    except PydanticValidationError:
+        return None
+
+
 class ToolAttempt(BaseModel):
     """Record an observed tool invocation attempt during query execution."""
 
@@ -271,20 +297,70 @@ def _extract_step_thought(event: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_result_event(
-    event: dict[str, Any],
-) -> tuple[str, int | None, str | None, str | None, str | None]:
-    """Parse status, duration, selected skill, reasoning, and error from a result event."""
+StrippedStr = Annotated[str, StringConstraints(strip_whitespace=True)]
+
+
+class _AgyResultEvent(BaseModel):
+    """Represent parsed outcome metrics and status from a CLI result event."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    status: str = "unknown"
+    duration_ms: NonNegativeInt | None = None
+    selected_skill: str | None = None
+    reasoning: StrippedStr | None = None
+    error: StrippedStr | None = None
+    prompt_tokens: NonNegativeInt | None = None
+
+
+def _extract_result_event(event: dict[str, Any]) -> _AgyResultEvent:
+    """Parse status, duration, skill, reasoning, error, and tokens from a result event."""
     result = event.get("result") or {}
     status = str(result.get("status") or "unknown")
     raw_duration = result.get("duration_seconds")
-    duration_ms = int(raw_duration * 1000) if isinstance(raw_duration, int | float) else None
+    duration_ms = (
+        int(raw_duration * 1000)
+        if isinstance(raw_duration, int | float) and raw_duration >= 0
+        else None
+    )
     structured = result.get("structured_output")
     invoked = structured.get("selected_skill") if isinstance(structured, dict) else None
     reasoning = structured.get("reasoning") if isinstance(structured, dict) else None
     error = result.get("error")
     error_str = str(error).strip() if error else None
-    return status, duration_ms, invoked, str(reasoning).strip() if reasoning else None, error_str
+    reasoning_str = str(reasoning).strip() if reasoning else None
+    prompt_tokens = _extract_usage_prompt_tokens(result.get("usage"))
+    return _AgyResultEvent(
+        status=status,
+        duration_ms=duration_ms,
+        selected_skill=str(invoked) if invoked else None,
+        reasoning=reasoning_str or None,
+        error=error_str or None,
+        prompt_tokens=prompt_tokens,
+    )
+
+
+def _handle_step_update(
+    event: dict[str, Any],
+    attempts: dict[tuple[str, str | None], ToolCallInfo],
+    invoked_skills: list[str],
+    reasoning: list[str],
+    resident: Iterable[str],
+) -> int | None:
+    """Process a step_update event and return extracted prompt tokens if present."""
+    prompt_tokens: int | None = None
+    step_update = event.get("step_update")
+    if isinstance(step_update, dict):
+        prompt_tokens = _extract_usage_prompt_tokens(step_update.get("usage"))
+    if attempt := _extract_tool_attempt(event):
+        attempts[(attempt.name, attempt.path)] = attempt
+        if attempt.path:
+            detected = resolve_skill_from_path(attempt.path, resident)
+            if detected and (not invoked_skills or invoked_skills[-1] != detected):
+                invoked_skills.append(detected)
+    if thought := _extract_step_thought(event):
+        reasoning.append(thought)
+    return prompt_tokens
 
 
 def parse_stream(
@@ -294,11 +370,11 @@ def parse_stream(
 ) -> StreamSummary:
     """Parse streaming event lines into a StreamSummary model."""
     attempts: dict[tuple[str, str | None], ToolCallInfo] = {}
-    invoked: str | None = None
     invoked_skills: list[str] = []
     reasoning: list[str] = []
     resolved_model = ""
     duration_ms: int | None = None
+    prompt_tokens: int | None = None
     status: str | None = None
     result_error: str | None = None
     step_turns = 0
@@ -310,26 +386,25 @@ def parse_stream(
                     resolved_model = model_name
             case "step_update":
                 step_turns += 1
-                if attempt := _extract_tool_attempt(event):
-                    attempts[(attempt.name, attempt.path)] = attempt
-                    if attempt.path:
-                        detected = resolve_skill_from_path(attempt.path, resident)
-                        if detected and (not invoked_skills or invoked_skills[-1] != detected):
-                            invoked_skills.append(detected)
-                if thought := _extract_step_thought(event):
-                    reasoning.append(thought)
+                if (
+                    toks := _handle_step_update(
+                        event, attempts, invoked_skills, reasoning, resident
+                    )
+                ) is not None:
+                    prompt_tokens = toks
             case "result":
-                (
-                    status,
-                    duration_ms,
-                    invoked,
-                    result_thought,
-                    result_error,
-                ) = _extract_result_event(event)
-                if invoked and (not invoked_skills or invoked_skills[-1] != invoked):
-                    invoked_skills.append(invoked)
-                if result_thought and result_thought not in reasoning:
-                    reasoning.append(result_thought)
+                res_event = _extract_result_event(event)
+                status = res_event.status
+                duration_ms = res_event.duration_ms
+                result_error = res_event.error
+                if res_event.prompt_tokens is not None:
+                    prompt_tokens = res_event.prompt_tokens
+                if res_event.selected_skill and (
+                    not invoked_skills or invoked_skills[-1] != res_event.selected_skill
+                ):
+                    invoked_skills.append(res_event.selected_skill)
+                if res_event.reasoning and res_event.reasoning not in reasoning:
+                    reasoning.append(res_event.reasoning)
 
     if early_exit:
         status = SessionStatus.SUCCESS
@@ -344,6 +419,7 @@ def parse_stream(
         reasoning=tuple(reasoning),
         resolved_model=resolved_model,
         duration_ms=duration_ms,
+        prompt_tokens=prompt_tokens,
         status=status,
         error=result_error,
     )
@@ -491,7 +567,8 @@ class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityR
         if (attempt := _extract_tool_attempt(event)) and attempt.path:
             return resolve_skill_from_path(attempt.path, self._resident)
         if event.get("event") == "result":
-            _, _, invoked, _, _ = _extract_result_event(event)
+            res_event = _extract_result_event(event)
+            invoked = res_event.selected_skill
             if invoked and (not self._resident or invoked in self._resident):
                 return invoked
         return None

@@ -153,6 +153,8 @@ def agy_stream(
     duration_seconds: float | None = 1.234,
     model: str | None = DEFAULT_GEMINI_MODEL,
     error: str | None = None,
+    prompt_tokens: int | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> list[str]:
     """Render stream-json transcript lines matching antigravity CLI output format."""
     events: list[dict[str, Any]] = []
@@ -180,6 +182,10 @@ def agy_stream(
             result["error"] = error
         if duration_seconds is not None:
             result["duration_seconds"] = duration_seconds
+        if prompt_tokens is not None:
+            result["usage"] = {"input_tokens": prompt_tokens}
+        elif usage is not None:
+            result["usage"] = usage
         if include_structured:
             structured: dict[str, Any] = {"selected_skill": invoked}
             if reasoning is not None:

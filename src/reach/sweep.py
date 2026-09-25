@@ -23,8 +23,9 @@ import random
 import statistics
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
 
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
+    "PairedTrialOutcomes",
     "ScalingPoint",
     "ScalingStudy",
     "bootstrap_f1_ci",
@@ -60,6 +62,33 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+
+
+class PairedTrialOutcomes(BaseModel):
+    """Represent paired McNemar discordant trial outcomes across sweep scales."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    n10: NonNegativeInt = Field(
+        description="Probes successful at baseline but failed at scaled catalog"
+    )
+    n01: NonNegativeInt = Field(
+        description="Probes failed at baseline but successful at scaled catalog"
+    )
+    total_paired: NonNegativeInt = Field(
+        description="Total mutually executed probes in both baseline and scaled arms"
+    )
+
+    @model_validator(mode="after")
+    def _validate_paired_totals(self) -> Self:
+        """Enforce that total paired trials is at least the sum of discordant pairs."""
+        if self.total_paired < (self.n10 + self.n01):
+            msg = (
+                f"total_paired ({self.total_paired}) cannot be less than the sum of "
+                f"discordant pairs ({self.n10 + self.n01})"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class ScalingPoint(BaseModel):
@@ -124,6 +153,7 @@ class ScalingStudy(BaseModel):
     total_corpus_skills: int = 0
     decomposition: DecompositionResult | None = None
     anchor_skills: tuple[str, ...] | None = None
+    paired_outcomes: PairedTrialOutcomes | None = None
 
     @model_validator(mode="after")
     def _validate_target_skill_for_mode(self) -> ScalingStudy:
@@ -140,6 +170,56 @@ _MIN_EARLY_STOP_POINTS: int = 2
 _EARLY_STOP_F1_THRESHOLD: float = 0.80
 _SLA_90_THRESHOLD: float = 0.90
 _SLA_85_THRESHOLD: float = 0.85
+_MIN_NOISE_FLOOR: float = 0.01
+_PAVA_DECIMAL_PRECISION: int = 4
+
+
+class _PavaBlock(NamedTuple):
+    """Represent an aggregated block in the Pool Adjacent Violators Algorithm."""
+
+    mean: float
+    weight: float
+    count: int
+
+
+def _merge_pava_blocks(left: _PavaBlock, right: _PavaBlock) -> _PavaBlock:
+    """Merge two adjacent PAVA blocks into a combined weighted mean block."""
+    w_total = left.weight + right.weight
+    mean = (left.mean * left.weight + right.mean * right.weight) / w_total
+    return _PavaBlock(
+        mean=round(mean, _PAVA_DECIMAL_PRECISION),
+        weight=w_total,
+        count=left.count + right.count,
+    )
+
+
+def _isotonic_regression_pava(
+    values: Sequence[float],
+    weights: Sequence[float] | None = None,
+) -> list[float]:
+    """Compute maximum likelihood monotone non-increasing regression via PAVA."""
+    if not values:
+        return []
+    w = [float(x) for x in weights] if weights is not None else [1.0] * len(values)
+    blocks: list[_PavaBlock] = [
+        _PavaBlock(mean=float(v), weight=float(wt), count=1)
+        for v, wt in zip(values, w, strict=True)
+    ]
+    i = 0
+    while i < len(blocks) - 1:
+        if blocks[i].mean < blocks[i + 1].mean:
+            blocks[i] = _merge_pava_blocks(blocks[i], blocks[i + 1])
+            del blocks[i + 1]
+            while i > 0 and blocks[i - 1].mean < blocks[i].mean:
+                i -= 1
+                blocks[i] = _merge_pava_blocks(blocks[i], blocks[i + 1])
+                del blocks[i + 1]
+        else:
+            i += 1
+    result = []
+    for b in blocks:
+        result.extend([round(b.mean, _PAVA_DECIMAL_PRECISION)] * b.count)
+    return result
 
 
 def compute_scaling_noise_floor(
@@ -148,19 +228,31 @@ def compute_scaling_noise_floor(
     sample_size: int,
     confidence: float = DEFAULT_CONFIDENCE,
     noise_inflation: float = NOISE_INFLATION,
+    *,
+    paired_outcomes: PairedTrialOutcomes | None = None,
 ) -> float:
     """Calculate minimum scaling pass-rate drop distinguishable from noise using diff."""
+    if paired_outcomes is not None:
+        n = max(1, paired_outcomes.total_paired)
+        n10, n01 = paired_outcomes.n10, paired_outcomes.n01
+        var_paired = max(0.0, (n10 + n01 - ((n10 - n01) ** 2) / n) / (n * n))
+        se_paired = math.sqrt(var_paired)
+        floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, noise_inflation)
+        return max(_MIN_NOISE_FLOOR, floor)
+
     n = max(1, sample_size)
     control_se = math.sqrt(max(0.0, baseline_pass_rate * (1.0 - baseline_pass_rate)) / n)
     treatment_se = math.sqrt(max(0.0, scaled_pass_rate * (1.0 - scaled_pass_rate)) / n)
     floor = diff_noise_floor(control_se, treatment_se, confidence, noise_inflation)
-    return max(0.01, floor)
+    return max(_MIN_NOISE_FLOOR, floor)
 
 
 def _compute_effective_noise_floor(
     noise_floor: float | None,
     points: Sequence[ScalingPoint],
     baseline_count: int,
+    *,
+    paired_outcomes: PairedTrialOutcomes | None = None,
 ) -> float:
     """Resolve user-configured or diff-derived scaling noise floor."""
     if noise_floor is not None:
@@ -171,6 +263,7 @@ def _compute_effective_noise_floor(
                 points[0].pass_rate,
                 points[-1].pass_rate,
                 sample_size=max(1, baseline_count),
+                paired_outcomes=paired_outcomes,
             ),
             4,
         )
@@ -181,6 +274,8 @@ def find_kneedle_knee(
     scales: Sequence[int],
     pass_rates: Sequence[float],
     noise_floor: float = 0.10,
+    *,
+    auto_smooth: bool = False,
 ) -> int | None:
     """Identify the inflection knee scale k* using normalized log-scale Kneedle curvature."""
     if (
@@ -192,7 +287,8 @@ def find_kneedle_knee(
 
     points = sorted(zip(scales, pass_rates, strict=True), key=lambda p: p[0])
     k_vals = [p[0] for p in points]
-    y_vals = [p[1] for p in points]
+    y_raw = [p[1] for p in points]
+    y_vals = _isotonic_regression_pava(y_raw) if auto_smooth else y_raw
 
     if (y_vals[0] - y_vals[-1]) <= noise_floor:
         return None
@@ -339,12 +435,17 @@ def _log_interpolate_scale(
     p1: ScalingPoint,
     p2: ScalingPoint,
     threshold: float,
+    *,
+    f1_1: float | None = None,
+    f1_2: float | None = None,
 ) -> float | None:
     """Interpolate log-linear scale crossing between two adjacent scaling points."""
-    denom = p2.f1_score - p1.f1_score
+    val1 = f1_1 if f1_1 is not None else p1.f1_score
+    val2 = f1_2 if f1_2 is not None else p2.f1_score
+    denom = val2 - val1
     if denom == 0.0:
         return None
-    t = (threshold - p1.f1_score) / denom
+    t = (threshold - val1) / denom
     log_k1 = math.log(max(1, p1.scale))
     log_k2 = math.log(max(1, p2.scale))
     return round(math.exp(log_k1 + t * (log_k2 - log_k1)), 1)
@@ -353,29 +454,42 @@ def _log_interpolate_scale(
 def compute_sla_crossings(
     points: Sequence[ScalingPoint],
     threshold: float,
+    *,
+    smoothed_rates: Sequence[float] | None = None,
+    auto_smooth: bool = False,
 ) -> tuple[int | None, float | None]:
     """Compute discrete conservative scale and log-linear continuous crossing for an SLA target."""
     if not points:
         return None, None
 
     ordered = sorted(points, key=lambda p: p.scale)
+    if smoothed_rates is not None and len(smoothed_rates) == len(ordered):
+        effective_f1 = list(smoothed_rates)
+    elif auto_smooth:
+        effective_f1 = _isotonic_regression_pava([p.f1_score for p in ordered])
+    else:
+        effective_f1 = [p.f1_score for p in ordered]
     discrete_k: int | None = None
     interp_k: float | None = None
 
     for i in range(len(ordered) - 1):
-        p1, p2 = ordered[i], ordered[i + 1]
-        if p1.f1_score >= threshold > p2.f1_score:
-            discrete_k = p1.scale
-            interp_k = _log_interpolate_scale(p1, p2, threshold)
+        f1_1, f1_2 = effective_f1[i], effective_f1[i + 1]
+        if f1_1 >= threshold > f1_2:
+            discrete_k = ordered[i].scale
+            interp_k = _log_interpolate_scale(
+                ordered[i], ordered[i + 1], threshold, f1_1=f1_1, f1_2=f1_2
+            )
             break
 
     if discrete_k is None:
-        qualifying = [p.scale for p in ordered if p.f1_score >= threshold]
+        qualifying = [ordered[i].scale for i in range(len(ordered)) if effective_f1[i] >= threshold]
         discrete_k = max(qualifying) if qualifying else None
         for i in range(len(ordered) - 1):
-            p1, p2 = ordered[i], ordered[i + 1]
-            if p1.f1_score <= threshold < p2.f1_score:
-                interp_k = _log_interpolate_scale(p1, p2, threshold)
+            f1_1, f1_2 = effective_f1[i], effective_f1[i + 1]
+            if f1_1 <= threshold < f1_2:
+                interp_k = _log_interpolate_scale(
+                    ordered[i], ordered[i + 1], threshold, f1_1=f1_1, f1_2=f1_2
+                )
                 break
 
     if interp_k is None and discrete_k is not None:
@@ -903,6 +1017,7 @@ def _build_study_result(
     total_skills: int,
     decomp: DecompositionResult | None,
     anchor_skills: Sequence[str] | None = None,
+    paired_outcomes: PairedTrialOutcomes | None = None,
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
     sla_90_scale: int | None = None
@@ -911,8 +1026,12 @@ def _build_study_result(
     sla_85_interp: float | None = None
 
     if is_corpus:
-        sla_90_scale, sla_90_interp = compute_sla_crossings(points, _SLA_90_THRESHOLD)
-        sla_85_scale, sla_85_interp = compute_sla_crossings(points, _SLA_85_THRESHOLD)
+        sla_90_scale, sla_90_interp = compute_sla_crossings(
+            points, _SLA_90_THRESHOLD, auto_smooth=True
+        )
+        sla_85_scale, sla_85_interp = compute_sla_crossings(
+            points, _SLA_85_THRESHOLD, auto_smooth=True
+        )
 
     b_rate = points[0].pass_rate if points else 0.0
     f_rate = points[-1].pass_rate if points else 0.0
@@ -939,6 +1058,7 @@ def _build_study_result(
         total_corpus_skills=total_skills,
         decomposition=decomp,
         anchor_skills=tuple(anchor_skills) if anchor_skills is not None else None,
+        paired_outcomes=paired_outcomes,
     )
 
 
@@ -1063,6 +1183,40 @@ def _setup_sweep_execution(
     return target, catalogs, query_set, None, None
 
 
+def _calculate_paired_outcomes(
+    baseline_results: Sequence[ProbeResult],
+    final_results: Sequence[ProbeResult],
+    queries_by_id: Mapping[str, Query],
+    target_skill: str | None = None,
+) -> PairedTrialOutcomes | None:
+    """Calculate discordant pair counts (n10, n01) between baseline and final scale runs."""
+    if not baseline_results or not final_results:
+        return None
+
+    def probe_hit(r: ProbeResult) -> bool:
+        if r.error:
+            return False
+        q = queries_by_id.get(r.query_id)
+        exp = q.expected_skill if q is not None else None
+        if target_skill is not None:
+            is_tp, is_fp, _ = _classify_probe_outcome(
+                r, exp, set(), target_skill, query=q, trajectory=True
+            )
+            return (exp == target_skill and is_tp) or (exp != target_skill and not is_fp)
+        hit, _ = _evaluate_probe_trajectory(r, exp, q, trajectory=True)
+        return hit
+
+    base_map = {(r.query_id, r.attempt): probe_hit(r) for r in baseline_results if not r.error}
+    final_map = {(r.query_id, r.attempt): probe_hit(r) for r in final_results if not r.error}
+    common_keys = set(base_map.keys()) & set(final_map.keys())
+    if not common_keys:
+        return None
+
+    n10 = sum(1 for k in common_keys if base_map[k] and not final_map[k])
+    n01 = sum(1 for k in common_keys if not base_map[k] and final_map[k])
+    return PairedTrialOutcomes(n10=n10, n01=n01, total_paired=len(common_keys))
+
+
 def _assemble_scaling_study(
     *,
     target: str | None,
@@ -1074,12 +1228,20 @@ def _assemble_scaling_study(
     total_skills: int,
     decomp: DecompositionResult | None,
     anchor_skills: Sequence[str] | None,
+    paired_outcomes: PairedTrialOutcomes | None = None,
 ) -> ScalingStudy:
     """Compute effective noise floor and knee and construct a ScalingStudy."""
-    effective_noise_floor = _compute_effective_noise_floor(noise_floor, points, baseline_count)
+    effective_noise_floor = _compute_effective_noise_floor(
+        noise_floor, points, baseline_count, paired_outcomes=paired_outcomes
+    )
     evaluated_scales = actual_scales[: len(points)]
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
-    knee = find_kneedle_knee(evaluated_scales, rate_curve, noise_floor=effective_noise_floor)
+    knee = find_kneedle_knee(
+        evaluated_scales,
+        rate_curve,
+        noise_floor=effective_noise_floor,
+        auto_smooth=True,
+    )
     return _build_study_result(
         target=target,
         is_corpus=is_corpus,
@@ -1090,7 +1252,60 @@ def _assemble_scaling_study(
         total_skills=total_skills,
         decomp=decomp,
         anchor_skills=anchor_skills,
+        paired_outcomes=paired_outcomes,
     )
+
+
+@dataclass(frozen=True)
+class _SweepContext:
+    """Encapsulate sweep execution invariants across scale iterations."""
+
+    effective_config: RunConfig
+    work_dir: Path
+    corpus_plan: CorpusScalingPlan | None
+    raw_query_set: QuerySet
+    resolved_query_set: QuerySet
+    resolved_skills: Sequence[Skill]
+    raw_query_map: Mapping[str, Query]
+    is_corpus: bool
+
+
+def _prepare_scale_iteration(
+    ctx: _SweepContext,
+    catalog: Catalog,
+) -> tuple[RunConfig, QuerySet, Composition]:
+    """Prepare configuration, query set, and composition for a scale iteration."""
+    safe_cat_id = catalog.id.replace(":", "_").replace("/", "_")
+    scale_out = ctx.work_dir / f"sweep_{safe_cat_id}.jsonl"
+    scale_config = ctx.effective_config.model_copy(
+        update={
+            "study": ctx.effective_config.study.model_copy(
+                update={
+                    "catalog": catalog.id,
+                    "rescope": True,
+                    "partial": True,
+                    "workdir": ctx.work_dir,
+                    "out": scale_out,
+                }
+            ),
+            "catalog": ctx.effective_config.catalog.model_copy(update={"mode": CatalogMode.SWEEP}),
+        }
+    )
+    scale_query_set = (
+        ctx.corpus_plan.queries_for_scale(
+            catalog=catalog,
+            raw_query_set=ctx.raw_query_set,
+        )
+        if ctx.is_corpus and ctx.corpus_plan is not None
+        else ctx.resolved_query_set
+    )
+    composed = Composition(
+        config=scale_config,
+        query_set=scale_query_set,
+        catalog=catalog,
+        skills=tuple(ctx.resolved_skills),
+    )
+    return scale_config, scale_query_set, composed
 
 
 def run_scaling_sweep(
@@ -1147,6 +1362,7 @@ def run_scaling_sweep(
                 allow_truncation=False,
             )
     baseline_results: tuple[ProbeResult, ...] = ()
+    latest_results: tuple[ProbeResult, ...] = ()
     points: list[ScalingPoint] = []
     final_decomp: DecompositionResult | None = None
 
@@ -1156,42 +1372,23 @@ def run_scaling_sweep(
         temp_dir_obj = tempfile.TemporaryDirectory(prefix="reach_sweep_", delete=False)
         work_dir = Path(temp_dir_obj.name)
 
+    raw_query_map = {q.id: q for q in raw_query_set.queries}
+    ctx = _SweepContext(
+        effective_config=effective_config,
+        work_dir=work_dir,
+        corpus_plan=corpus_plan,
+        raw_query_set=raw_query_set,
+        resolved_query_set=resolved_query_set,
+        resolved_skills=resolved_skills,
+        raw_query_map=raw_query_map,
+        is_corpus=is_corpus,
+    )
+
     reference_scale = max(actual_scales[0], _ADAPTIVE_WORKER_REFERENCE_SCALE)
     total_scales = len(actual_scales)
     shared_outcome_cache: dict[Any, Any] = {}
     for step_idx, (scale, catalog) in enumerate(zip(actual_scales, catalogs, strict=True), start=1):
-        safe_cat_id = catalog.id.replace(":", "_").replace("/", "_")
-        scale_out = work_dir / f"sweep_{safe_cat_id}.jsonl"
-        scale_config = effective_config.model_copy(
-            update={
-                "study": effective_config.study.model_copy(
-                    update={
-                        "catalog": catalog.id,
-                        "rescope": True,
-                        "partial": True,
-                        "workdir": work_dir,
-                        "out": scale_out,
-                    }
-                ),
-                "catalog": effective_config.catalog.model_copy(update={"mode": CatalogMode.SWEEP}),
-            }
-        )
-
-        scale_query_set = (
-            corpus_plan.queries_for_scale(
-                catalog=catalog,
-                raw_query_set=raw_query_set,
-            )
-            if is_corpus and corpus_plan is not None
-            else resolved_query_set
-        )
-
-        composed = Composition(
-            config=scale_config,
-            query_set=scale_query_set,
-            catalog=catalog,
-            skills=tuple(resolved_skills),
-        )
+        scale_config, scale_query_set, composed = _prepare_scale_iteration(ctx, catalog)
 
         scale_workers = _scale_adaptive_workers(workers, scale, reference_scale=reference_scale)
         outcome = conduct(
@@ -1215,6 +1412,7 @@ def run_scaling_sweep(
             seed=effective_config.catalog.seed,
         )
         points.append(point)
+        latest_results = outcome.results
 
         if scale == actual_scales[0]:
             baseline_results = outcome.results
@@ -1222,6 +1420,12 @@ def run_scaling_sweep(
             final_decomp = decomp
 
         if on_scale_complete is not None:
+            partial_paired = _calculate_paired_outcomes(
+                baseline_results,
+                latest_results,
+                ctx.raw_query_map,
+                target_skill=target if not is_corpus else None,
+            )
             partial_study = _assemble_scaling_study(
                 target=target,
                 is_corpus=is_corpus,
@@ -1232,6 +1436,7 @@ def run_scaling_sweep(
                 total_skills=len(resolved_skills),
                 decomp=final_decomp,
                 anchor_skills=resolved_anchors,
+                paired_outcomes=partial_paired,
             )
             on_scale_complete(step_idx, total_scales, point, partial_study)
 
@@ -1246,6 +1451,12 @@ def run_scaling_sweep(
         ):
             break
 
+    final_paired = _calculate_paired_outcomes(
+        baseline_results,
+        latest_results,
+        ctx.raw_query_map,
+        target_skill=target if not is_corpus else None,
+    )
     result = _assemble_scaling_study(
         target=target,
         is_corpus=is_corpus,
@@ -1256,6 +1467,7 @@ def run_scaling_sweep(
         total_skills=len(resolved_skills),
         decomp=final_decomp,
         anchor_skills=resolved_anchors,
+        paired_outcomes=final_paired,
     )
     if temp_dir_obj is not None:
         temp_dir_obj.cleanup()
