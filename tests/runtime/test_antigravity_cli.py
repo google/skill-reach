@@ -232,11 +232,13 @@ def test_extract_result_event_produces_validated_model(
 
 def test_agy_result_event_model_invariants() -> None:
     """Verify _AgyResultEvent enforces immutability, extra='ignore', and field constraints."""
-    event = _AgyResultEvent(
-        status="done",
-        duration_ms=500,
-        prompt_tokens=100,
-        unmodeled_key="ignored",  # type: ignore[call-arg]
+    event = _AgyResultEvent.model_validate(
+        {
+            "status": "done",
+            "duration_ms": 500,
+            "prompt_tokens": 100,
+            "unmodeled_key": "ignored",
+        }
     )
     assert event.status == "done"
     assert not hasattr(event, "unmodeled_key")
@@ -248,7 +250,7 @@ def test_agy_result_event_model_invariants() -> None:
         _AgyResultEvent(prompt_tokens=-10)  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError):
-        event.status = "mutated"  # type: ignore[misc]
+        setattr(event, "status", "mutated")  # noqa: B010
 
 
 def test_a_view_file_call_records_its_target_path() -> None:

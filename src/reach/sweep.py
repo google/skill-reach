@@ -179,7 +179,7 @@ class _PavaBlock(NamedTuple):
 
     mean: float
     weight: float
-    count: int
+    size: int
 
 
 def _merge_pava_blocks(left: _PavaBlock, right: _PavaBlock) -> _PavaBlock:
@@ -189,7 +189,7 @@ def _merge_pava_blocks(left: _PavaBlock, right: _PavaBlock) -> _PavaBlock:
     return _PavaBlock(
         mean=round(mean, _PAVA_DECIMAL_PRECISION),
         weight=w_total,
-        count=left.count + right.count,
+        size=left.size + right.size,
     )
 
 
@@ -202,8 +202,7 @@ def _isotonic_regression_pava(
         return []
     w = [float(x) for x in weights] if weights is not None else [1.0] * len(values)
     blocks: list[_PavaBlock] = [
-        _PavaBlock(mean=float(v), weight=float(wt), count=1)
-        for v, wt in zip(values, w, strict=True)
+        _PavaBlock(mean=float(v), weight=float(wt), size=1) for v, wt in zip(values, w, strict=True)
     ]
     i = 0
     while i < len(blocks) - 1:
@@ -218,7 +217,7 @@ def _isotonic_regression_pava(
             i += 1
     result = []
     for b in blocks:
-        result.extend([round(b.mean, _PAVA_DECIMAL_PRECISION)] * b.count)
+        result.extend([round(b.mean, _PAVA_DECIMAL_PRECISION)] * b.size)
     return result
 
 

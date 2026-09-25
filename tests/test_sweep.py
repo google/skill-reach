@@ -185,11 +185,11 @@ def test_pava_block_invariants() -> None:
     """Verify _PavaBlock merges weighted averages and maintains total sample weights."""
     from reach.sweep import _merge_pava_blocks, _PavaBlock
 
-    b1 = _PavaBlock(mean=0.80, weight=2.0, count=2)
-    b2 = _PavaBlock(mean=0.90, weight=3.0, count=3)
+    b1 = _PavaBlock(mean=0.80, weight=2.0, size=2)
+    b2 = _PavaBlock(mean=0.90, weight=3.0, size=3)
     merged = _merge_pava_blocks(b1, b2)
 
-    assert merged.count == 5
+    assert merged.size == 5
     assert merged.weight == 5.0
     assert merged.mean == round((0.80 * 2.0 + 0.90 * 3.0) / 5.0, 4)
 

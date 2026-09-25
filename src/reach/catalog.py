@@ -699,9 +699,10 @@ def _extract_cluster_medoid_indices(
         return []
 
     if display_quantiles is not None:
+        dq = display_quantiles
 
         def cluster_display_median(indices: list[int]) -> float:
-            q_vals = sorted(display_quantiles.get(i, 0.5) for i in indices)
+            q_vals = sorted(dq.get(i, 0.5) for i in indices)
             return q_vals[len(q_vals) // 2]
 
         valid_clusters.sort(key=cluster_display_median)
