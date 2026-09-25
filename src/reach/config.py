@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, NamedTuple, Self, cast
+from typing import Any, ClassVar, NamedTuple, Self, cast
 
 from pydantic import (
     BaseModel,
@@ -688,8 +688,8 @@ class StudySettings(BaseModel):
     scales: tuple[int, ...] | None = None
     anchor: int | tuple[str, ...] | str | None = None
     trusted: bool = False
-    bootstrap_iterations: Annotated[int, Field(ge=10)] = 200
-    bootstrap_seed: int | None = 42
+    bootstrap_iterations: int = Field(default=200, ge=10)
+    bootstrap_seed: int | None = Field(default=42)
 
     @field_validator("anchor", mode="before")
     @classmethod

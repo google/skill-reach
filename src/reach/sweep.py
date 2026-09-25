@@ -164,7 +164,7 @@ class ScalingStudy(BaseModel):
     paired_outcomes: PairedTrialOutcomes | None = None
 
     @model_validator(mode="after")
-    def _validate_target_skill_for_mode(self) -> ScalingStudy:
+    def _validate_target_skill_for_mode(self) -> Self:
         """Ensure targeted sweeps specify a target skill."""
         if not self.is_corpus_sweep and self.target_skill is None:
             msg = "Targeted scaling sweep requires target_skill to be specified."

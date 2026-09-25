@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 from cyclopts import Parameter
 from pydantic import ValidationError as PydanticValidationError
 
-from reach.artifact import ARTIFACT_SUFFIX, Artifact, read_artifact
+from reach.artifact import ARTIFACT_SUFFIX, Artifact
 from reach.sweep import ScalingStudy
 from reach.view import render_view
 from reach.views import (
@@ -163,6 +163,25 @@ def _handle_sweep_view(
     return 0
 
 
+def _resolve_view_artifact(artifact: Path | None) -> Path:
+    """Resolve target artifact path from explicit parameter or default locations."""
+    target_artifact = artifact or Path(".reach/eval.json")
+    if artifact is None and not target_artifact.is_file():
+        alt_artifact = Path(".reach/queries.json.artifact.json")
+        sweep_artifact = Path(".reach/sweep.json")
+        if alt_artifact.is_file():
+            target_artifact = alt_artifact
+        elif sweep_artifact.is_file():
+            target_artifact = sweep_artifact
+    if not target_artifact.is_file():
+        msg = (
+            f"No evaluation artifact found at {target_artifact}.\n\n"
+            "Run 'reach eval' first, or pass an artifact path: 'reach view <artifact.json>'"
+        )
+        raise ValueError(msg)
+    return target_artifact
+
+
 @app.command(name="view", group=LOOP)
 def _view(
     artifact: Annotated[
@@ -213,32 +232,25 @@ def _view(
     from reach.run import sidecar_path
 
     eff_slice = slice_flags or SliceFlags()
-    target_artifact = artifact or Path(".reach/eval.json")
-    if artifact is None and not target_artifact.is_file():
-        alt_artifact = Path(".reach/queries.json.artifact.json")
-        sweep_artifact = Path(".reach/sweep.json")
-        if alt_artifact.is_file():
-            target_artifact = alt_artifact
-        elif sweep_artifact.is_file():
-            target_artifact = sweep_artifact
-    if not target_artifact.is_file():
-        msg = (
-            f"No evaluation artifact found at {target_artifact}.\n\n"
-            "Run 'reach eval' first, or pass an artifact path: 'reach view <artifact.json>'"
-        )
-        raise ValueError(msg)
+    target_artifact = _resolve_view_artifact(artifact)
 
     console = build_console()
-    if sidecar_path(target_artifact).exists():
-        recorded = load_arm(
-            target_artifact,
-            queries=eff_slice.queries,
-            filter_skill=eff_slice.filter_skill,
-            filter_id=eff_slice.filter_id,
-        ).artifact
-    else:
-        try:
-            recorded = read_artifact(target_artifact)
+    try:
+        raw_text = target_artifact.read_text(encoding="utf-8")
+    except OSError as err:
+        msg = f"Cannot read artifact file at {target_artifact}: {err}"
+        raise ValueError(msg) from err
+
+    try:
+        if sidecar_path(target_artifact).exists():
+            recorded = load_arm(
+                target_artifact,
+                queries=eff_slice.queries,
+                filter_skill=eff_slice.filter_skill,
+                filter_id=eff_slice.filter_id,
+            ).artifact
+        else:
+            recorded = Artifact.model_validate_json(raw_text)
             if eff_slice.active:
                 recorded = load_arm(
                     target_artifact,
@@ -246,26 +258,24 @@ def _view(
                     filter_skill=eff_slice.filter_skill,
                     filter_id=eff_slice.filter_id,
                 ).artifact
-        except PydanticValidationError:
-            try:
-                study = ScalingStudy.model_validate_json(
-                    target_artifact.read_text(encoding="utf-8")
-                )
-            except (PydanticValidationError, ValueError) as sweep_error:
-                msg = (
-                    f"Cannot read artifact at {target_artifact}: file is neither a valid "
-                    f"evaluation artifact (written by `reach eval` as <results>{ARTIFACT_SUFFIX}) "
-                    f"nor a valid scaling sweep study (written by `reach sweep`)."
-                )
-                raise ValueError(msg) from sweep_error
+    except PydanticValidationError:
+        try:
+            study = ScalingStudy.model_validate_json(raw_text)
+        except (PydanticValidationError, ValueError) as sweep_error:
+            msg = (
+                f"Cannot read artifact at {target_artifact}: file is neither a valid "
+                f"evaluation artifact (written by `reach eval` as <results>{ARTIFACT_SUFFIX}) "
+                f"nor a valid scaling sweep study (written by `reach sweep`)."
+            )
+            raise ValueError(msg) from sweep_error
 
-            if eff_slice.active:
-                msg = (
-                    "Slicing flags (--filter-skill, --filter-id, --queries) "
-                    "are not supported for sweep artifacts."
-                )
-                raise ValueError(msg) from None
-            return _handle_sweep_view(console, study, out, format, open_browser=open_browser)
+        if eff_slice.active:
+            msg = (
+                "Slicing flags (--filter-skill, --filter-id, --queries) "
+                "are not supported for sweep artifacts."
+            )
+            raise ValueError(msg) from None
+        return _handle_sweep_view(console, study, out, format, open_browser=open_browser)
 
     if open_browser:
         return _handle_browser_view(console, recorded, out)
