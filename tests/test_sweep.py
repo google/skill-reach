@@ -163,6 +163,18 @@ def test_compute_scaling_noise_floor_paired_mcnemar_variance() -> None:
     assert floor_paired < floor_indep * 0.75
 
 
+def test_compute_scaling_noise_floor_deff_scaling_no_underflow() -> None:
+    """Verify McNemar variance scaling by DEFF avoids negative underflow with disparity."""
+    from reach.sweep import PairedTrialOutcomes
+
+    # With total_paired = 100, effective_paired = 20, n10 = 25, n01 = 0:
+    # (n10 - n01)^2 / n_raw = 625 / 100 = 6.25 < 25 (valid non-negative numerator)
+    # If unscaled n_eff were used: 625 / 20 = 31.25 > 25 (collapsed to 0).
+    paired = PairedTrialOutcomes(n10=25, n01=0, total_paired=100, effective_paired=20)
+    floor = compute_scaling_noise_floor(0.95, 0.70, sample_size=100, paired_outcomes=paired)
+    assert floor > 0.01
+
+
 @pytest.mark.parametrize(
     ("values", "expected"),
     [
@@ -212,51 +224,6 @@ def test_find_kneedle_knee_auto_smooth(
     assert (
         find_kneedle_knee(scales, rates, noise_floor=0.05, auto_smooth=auto_smooth) == expected_knee
     )
-
-
-def test_compute_sla_crossings_auto_pava() -> None:
-    """Verify compute_sla_crossings automatically applies PAVA when smoothed_rates is None."""
-    from reach.sweep import compute_sla_crossings
-
-    points = (
-        ScalingPoint(
-            scale=10,
-            catalog_id="cat10",
-            pass_rate=0.96,
-            pass_rate_interval=(0.90, 0.99),
-            f1_score=0.96,
-            delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
-            probes_executed=50,
-        ),
-        ScalingPoint(
-            scale=25,
-            catalog_id="cat25",
-            pass_rate=0.98,
-            pass_rate_interval=(0.92, 1.0),
-            f1_score=0.98,
-            delta_vs_baseline=0.02,
-            delta_context=0.0,
-            delta_shadowing=0.0,
-            probes_executed=50,
-        ),
-        ScalingPoint(
-            scale=50,
-            catalog_id="cat50",
-            pass_rate=0.88,
-            pass_rate_interval=(0.80, 0.94),
-            f1_score=0.88,
-            delta_vs_baseline=-0.08,
-            delta_context=0.0,
-            delta_shadowing=-0.08,
-            probes_executed=50,
-        ),
-    )
-    discrete_k, interp_k = compute_sla_crossings(points, threshold=0.90, auto_smooth=True)
-    assert discrete_k == 25
-    assert interp_k is not None
-    assert 25.0 < interp_k < 50.0
 
 
 def test_run_scaling_sweep_insufficient_corpus(tmp_path: Path) -> None:
@@ -452,7 +419,6 @@ def test_corpus_scaling_sweep_happy_path(tmp_path: Path) -> None:
             skills=skills_dir,
             queries=q_file,
             workdir=tmp_path / "ws",
-            early_stop=False,
         ),
         plan=PlanSettings(attempts=1),
         catalog=CatalogSettings(mode=CatalogMode.SWEEP),
@@ -473,8 +439,6 @@ def test_corpus_scaling_sweep_happy_path(tmp_path: Path) -> None:
     assert study.target_skill is None
     assert study.total_corpus_skills == 6
     assert len(study.points) == 3
-    assert study.sla_90_scale == 6
-    assert study.sla_85_scale == 6
 
     for pt in study.points:
         assert pt.recall == 1.0
@@ -483,8 +447,8 @@ def test_corpus_scaling_sweep_happy_path(tmp_path: Path) -> None:
         assert pt.negative_probes == 0
 
 
-def test_corpus_scaling_sweep_early_stopping(tmp_path: Path) -> None:
-    """Verify corpus scaling sweep early stops when F1 drops below threshold."""
+def test_corpus_scaling_sweep_completes_all_scales_without_early_stopping(tmp_path: Path) -> None:
+    """Verify corpus scaling sweep evaluates all scale steps even when F1 drops to 0.0."""
     skills_dir = tmp_path / "skills"
     _create_mock_skills(skills_dir, 10)
 
@@ -510,7 +474,6 @@ def test_corpus_scaling_sweep_early_stopping(tmp_path: Path) -> None:
             skills=skills_dir,
             queries=q_file,
             workdir=tmp_path / "ws",
-            early_stop=True,
         ),
         plan=PlanSettings(attempts=1),
         catalog=CatalogSettings(mode=CatalogMode.SWEEP),
@@ -527,8 +490,8 @@ def test_corpus_scaling_sweep_early_stopping(tmp_path: Path) -> None:
     )
 
     assert study.is_corpus_sweep is True
-    # Should evaluate scale 1 and scale 3, then early-stop before scale 5
-    assert len(study.points) == 2
+    # Evaluates all requested scales through the study without threshold early-stopping
+    assert len(study.points) == 5
     assert study.points[-1].f1_score == 0.0
 
 
@@ -559,7 +522,6 @@ def test_corpus_scaling_sweep_anchor_default(tmp_path: Path) -> None:
             skills=skills_dir,
             queries=q_file,
             workdir=tmp_path / "ws",
-            early_stop=False,
         ),
         plan=PlanSettings(attempts=1),
         catalog=CatalogSettings(mode=CatalogMode.SWEEP),
@@ -610,7 +572,6 @@ def test_corpus_scaling_sweep_anchor_explicit_and_all(tmp_path: Path) -> None:
             skills=skills_dir,
             queries=q_file,
             workdir=tmp_path / "ws",
-            early_stop=False,
         ),
         plan=PlanSettings(attempts=1),
         catalog=CatalogSettings(mode=CatalogMode.SWEEP),
@@ -651,63 +612,6 @@ def test_corpus_scaling_sweep_anchor_explicit_and_all(tmp_path: Path) -> None:
             anchor=("nonexistent-skill",),
             runtime=runtime,
         )
-
-
-def test_compute_sla_crossings() -> None:
-    """Verify compute_sla_crossings calculates conservative scale and log-linear interpolation."""
-    from reach.sweep import compute_sla_crossings
-
-    points = [
-        ScalingPoint(
-            scale=5,
-            catalog_id="sweep:corpus:5",
-            pass_rate=0.95,
-            pass_rate_interval=(0.90, 1.0),
-            recall=0.95,
-            recall_interval=(0.90, 1.0),
-            precision=0.95,
-            precision_interval=(0.90, 1.0),
-            internal_precision=0.95,
-            abstention_rate=1.0,
-            abstention_interval=(1.0, 1.0),
-            f1_score=0.95,
-            f1_interval=(0.90, 1.0),
-            in_scope_probes=10,
-            negative_probes=0,
-            delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
-            probes_executed=10,
-            probes_failed=0,
-        ),
-        ScalingPoint(
-            scale=10,
-            catalog_id="sweep:corpus:10",
-            pass_rate=0.85,
-            pass_rate_interval=(0.80, 0.90),
-            recall=0.85,
-            recall_interval=(0.80, 0.90),
-            precision=0.85,
-            precision_interval=(0.80, 0.90),
-            internal_precision=0.85,
-            abstention_rate=1.0,
-            abstention_interval=(1.0, 1.0),
-            f1_score=0.85,
-            f1_interval=(0.80, 0.90),
-            in_scope_probes=20,
-            negative_probes=0,
-            delta_vs_baseline=-0.10,
-            delta_context=-0.05,
-            delta_shadowing=-0.05,
-            probes_executed=20,
-            probes_failed=0,
-        ),
-    ]
-
-    sla_scale, sla_interp = compute_sla_crossings(points, threshold=0.90)
-    assert sla_scale == 5
-    assert sla_interp is not None
-    assert 5.0 < sla_interp < 10.0
 
 
 def test_bootstrap_f1_ci() -> None:
@@ -921,52 +825,6 @@ def test_find_kneedle_knee_behavior(
 ) -> None:
     """Verify find_kneedle_knee enforces MIN_KNEE_DROP=0.10 and rejects non-falling curves."""
     assert find_kneedle_knee(scales, rates) == expected_knee
-
-
-@pytest.mark.parametrize(
-    ("f1_values", "expected_discrete", "expected_interp_bounds"),
-    [
-        pytest.param(
-            [(10, 0.95), (25, 0.82), (50, 0.91)],
-            10,
-            (10.0, 25.0),
-            id="downward-crossing-with-late-noise",
-        ),
-        pytest.param(
-            [(10, 0.75), (25, 0.92), (50, 0.95)],
-            50,
-            (10.0, 25.0),
-            id="upward-recovery-crossing",
-        ),
-    ],
-)
-def test_compute_sla_crossings_interpolation(
-    f1_values: list[tuple[int, float]],
-    expected_discrete: int | None,
-    expected_interp_bounds: tuple[float, float],
-) -> None:
-    """Verify compute_sla_crossings interpolates crossings via _log_interpolate_scale."""
-    from reach.sweep import _log_interpolate_scale, compute_sla_crossings
-
-    def _pt(scale: int, f1: float) -> ScalingPoint:
-        return ScalingPoint(
-            scale=scale,
-            catalog_id=f"sweep:corpus:{scale}",
-            pass_rate=f1,
-            pass_rate_interval=(0.0, 1.0),
-            f1_score=f1,
-            delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
-            probes_executed=10,
-        )
-
-    points = [_pt(s, f1) for s, f1 in f1_values]
-    discrete_k, interp_k = compute_sla_crossings(points, threshold=0.90)
-    assert discrete_k == expected_discrete
-    assert interp_k is not None
-    assert expected_interp_bounds[0] <= interp_k < expected_interp_bounds[1]
-    assert _log_interpolate_scale(points[0], points[1], 0.90) == interp_k
 
 
 def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
@@ -1866,10 +1724,6 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis() -> Non
         anchor_skills=("a1", "a2"),
         scales=(10, 100, 147),
         knee_scale=25,
-        sla_90_scale=100,
-        sla_90_interpolated=114.5,
-        sla_85_scale=147,
-        sla_85_interpolated=147.0,
         baseline_pass_rate=0.951,
         final_pass_rate=0.854,
         total_delta=0.097,
@@ -2032,7 +1886,7 @@ def test_prepare_sweep_config_defaults_attempts_to_1_unless_explicit(
     """Verify _prepare_sweep_config defaults attempts=1 unless explicitly set via CLI or config."""
     from reach.sweep import _prepare_sweep_config
 
-    resolved_cfg = _prepare_sweep_config(base_config, attempts=cli_attempts, early_stop=None)
+    resolved_cfg = _prepare_sweep_config(base_config, attempts=cli_attempts)
     assert resolved_cfg.plan.attempts == expected
 
 
@@ -2069,7 +1923,6 @@ def test_run_scaling_sweep_early_aborts_on_100_percent_runtime_errors_at_first_s
             skills=skills_dir,
             queries=q_file,
             workdir=tmp_path / "ws",
-            early_stop=True,
         ),
         plan=PlanSettings(retries=0),
         catalog=CatalogSettings(mode=CatalogMode.SWEEP),
@@ -2091,3 +1944,480 @@ def test_run_scaling_sweep_early_aborts_on_100_percent_runtime_errors_at_first_s
     assert study.points[0].scale == 2
     assert study.points[0].probes_executed == 2
     assert study.points[0].probes_errored == 2
+
+
+def test_bootstrap_f1_ci_clusters_by_query_maintaining_correlated_attempts() -> None:
+    """Verify cluster bootstrap preserves query attempt correlation without false shrinkage."""
+    from reach.models import CatalogMode, ProbeResult
+    from reach.sweep import bootstrap_f1_ci
+
+    # 4 distinct queries, 2 correct and 2 incorrect
+    truth = {"q1": "s1", "q2": "s2", "q3": "s3", "q4": "s4"}
+    installed = {"s1", "s2", "s3", "s4"}
+
+    single_results = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="c",
+            invoked_skills=("s1",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=4,
+            attempt=1,
+            model="m",
+            runtime="r",
+        ),
+        ProbeResult(
+            query_id="q2",
+            catalog_id="c",
+            invoked_skills=("s2",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=4,
+            attempt=1,
+            model="m",
+            runtime="r",
+        ),
+        ProbeResult(
+            query_id="q3",
+            catalog_id="c",
+            invoked_skills=("s1",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=4,
+            attempt=1,
+            model="m",
+            runtime="r",
+        ),  # FP
+        ProbeResult(
+            query_id="q4",
+            catalog_id="c",
+            invoked_skills=(),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=4,
+            attempt=1,
+            model="m",
+            runtime="r",
+        ),  # FN
+    ]
+    ci_single_low, ci_single_high = bootstrap_f1_ci(
+        single_results, truth, installed, iterations=1000, seed=42
+    )
+    single_width = ci_single_high - ci_single_low
+
+    # Repeat each query across 5 deterministic attempts (identical outcomes)
+    repeated_results: list[ProbeResult] = [
+        ProbeResult(
+            query_id=r.query_id,
+            catalog_id="c",
+            invoked_skills=r.invoked_skills,
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=4,
+            attempt=att,
+            model="m",
+            runtime="r",
+        )
+        for att in range(1, 6)
+        for r in single_results
+    ]
+
+    ci_rep_low, ci_rep_high = bootstrap_f1_ci(
+        repeated_results, truth, installed, iterations=1000, seed=42
+    )
+    rep_width = ci_rep_high - ci_rep_low
+
+    # Cluster bootstrap avoids artificially shrinking interval width on duplicate attempts
+    assert abs(rep_width - single_width) < 0.05
+    assert ci_rep_low == pytest.approx(ci_single_low, abs=0.05)
+    assert ci_rep_high == pytest.approx(ci_single_high, abs=0.05)
+
+
+def test_find_kneedle_knee_weighted_pava() -> None:
+    """Verify passing weights to find_kneedle_knee influences isotonic smoothing."""
+    from reach.sweep import find_kneedle_knee
+
+    scales = [10, 25, 50, 100]
+    # Raw pass rates with a non-monotone noise bump at scale 25
+    pass_rates = [0.95, 0.70, 0.85, 0.50]
+
+    # Without weights, unweighted PAVA averages points equally
+    knee_unweighted = find_kneedle_knee(scales, pass_rates, noise_floor=0.05, auto_smooth=True)
+
+    # Heavily weight scale 25 so its drop dominates the smoothed curve
+    knee_weighted = find_kneedle_knee(
+        scales,
+        pass_rates,
+        noise_floor=0.05,
+        weights=[1.0, 100.0, 1.0, 1.0],
+        auto_smooth=True,
+    )
+    assert knee_weighted is not None
+    assert knee_unweighted is not None
+
+
+def test_scaling_point_records_step_efficiency_and_skill_f1() -> None:
+    """Verify _build_scaling_point calculates step_efficiency_mean and skill_f1_mean."""
+    from reach.models import CatalogMode, ProbeResult, Query, QueryKind
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _build_scaling_point
+
+    queries = [
+        Query(id="q1", text="Do thing 1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+        Query(id="q2", text="Do thing 2", expected_skill="s2", kind=QueryKind.IMPLICIT),
+    ]
+    query_set = QuerySet(
+        catalog_id="c",
+        queries=tuple(queries),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    results = (
+        # First-rank hit: step_efficiency = 1.0, skill_f1 = 1.0
+        ProbeResult(
+            query_id="q1",
+            catalog_id="c",
+            invoked_skills=("s1",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=2,
+            model="m",
+            runtime="r",
+        ),
+        # Second-rank hit: step_efficiency = 0.5, skill_f1 = 0.6667
+        ProbeResult(
+            query_id="q2",
+            catalog_id="c",
+            invoked_skills=("distractor", "s2"),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=2,
+            model="m",
+            runtime="r",
+        ),
+    )
+
+    point, _ = _build_scaling_point(
+        scale=2,
+        catalog_id="c",
+        results=results,
+        resolved_query_set=query_set,
+        baseline_results=(),
+        installed_skills={"s1", "s2", "distractor"},
+    )
+
+    # Mean step efficiency = (1.0 + 0.5) / 2 = 0.75
+    assert point.step_efficiency_mean == pytest.approx(0.75, abs=0.01)
+    assert 0.0 < point.skill_f1_mean <= 1.0
+
+
+def test_scaling_study_records_knee_interval() -> None:
+    """Verify _assemble_scaling_study computes uncertainty interval for knee scale."""
+    from reach.sweep import ScalingPoint, _assemble_scaling_study
+
+    points = [
+        ScalingPoint(
+            scale=10,
+            catalog_id="c",
+            pass_rate=0.96,
+            pass_rate_interval=(0.92, 0.99),
+            f1_score=0.96,
+            f1_interval=(0.92, 0.99),
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=25,
+            catalog_id="c",
+            pass_rate=0.91,
+            pass_rate_interval=(0.85, 0.96),
+            f1_score=0.91,
+            f1_interval=(0.85, 0.96),
+            delta_vs_baseline=0.05,
+            delta_context=0.0,
+            delta_shadowing=0.05,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=50,
+            catalog_id="c",
+            pass_rate=0.82,
+            pass_rate_interval=(0.74, 0.89),
+            f1_score=0.82,
+            f1_interval=(0.74, 0.89),
+            delta_vs_baseline=0.14,
+            delta_context=0.0,
+            delta_shadowing=0.14,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=100,
+            catalog_id="c",
+            pass_rate=0.60,
+            pass_rate_interval=(0.50, 0.70),
+            f1_score=0.60,
+            f1_interval=(0.50, 0.70),
+            delta_vs_baseline=0.36,
+            delta_context=0.0,
+            delta_shadowing=0.36,
+            probes_executed=20,
+        ),
+    ]
+
+    study = _assemble_scaling_study(
+        target=None,
+        is_corpus=True,
+        actual_scales=(10, 25, 50, 100),
+        points=points,
+        noise_floor=0.05,
+        baseline_count=20,
+        total_skills=100,
+        decomp=None,
+        anchor_skills=("s1", "s2"),
+    )
+
+    assert study.knee_scale is not None
+    assert study.knee_scale_interval is not None
+    assert study.knee_scale_interval[0] <= study.knee_scale_interval[1]
+
+
+def test_bootstrap_knee_interval_cluster_resampling() -> None:
+    """Verify _bootstrap_knee_interval calculates interval via non-parametric cluster bootstrap."""
+    from reach.sweep import ScalingPoint, _bootstrap_knee_interval
+
+    scales = [10, 25, 50, 100]
+    points = [
+        ScalingPoint(
+            scale=10,
+            catalog_id="c",
+            pass_rate=0.96,
+            pass_rate_interval=(0.92, 0.99),
+            f1_score=0.96,
+            f1_interval=(0.92, 0.99),
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=25,
+            catalog_id="c",
+            pass_rate=0.91,
+            pass_rate_interval=(0.85, 0.96),
+            f1_score=0.91,
+            f1_interval=(0.85, 0.96),
+            delta_vs_baseline=0.05,
+            delta_context=0.0,
+            delta_shadowing=0.05,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=50,
+            catalog_id="c",
+            pass_rate=0.82,
+            pass_rate_interval=(0.74, 0.89),
+            f1_score=0.82,
+            f1_interval=(0.74, 0.89),
+            delta_vs_baseline=0.14,
+            delta_context=0.0,
+            delta_shadowing=0.14,
+            probes_executed=20,
+        ),
+        ScalingPoint(
+            scale=100,
+            catalog_id="c",
+            pass_rate=0.60,
+            pass_rate_interval=(0.50, 0.70),
+            f1_score=0.60,
+            f1_interval=(0.50, 0.70),
+            delta_vs_baseline=0.36,
+            delta_context=0.0,
+            delta_shadowing=0.36,
+            probes_executed=20,
+        ),
+    ]
+    scale_query_sums = {
+        s: {f"q{i}": (1, 0, 0) if (s <= 25 or i % (s // 25) == 0) else (0, 1, 1) for i in range(20)}
+        for s in scales
+    }
+
+    interval = _bootstrap_knee_interval(
+        scales=scales,
+        points=points,
+        noise_floor=0.05,
+        iterations=50,
+        seed=42,
+        scale_query_sums=scale_query_sums,
+    )
+    assert interval is not None
+    assert interval[0] <= interval[1]
+
+
+def test_render_sweep_csv_includes_knee_and_efficiency_metrics() -> None:
+    """Verify render_sweep_csv includes knee uncertainty and step efficiency columns."""
+    from reach.sweep import ScalingPoint, ScalingStudy
+    from reach.views.sweep import render_sweep_csv
+
+    study = ScalingStudy(
+        target_skill=None,
+        is_corpus_sweep=True,
+        scales=(10, 25),
+        knee_scale=25,
+        knee_scale_interval=(20, 30),
+        baseline_pass_rate=0.95,
+        final_pass_rate=0.85,
+        total_delta=0.10,
+        total_context_loss=0.02,
+        total_shadowing_loss=0.08,
+        total_corpus_skills=25,
+        points=(
+            ScalingPoint(
+                scale=10,
+                catalog_id="c1",
+                pass_rate=0.95,
+                pass_rate_interval=(0.90, 0.98),
+                recall=0.95,
+                precision=0.95,
+                f1_score=0.95,
+                step_efficiency_mean=0.90,
+                skill_f1_mean=0.92,
+                delta_vs_baseline=0.0,
+                delta_context=0.0,
+                delta_shadowing=0.0,
+                probes_executed=10,
+            ),
+        ),
+    )
+    csv_text = render_sweep_csv(study)
+    assert "knee_scale" in csv_text
+    assert "knee_ci_low" in csv_text
+    assert "knee_ci_high" in csv_text
+    assert "step_efficiency" in csv_text
+    assert "skill_f1" in csv_text
+    assert "25" in csv_text
+    assert "20" in csv_text
+    assert "30" in csv_text
+
+
+def test_paired_trial_outcomes_calculates_effective_paired() -> None:
+    """Verify _calculate_paired_outcomes adjusts effective_paired for repeated attempts."""
+    from reach.models import CatalogMode, ProbeResult, Query, QueryKind
+    from reach.sweep import _calculate_paired_outcomes
+
+    queries = {
+        "q1": Query(id="q1", text="t1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+        "q2": Query(id="q2", text="t2", expected_skill="s2", kind=QueryKind.IMPLICIT),
+    }
+
+    # 2 queries, 5 attempts each (10 total probes)
+    base_results = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="c1",
+            invoked_skills=("s1",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=2,
+            attempt=att,
+            model="m",
+            runtime="r",
+        )
+        for att in range(1, 6)
+    ] + [
+        ProbeResult(
+            query_id="q2",
+            catalog_id="c1",
+            invoked_skills=("s2",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=2,
+            attempt=att,
+            model="m",
+            runtime="r",
+        )
+        for att in range(1, 6)
+    ]
+
+    final_results = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="c2",
+            invoked_skills=("s1",),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=10,
+            attempt=att,
+            model="m",
+            runtime="r",
+        )
+        for att in range(1, 6)
+    ] + [
+        ProbeResult(
+            query_id="q2",
+            catalog_id="c2",
+            invoked_skills=(),
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=10,
+            attempt=att,
+            model="m",
+            runtime="r",
+        )  # fails in final
+        for att in range(1, 6)
+    ]
+
+    paired = _calculate_paired_outcomes(base_results, final_results, queries)
+    assert paired is not None
+    assert paired.total_paired == 10
+    # Effective sample size adjusts 10 probes across 5 attempts to ~3
+    assert paired.effective_paired is not None
+    assert paired.effective_paired < paired.total_paired
+    assert paired.effective_paired >= 2
+
+
+def test_corpus_capacity_sweep_hints_when_fewer_than_three_scales(
+    sample_two_scale_points: list[Any],
+) -> None:
+    """Verify capacity panel displays hint when evaluated with fewer than 3 scales."""
+    from rich.console import Console
+
+    from reach.sweep import ScalingStudy
+    from reach.views.sweep import print_sweep
+
+    study = ScalingStudy(
+        is_corpus_sweep=True,
+        scales=(10, 25),
+        points=tuple(sample_two_scale_points),
+        knee_scale=None,
+        baseline_pass_rate=1.0,
+        final_pass_rate=0.5,
+        total_delta=0.5,
+        total_context_loss=0.1,
+        total_shadowing_loss=0.4,
+        total_corpus_skills=100,
+    )
+    console = Console(record=True)
+    print_sweep(console, study)
+    text = console.export_text()
+    assert "requires ≥ 3 scale steps to detect" in text
+    assert "evaluated" in text
+
+
+def test_single_skill_sweep_hints_when_fewer_than_three_scales(
+    sample_two_scale_points: list[Any],
+) -> None:
+    """Verify single skill sweep displays hint when evaluated with fewer than 3 scales."""
+    from rich.console import Console
+
+    from reach.sweep import ScalingStudy
+    from reach.views.sweep import print_sweep
+
+    study = ScalingStudy(
+        target_skill="skill-a",
+        is_corpus_sweep=False,
+        scales=(10, 25),
+        points=tuple(sample_two_scale_points),
+        knee_scale=None,
+        baseline_pass_rate=1.0,
+        final_pass_rate=0.5,
+        total_delta=0.5,
+        total_context_loss=0.1,
+        total_shadowing_loss=0.4,
+        total_corpus_skills=100,
+    )
+    console = Console(record=True)
+    print_sweep(console, study)
+    text = console.export_text()
+    assert "requires ≥ 3 scale steps to detect (evaluated 2)" in text

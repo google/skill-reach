@@ -177,7 +177,7 @@ rescope = false
 tag = ""
 # anchor = "all"
 # auto_queries = true
-# early_stop = true
+# bootstrap_iterations = 200
 # scales = [10, 25, 50, 100]
 # trusted = false
 

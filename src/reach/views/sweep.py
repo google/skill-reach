@@ -24,6 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from reach.rendering import csv_document, dispatch_render
+from reach.uncertainty import Interval
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -46,6 +47,7 @@ _PASS_RATE_HIGH: float = 0.8
 _PASS_RATE_MID: float = 0.5
 _MIN_CURVE_POINTS: int = 2
 _MIN_SCALES_FOR_LOSS_DECOMPOSITION: int = 2
+_MIN_KNEE_POINTS: int = 3
 _LEVEL_TOLERANCE: float = 0.125
 
 
@@ -67,26 +69,24 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
     console.print(Text.assemble(*header))
 
     decision_lines: list[tuple[str, str]] = []
-    if study.sla_90_scale is not None:
-        decision_lines.append(
-            (f"  • Safe Operating Capacity (SLA ≥ 90% F1): K ≤ {study.sla_90_scale}", "bold green")
-        )
-        if study.sla_90_interpolated is not None:
-            decision_lines.append((f" (continuous: {study.sla_90_interpolated:.1f})", "dim"))
-        decision_lines.append(("\n", ""))
-
-    if study.sla_85_scale is not None:
-        decision_lines.append(
-            (f"  • Degraded Capacity Limit (SLA ≥ 85% F1): K ≤ {study.sla_85_scale}", "bold yellow")
-        )
-        if study.sla_85_interpolated is not None:
-            decision_lines.append((f" (continuous: {study.sla_85_interpolated:.1f})", "dim"))
-        decision_lines.append(("\n", ""))
-
     if study.knee_scale is not None:
         decision_lines.append(
             (f"  • Capacity Knee Inflection (Kneedle k*): K = {study.knee_scale}", "bold cyan")
         )
+        if study.knee_scale_interval is not None:
+            decision_lines.append(
+                (
+                    f" (95% CI: [{study.knee_scale_interval[0]}, {study.knee_scale_interval[1]}])",
+                    "dim",
+                )
+            )
+        decision_lines.append(("\n", ""))
+    elif len(study.scales) < _MIN_KNEE_POINTS:
+        hint_text = (
+            f"  • Capacity Knee Inflection: requires ≥ {_MIN_KNEE_POINTS} scale steps "
+            f"to detect (evaluated {len(study.scales)})"
+        )
+        decision_lines.append((hint_text, "dim"))
         decision_lines.append(("\n", ""))
 
     if len(study.scales) >= _MIN_SCALES_FOR_LOSS_DECOMPOSITION and (
@@ -147,7 +147,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         rec_pct = f"{pt.recall * 100:.1f}%"
         prec_pct = f"{pt.precision * 100:.1f}%"
-        f1_ci_str = f"[{pt.f1_interval[0] * 100:.1f}%-{pt.f1_interval[1] * 100:.1f}%]"
+        f1_ci_str = Interval.from_tuple(pt.f1_interval).format_percent(separator="-")
         shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
         tok_str = f"{pt.prompt_tokens_mean:,.0f}" if pt.prompt_tokens_mean is not None else "—"
         base_probes_str = (
@@ -221,6 +221,14 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
                 (" (inflection point where distractor shadowing accelerates)", "dim"),
             )
         )
+    elif len(study.scales) < _MIN_KNEE_POINTS:
+        console.print(
+            Text(
+                f"Capacity Knee: requires ≥ {_MIN_KNEE_POINTS} scale steps to detect "
+                f"(evaluated {len(study.scales)})",
+                style="dim",
+            )
+        )
 
     table = Table(
         box=box.SIMPLE,
@@ -243,7 +251,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             if pt.pass_rate >= _PASS_RATE_HIGH
             else ("yellow" if pt.pass_rate >= _PASS_RATE_MID else "bold red")
         )
-        ci = f"[{pt.pass_rate_interval[0] * 100:.1f}% - {pt.pass_rate_interval[1] * 100:.1f}%]"
+        ci = Interval.from_tuple(pt.pass_rate_interval).format_percent()
 
         tot_str = f"{pt.delta_vs_baseline * 100:+.1f}%" if pt.delta_vs_baseline != 0 else "0.0%"
         ctx_str = f"{pt.delta_context * 100:+.1f}%" if pt.delta_context != 0 else "0.0%"
@@ -352,8 +360,17 @@ def render_sweep_json(study: ScalingStudy) -> str:
     return study.model_dump_json(indent=2)
 
 
+def _extract_knee_csv_cells(study: ScalingStudy) -> tuple[str, str, str]:
+    """Extract formatted knee scale and confidence interval bounds for CSV export."""
+    knee_str = str(study.knee_scale) if study.knee_scale is not None else ""
+    knee_low = str(study.knee_scale_interval[0]) if study.knee_scale_interval is not None else ""
+    knee_high = str(study.knee_scale_interval[1]) if study.knee_scale_interval is not None else ""
+    return knee_str, knee_low, knee_high
+
+
 def render_sweep_csv(study: ScalingStudy) -> str:
     """Export ScalingStudy metrics to formatted CSV."""
+    knee_str, knee_low, knee_high = _extract_knee_csv_cells(study)
     if study.is_corpus_sweep:
         headers = [
             "scale",
@@ -367,6 +384,11 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             "f1_score",
             "f1_ci_low",
             "f1_ci_high",
+            "step_efficiency",
+            "skill_f1",
+            "knee_scale",
+            "knee_ci_low",
+            "knee_ci_high",
             "in_scope_probes",
             "negative_probes",
             "duration_ms",
@@ -384,6 +406,11 @@ def render_sweep_csv(study: ScalingStudy) -> str:
                 f"{pt.f1_score:.4f}",
                 f"{pt.f1_interval[0]:.4f}",
                 f"{pt.f1_interval[1]:.4f}",
+                f"{pt.step_efficiency_mean:.4f}",
+                f"{pt.skill_f1_mean:.4f}",
+                knee_str,
+                knee_low,
+                knee_high,
                 pt.in_scope_probes,
                 pt.negative_probes,
                 f"{pt.duration_ms_mean:.2f}",
@@ -402,6 +429,9 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             f"{pt.delta_vs_baseline:.4f}",
             f"{pt.delta_context:.4f}",
             f"{pt.delta_shadowing:.4f}",
+            knee_str,
+            knee_low,
+            knee_high,
             pt.probes_executed,
             pt.probes_failed,
             f"{pt.duration_ms_mean:.2f}",
@@ -418,6 +448,9 @@ def render_sweep_csv(study: ScalingStudy) -> str:
         "delta_total",
         "delta_context",
         "delta_shadowing",
+        "knee_scale",
+        "knee_ci_low",
+        "knee_ci_high",
         "probes_executed",
         "probes_failed",
         "duration_ms",

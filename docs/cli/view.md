@@ -1,6 +1,6 @@
 # `reach view`
 
-Read back an evaluation artifact (default: `.reach/eval.json`) and render human-readable scorecards or interactive standalone HTML reports.
+Read back an evaluation artifact (default: `.reach/eval.json`) or scaling sweep study (`.reach/sweep.json`) and render human-readable scorecards, scaling curves, CSVs, or interactive standalone HTML reports.
 
 ---
 
@@ -91,18 +91,33 @@ Output:
 
 ///
 
+/// tab | Scaling sweep study
+Render recorded capacity decay, knee metrics, and scaling curves from a sweep artifact:
+
+```bash
+reach view .reach/sweep.json
+```
+
+Or export to CSV format:
+
+```bash
+reach view .reach/sweep.json --format csv > sweep.csv
+```
+
+///
+
 ---
 
 ## Options
 
-| Option            | Type   | Default            | Description                                                                                                                                             |
-| :---------------- | :----- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ARTIFACT`        | Path   | `.reach/eval.json` | Path to the evaluation artifact JSON file. If omitted, defaults to `.reach/eval.json`.                                                                  |
-| `--out`, `-o`     | Path   | -                  | Destination path to write the rendered report (defaults to stdout).                                                                                     |
-| `--open`, `-O`    | Flag   | `false`            | Open the rendered HTML report directly in the default web browser.                                                                                      |
-| `--show-queries`  | Flag   | `false`            | Display individual scored query records below the summary scorecard.                                                                                    |
-| `--queries`, `-q` | Path   | -                  | Subset query set file used to slice the recorded evaluation run.                                                                                        |
-| `--filter-skill`  | String | `()`               | Glob pattern(s) matching target skill names to slice the recorded run.                                                                                  |
-| `--filter-id`     | String | `()`               | Glob pattern(s) matching query IDs to slice the recorded run.                                                                                           |
-| `--format`        | Choice | `text`             | Output format: `text` (terminal table), `html` (standalone interactive HTML), `json` (raw artifact JSON), `jsonl` (scored query records as JSON lines). |
-| `--verbose`       | Flag   | `false`            | Display full hexadecimal hash digests alongside badges.                                                                                                 |
+| Option            | Type   | Default            | Description                                                                                                                                                                          |
+| :---------------- | :----- | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARTIFACT`        | Path   | `.reach/eval.json` | Path to the evaluation or sweep artifact JSON file. If omitted, defaults to `.reach/eval.json` (or `.reach/sweep.json`).                                                            |
+| `--out`, `-o`     | Path   | -                  | Destination path to write the rendered report (defaults to stdout).                                                                                                                  |
+| `--open`, `-O`    | Flag   | `false`            | Open the rendered HTML report directly in the default web browser.                                                                                                                   |
+| `--show-queries`  | Flag   | `false`            | Display individual scored query records below the summary scorecard.                                                                                                                 |
+| `--queries`, `-q` | Path   | -                  | Subset query set file used to slice the recorded evaluation run.                                                                                                                     |
+| `--filter-skill`  | String | `()`               | Glob pattern(s) matching target skill names to slice the recorded run.                                                                                                               |
+| `--filter-id`     | String | `()`               | Glob pattern(s) matching query IDs to slice the recorded run.                                                                                                                        |
+| `--format`        | Choice | `text`             | Output format: `text` (terminal table), `html` (standalone interactive HTML), `json` (raw artifact JSON), `jsonl` (scored query records as JSON lines), or `csv` (sweep metrics CSV). |
+| `--verbose`       | Flag   | `false`            | Display full hexadecimal hash digests alongside badges.                                                                                                                              |

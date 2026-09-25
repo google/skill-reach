@@ -32,8 +32,10 @@ from reach.uncertainty import (
     DEFAULT_CONFIDENCE,
     DEFAULT_POWER,
     Interval,
+    cluster_wilson_interval,
     critical_value,
     detectable_delta,
+    effective_sample_size,
     required_probes,
     wilson_interval,
 )
@@ -206,6 +208,92 @@ def test_two_runs_can_overlap_while_neither_contains_the_other_rate() -> None:
     assert shallow.excludes(0 / 20)
     assert deep.excludes(2 / 5)
     assert shallow.overlaps(deep)
+
+
+def test_interval_contains_and_membership() -> None:
+    """Verify Interval implements the __contains__ container protocol and contains method."""
+    interval = Interval(low=0.2, high=0.6)
+    assert 0.2 in interval
+    assert 0.4 in interval
+    assert 0.6 in interval
+    assert 0.19 not in interval
+    assert 0.61 not in interval
+    assert -0.5 not in interval
+    assert 1.5 not in interval
+    assert "invalid" not in interval  # Non-numeric type returns False
+
+    assert interval.contains(0.4)
+    assert not interval.contains(0.7)
+
+    # Invariant: contains and excludes are exact logical complements
+    for rate in (0.0, 0.2, 0.4, 0.6, 0.8, 1.0):
+        assert interval.contains(rate) == (not interval.excludes(rate))
+        assert (rate in interval) == (not interval.excludes(rate))
+
+
+def test_interval_as_tuple_and_dict_semantics() -> None:
+    """Verify Interval supports tuple conversion and preserves BaseModel dict semantics."""
+    interval = Interval(low=0.25, high=0.75)
+
+    assert interval.as_tuple() == (0.25, 0.75)
+    assert dict(interval) == {"low": 0.25, "high": 0.75, "confidence": DEFAULT_CONFIDENCE}
+
+
+def test_interval_center() -> None:
+    """Verify center property returns the midpoint of the confidence interval."""
+    assert Interval(low=0.2, high=0.8).center == pytest.approx(0.5)
+    assert Interval(low=0.0, high=0.0).center == 0.0
+    assert Interval(low=1.0, high=1.0).center == 1.0
+    assert Interval(low=0.1, high=0.4).center == pytest.approx(0.25)
+
+
+def test_interval_intersection() -> None:
+    """Verify intersection calculates overlapping sub-intervals and handles disjoint cases."""
+    a = Interval(low=0.1, high=0.5, confidence=0.95)
+    b = Interval(low=0.3, high=0.7, confidence=0.90)
+
+    overlap = a.intersection(b)
+    assert overlap is not None
+    assert overlap.low == pytest.approx(0.3)
+    assert overlap.high == pytest.approx(0.5)
+    assert overlap.confidence == pytest.approx(0.90)  # Conservative lower confidence
+
+    # Disjoint intervals
+    c = Interval(low=0.8, high=0.9)
+    assert a.intersection(c) is None
+    assert c.intersection(a) is None
+
+    # Boundary touch (single shared point)
+    touching = Interval(low=0.5, high=0.9)
+    touch_overlap = a.intersection(touching)
+    assert touch_overlap is not None
+    assert touch_overlap.low == pytest.approx(0.5)
+    assert touch_overlap.high == pytest.approx(0.5)
+
+
+def test_interval_format_percent() -> None:
+    """Verify format_percent produces standard bracketed percentage ranges."""
+    interval = Interval(low=0.1234, high=0.5678)
+    assert interval.format_percent() == "[12.3% - 56.8%]"
+    assert interval.format_percent(digits=0) == "[12% - 57%]"
+    assert interval.format_percent(digits=2) == "[12.34% - 56.78%]"
+
+
+def test_interval_alternative_constructors() -> None:
+    """Verify Interval classmethod constructor from tuple."""
+    iv_tup = Interval.from_tuple((0.2, 0.8))
+    assert iv_tup.low == 0.2
+    assert iv_tup.high == 0.8
+    assert iv_tup.confidence == DEFAULT_CONFIDENCE
+
+    with pytest.raises(ValueError, match="expected 2 elements"):
+        Interval.from_tuple((0.2,))  # type: ignore[arg-type]
+
+
+def test_interval_strictness() -> None:
+    """Verify extra attributes are forbidden during Interval model validation."""
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        Interval.model_validate({"low": 0.2, "high": 0.8, "unexpected_field": "bogus"})
 
 
 @pytest.mark.parametrize(("finding", "counts"), sorted(DEPTH_PAIRS.items()))
@@ -602,3 +690,32 @@ def test_a_query_probed_once_is_bounded_rather_than_certain(
         assert query.probes == 1
         assert query.interval is not None
         assert query.interval.width > 0.7
+
+
+def test_effective_sample_size_calculation() -> None:
+    """Verify effective_sample_size adjusts sample size based on repeated attempts and ICC."""
+    assert effective_sample_size(100, attempts=1) == 100
+    assert effective_sample_size(100, attempts=5, intra_cluster_correlation=0.0) == 100
+    assert effective_sample_size(100, attempts=5, intra_cluster_correlation=1.0) == 20
+    # DEFF = 1 + (5 - 1) * 0.6 = 3.4; 100 / 3.4 = 29.41 -> 29
+    assert effective_sample_size(100, attempts=5, intra_cluster_correlation=0.6) == 29
+    assert effective_sample_size(0, attempts=5) == 0
+    assert effective_sample_size(-10, attempts=5) == 0
+
+
+def test_cluster_wilson_interval_widens_with_attempts() -> None:
+    """Verify cluster_wilson_interval is wider than standard wilson_interval when attempts > 1."""
+    std_int = wilson_interval(80, 100)
+    assert std_int is not None
+
+    single_int = cluster_wilson_interval(80, 100, attempts=1)
+    assert single_int is not None
+    assert single_int.low == std_int.low
+    assert single_int.high == std_int.high
+
+    clustered_int = cluster_wilson_interval(80, 100, attempts=5, intra_cluster_correlation=0.6)
+    assert clustered_int is not None
+    assert clustered_int.width > std_int.width
+    assert clustered_int.low < std_int.low
+    assert clustered_int.high > std_int.high
+    assert cluster_wilson_interval(0, 0) is None

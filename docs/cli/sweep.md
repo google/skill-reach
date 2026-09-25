@@ -36,11 +36,11 @@ reach sweep ./skills --target cloud-deploy --agent claude-code
 
 ///
 
-/// tab | Early stopping control
-Toggle automated early termination when confidence interval drops below SLA:
+/// tab | Bootstrap replicates and seed
+Configure cluster-bootstrap iterations and random seed for curve uncertainty:
 
 ```bash
-reach sweep ./skills --early-stop
+reach sweep ./skills --bootstrap-iterations 500 --seed 42
 ```
 
 ///
@@ -56,6 +56,10 @@ reach sweep ./skills --format json > sweep.json
 
 ---
 
+> [!NOTE]
+> **Anchor Cohort Identification & Simpson's Paradox**
+> By default, `reach sweep` evaluates a fixed anchor cohort across all library sizes. This holds target-skill difficulty constant to cleanly isolate distractor interference from target-set composition shift. Using `--anchor all` subjects the decay curve to composition bias as peripheral skills enter at larger catalog scales.
+
 ## Options
 
 | Option                                         | Type    | Default                       | Description                                                                                                                                         |
@@ -68,7 +72,8 @@ reach sweep ./skills --format json > sweep.json
 | `--rivals-share`                               | Float   | `0.5`                         | Proportion of distractor skills selected as nearest rivals.                                                                                         |
 | `--workers`, `-j`                              | Integer | `1`                           | Number of concurrent probe execution workers.                                                                                                       |
 | `--attempts`, `-a`                             | Integer | `5`                           | Number of probe execution attempts per query at each scale step.                                                                                    |
-| `--early-stop` / `--no-early-stop`             | Boolean | `True`                        | Terminate sweep early if $F_1$ 95% CI upper bound drops below minimum SLA ($0.80$).                                                                 |
+| `--bootstrap-iterations`                       | Integer | `200`                         | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                                            |
+| `--seed`                                       | Integer | `42`                          | Random seed for reproducible bootstrap resamples and curve perturbation.                                                                           |
 | `--noise-floor`                                | Float   | `0.05`                        | Minimum pass rate drop to trigger knee detection.                                                                                                   |
 | `--agent`                                      | Choice  | `keyword`                     | Agent runtime to execute scaling probes.                                                                                                            |
 | `--model`, `-m`                                | String  | Default model                 | Target model identifier.                                                                                                                            |

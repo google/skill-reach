@@ -127,7 +127,6 @@ def test_sweep_text_output_corpus(sweep_corpus: tuple[Path, Path], capsys) -> No
             "1,3,5",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert exit_code == 0
@@ -177,7 +176,6 @@ def test_sweep_json_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
             "1,3",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -208,7 +206,6 @@ def test_sweep_csv_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
             "1,3",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "csv",
         ]
@@ -339,11 +336,11 @@ def test_sweep_custom_attempts_executes_expected_probe_count(
     assert data["points"][0]["probes_executed"] == 3
 
 
-def test_sweep_early_stop_flag(
+def test_sweep_bootstrap_flags(
     sweep_corpus: tuple[Path, Path],
     capsys,
 ) -> None:
-    """Verify --no-early-stop flag parsing in CLI."""
+    """Verify --bootstrap-iterations and --seed flag parsing in CLI."""
     corpus_dir, queries_file = sweep_corpus
     exit_code = main(
         [
@@ -355,7 +352,10 @@ def test_sweep_early_stop_flag(
             "1,3",
             "--agent",
             "fake",
-            "--no-early-stop",
+            "--bootstrap-iterations",
+            "50",
+            "--seed",
+            "123",
             "--format",
             "json",
         ]
@@ -385,7 +385,6 @@ def test_sweep_out_flag_writes_file(
             "1,3",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--out",
             str(out_json),
         ]
@@ -426,7 +425,6 @@ def test_sweep_default_out_writes_to_reach_dir(
             "1,3",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert exit_code == 0
@@ -459,7 +457,6 @@ def test_sweep_anchor_cli_modes(
             "2,4",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -482,7 +479,6 @@ def test_sweep_anchor_cli_modes(
             "3",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -504,7 +500,6 @@ def test_sweep_anchor_cli_modes(
             "skill-00,skill-02",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -526,7 +521,6 @@ def test_sweep_anchor_cli_modes(
             "all",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -564,7 +558,6 @@ def test_sweep_accepts_model_flag(
             "fake",
             "--model",
             "custom-sweep-model",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -613,7 +606,6 @@ options = { model = "base-model" }
             "fake",
             "--model",
             "override-model",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -685,7 +677,6 @@ trusted = true
             "--scales",
             "2",
             "--yes",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -759,7 +750,6 @@ publisher = "base-publisher"
             "europe-west1",
             "--publisher",
             "cli-publisher",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -787,7 +777,6 @@ def test_sweep_with_target_skill_path(
             "2",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--format",
             "json",
         ]
@@ -822,7 +811,6 @@ def test_sweep_auto_discovers_skills_when_reach_toml_omits_skills_path(
             str(queries_file),
             "--scales",
             "2",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -870,7 +858,6 @@ def test_sweep_passes_loaded_skills_once_and_checkpoints_each_scale(
             "1,3,6",
             "--agent",
             "fake",
-            "--no-early-stop",
             "--out",
             str(out_file),
         ]
@@ -970,7 +957,6 @@ def test_sweep_warns_when_anchor_has_zero_matching_queries(
             "--agent",
             "fake",
             "--no-auto-queries",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1029,7 +1015,6 @@ def test_sweep_cli_allow_truncation_flag(
             "2",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1047,7 +1032,6 @@ def test_sweep_cli_allow_truncation_flag(
             "--agent",
             "fake",
             "--no-allow-truncation",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1078,7 +1062,6 @@ def test_sweep_auto_queries_cold_start_colocated_with_corpus(
             "2,4",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1133,7 +1116,6 @@ def test_sweep_auto_queries_backfills_missing_anchor_skills(
             "skill-00,skill-05",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1171,7 +1153,6 @@ def test_sweep_auto_queries_single_target_cold_start(
             "2,4",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1202,7 +1183,6 @@ def test_sweep_auto_queries_format_json_suppresses_draft_logs(
             "json",
             "--out",
             str(out_file),
-            "--no-early-stop",
         ]
     )
     assert code == 0
@@ -1271,7 +1251,6 @@ def test_sweep_auto_queries_refreshes_stale_anchor_skills(
             "--agent",
             "fake",
             "--no-auto-queries",
-            "--no-early-stop",
         ]
     )
     assert code_no_auto == 0
@@ -1293,7 +1272,6 @@ def test_sweep_auto_queries_refreshes_stale_anchor_skills(
             "skill-00,skill-05",
             "--agent",
             "fake",
-            "--no-early-stop",
         ]
     )
     assert code == 0

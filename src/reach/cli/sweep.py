@@ -45,7 +45,6 @@ from .flags import (
     REGISTRY_GROUP,
     AgentName,
     ConfigFlag,
-    EarlyStopFlag,
     Format,
     GenerateFlags,
     Global,
@@ -300,7 +299,21 @@ def _sweep(
             help="Number of probe execution attempts per query at each scale step",
         ),
     ] = None,
-    early_stop: EarlyStopFlag = True,
+    bootstrap_iterations: Annotated[
+        int | None,
+        POSITIVE_INT,
+        Parameter(
+            name="--bootstrap-iterations",
+            help="Number of bootstrap replicates for confidence intervals",
+        ),
+    ] = None,
+    seed: Annotated[
+        int | None,
+        Parameter(
+            name="--seed",
+            help="Random seed for bootstrap confidence intervals",
+        ),
+    ] = None,
     noise_floor: Annotated[
         float,
         RATE,
@@ -421,7 +434,8 @@ def _sweep(
         skills,
         queries,
         workdir,
-        early_stop,
+        bootstrap_iterations=bootstrap_iterations,
+        bootstrap_seed=seed,
         global_scope=global_,
     )
     destination = _resolve_sweep_out_path(
@@ -471,7 +485,7 @@ def _sweep(
                 f"pass_rate={point.pass_rate:.1%}, {secondary} "
                 f"[dim]({point.probes_executed} probes{failed_suffix})[/]"
             )
-            if early_stop and step == 1 and total > 1 and point.all_probes_errored:
+            if step == 1 and total > 1 and point.all_probes_errored:
                 console.print(
                     f"  [red]Aborting sweep:[/] all {point.probes_executed} probe(s) failed "
                     f"at initial scale K={point.scale}."
@@ -489,8 +503,9 @@ def _sweep(
             workers=workers if workers is not None else effective_config.plan.workers,
             skills=found,
             attempts=attempts,
-            early_stop=early_stop,
             allow_truncation=allow_truncation,
+            bootstrap_iterations=bootstrap_iterations,
+            seed=seed,
             on_scale_complete=_on_scale_complete,
         )
     except ValueError as err:
@@ -811,8 +826,9 @@ def _finalize_sweep_study_config(
     skills: Path | None,
     queries: Path | None,
     workdir: Path | None,
-    early_stop: bool,
     *,
+    bootstrap_iterations: int | None = None,
+    bootstrap_seed: int | None = None,
     global_scope: bool = False,
 ) -> tuple[RunConfig, Path]:
     """Determine working directory and resolved benchmark queries path."""
@@ -829,12 +845,14 @@ def _finalize_sweep_study_config(
         auto_queries=effective_config.study.auto_queries,
         global_scope=global_scope,
     )
-    updated_study = effective_config.study.model_copy(
-        update={
-            "workdir": work_dir,
-            "skills": resolved_skills,
-            "queries": resolved_queries,
-            "early_stop": early_stop,
-        }
-    )
+    study_updates: dict[str, object] = {
+        "workdir": work_dir,
+        "skills": resolved_skills,
+        "queries": resolved_queries,
+    }
+    if bootstrap_iterations is not None:
+        study_updates["bootstrap_iterations"] = bootstrap_iterations
+    if bootstrap_seed is not None:
+        study_updates["bootstrap_seed"] = bootstrap_seed
+    updated_study = effective_config.study.model_copy(update=study_updates)
     return effective_config.model_copy(update={"study": updated_study}), resolved_queries

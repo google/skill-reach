@@ -427,9 +427,10 @@ Controls default file paths for benchmark queries, skill roots, workspaces, and 
 | Key            | Type                                | Default  | Description                                                                                                                |
 | :------------- | :---------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------- |
 | `anchor`       | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                    |
-| `auto_queries` | Boolean                             | `true`   | Automatically synthesize and backfill benchmark queries for unqueried anchor skills during scaling sweeps.                 |
-| `catalog`      | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`. |
-| `early_stop`   | Boolean                             | `true`   | When true, terminates scaling sweeps early if $F_1$ upper CI drops below threshold.                                        |
+| `auto_queries`         | Boolean                             | `true`   | Automatically synthesize and backfill benchmark queries for unqueried anchor skills during scaling sweeps.                 |
+| `bootstrap_iterations` | Integer                             | `200`    | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                   |
+| `bootstrap_seed`       | Integer / `None`                    | `42`     | Random seed for reproducible bootstrap resamples and curve perturbation.                                                   |
+| `catalog`              | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`. |
 | `out`          | Path                                | `None`   | Destination file path for recorded evaluation artifacts.                                                                   |
 | `partial`      | Boolean                             | `false`  | Allow query sets that evaluate only a subset of resident skills.                                                           |
 | `queries`      | Path                                | `None`   | Path to labeled evaluation queries JSON benchmark file.                                                                    |
