@@ -685,10 +685,11 @@ class StudySettings(BaseModel):
     partial: bool = False
     catalog: str | None = "auto"
     rescope: bool = False
-    early_stop: bool = True
     scales: tuple[int, ...] | None = None
     anchor: int | tuple[str, ...] | str | None = None
     trusted: bool = False
+    bootstrap_iterations: int = Field(default=200, ge=10)
+    bootstrap_seed: int | None = Field(default=42)
 
     @field_validator("anchor", mode="before")
     @classmethod

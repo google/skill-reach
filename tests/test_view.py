@@ -34,6 +34,8 @@ from reach.views import badge
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from reach.sweep import ScalingStudy
+
 
 @pytest.fixture
 def recorded(artifact: Artifact, tmp_path: Path) -> Path:
@@ -483,3 +485,105 @@ def test_collisions_html_renders_individual_query_probe_count(artifact: Artifact
     assert len(rows) == 2
     assert rows[0].css("td")[2].text().strip() == "2"
     assert rows[1].css("td")[2].text().strip() == "3"
+
+
+def test_view_scaling_study_text_output(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view renders terminal scorecard from a sweep ScalingStudy JSON artifact."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path)]) == 0
+    captured = capsys.readouterr()
+    assert "Corpus Capacity Scaling" in (captured.out + captured.err)
+
+
+def test_view_scaling_study_json_format(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view --format json prints valid JSON for a sweep artifact."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path), "--format", "json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["is_corpus_sweep"] is True
+    assert data["scales"] == [10, 25]
+
+
+def test_view_scaling_study_csv_format(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view --format csv prints formatted CSV for a sweep artifact."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path), "--format", "csv"]) == 0
+    csv_out = capsys.readouterr().out
+    assert "scale" in csv_out
+    assert "recall" in csv_out
+
+
+def test_view_scaling_study_out_file(tmp_path: Path, sample_scaling_study: ScalingStudy) -> None:
+    """Verify reach view --out writes sweep study output to target file."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+    out_file = tmp_path / "exported.csv"
+
+    assert main(["view", str(sweep_path), "--out", str(out_file)]) == 0
+    assert out_file.is_file()
+    assert "scale" in out_file.read_text(encoding="utf-8")
+
+
+def test_view_scaling_study_rejects_html_and_slice(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view raises ValueError when HTML or slicing flags are passed with sweep."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path), "--format", "html"]) == 2
+    assert "HTML format is not supported for sweep artifacts" in capsys.readouterr().err
+
+    assert main(["view", str(sweep_path), "--filter-skill", "skill-a"]) == 2
+    assert "Slicing flags" in capsys.readouterr().err
+
+
+def test_view_defaults_to_sweep_json_when_eval_absent(
+    tmp_path: Path,
+    sample_scaling_study: ScalingStudy,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach view falls back to .reach/sweep.json when .reach/eval.json is absent."""
+    monkeypatch.chdir(tmp_path)
+    reach_dir = tmp_path / ".reach"
+    reach_dir.mkdir()
+    (reach_dir / "sweep.json").write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view"]) == 0
+    captured = capsys.readouterr()
+    assert "Corpus Capacity Scaling" in (captured.out + captured.err)
+
+
+def test_view_eval_artifact_rejects_csv_format(
+    recorded: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view rejects --format csv when viewing an evaluation artifact."""
+    assert main(["view", str(recorded), "--format", "csv"]) == 2
+    assert "CSV format is only supported for sweep artifacts" in capsys.readouterr().err
+
+
+def test_view_rejects_unparseable_artifact_with_dual_schema_guidance(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view emits descriptive error referencing both eval and sweep schemas."""
+    bad_file = tmp_path / "corrupt.json"
+    bad_file.write_text('{"unrecognized_key": 42}', encoding="utf-8")
+
+    assert main(["view", str(bad_file)]) == 2
+    err = capsys.readouterr().err
+    assert "Cannot read artifact" in err
+    assert "neither a valid evaluation artifact" in err
+    assert "nor a valid scaling sweep study" in err

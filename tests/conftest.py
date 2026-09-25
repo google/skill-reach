@@ -1540,3 +1540,65 @@ def local_registry_server() -> Generator[str]:
 def registry_handler() -> type[MockRegistryHandler]:
     """Return the MockRegistryHandler class for inspecting captured requests."""
     return MockRegistryHandler
+
+
+@pytest.fixture
+def sample_two_scale_points() -> list[Any]:
+    """Provide a minimal two-point ScalingPoint sequence for small-scale testing."""
+    from reach.sweep import ScalingPoint
+
+    return [
+        ScalingPoint(
+            scale=10,
+            catalog_id="c1",
+            pass_rate=1.0,
+            pass_rate_interval=(0.7, 1.0),
+            recall=1.0,
+            recall_interval=(0.7, 1.0),
+            precision=1.0,
+            precision_interval=(0.7, 1.0),
+            f1_score=1.0,
+            f1_interval=(1.0, 1.0),
+            in_scope_probes=10,
+            probes_executed=10,
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+        ),
+        ScalingPoint(
+            scale=25,
+            catalog_id="c2",
+            pass_rate=0.5,
+            pass_rate_interval=(0.2, 0.8),
+            recall=0.5,
+            recall_interval=(0.2, 0.8),
+            precision=0.55,
+            precision_interval=(0.2, 0.8),
+            f1_score=0.52,
+            f1_interval=(0.2, 0.8),
+            in_scope_probes=10,
+            probes_executed=10,
+            delta_vs_baseline=0.5,
+            delta_context=0.1,
+            delta_shadowing=0.4,
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_scaling_study(sample_two_scale_points: list[Any]) -> Any:
+    """Provide a sample ScalingStudy fixture with 2 scales."""
+    from reach.sweep import ScalingStudy
+
+    return ScalingStudy(
+        is_corpus_sweep=True,
+        scales=(10, 25),
+        points=tuple(sample_two_scale_points),
+        knee_scale=None,
+        baseline_pass_rate=1.0,
+        final_pass_rate=0.5,
+        total_delta=0.5,
+        total_context_loss=0.1,
+        total_shadowing_loss=0.4,
+        total_corpus_skills=50,
+    )

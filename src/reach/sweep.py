@@ -22,10 +22,10 @@ import math
 import random
 import statistics
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Self
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
 
@@ -36,7 +36,7 @@ from reach.catalog import (
     load_skills,
     resolve_sweep_scales,
 )
-from reach.config import RunConfig
+from reach.config import RunConfig, StudySettings
 from reach.diff import DEFAULT_CONFIDENCE, NOISE_INFLATION
 from reach.diff import noise_floor as diff_noise_floor
 from reach.metrics import DecompositionResult, decompose_pass_rate_drop, score_trajectory
@@ -44,7 +44,12 @@ from reach.models import NO_SKILL, Catalog, CatalogMode, ProbeResult, Query, Que
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
-from reach.uncertainty import wilson_interval
+from reach.uncertainty import (
+    bootstrap_quantiles,
+    ci_span_sigmas,
+    cluster_wilson_interval,
+    effective_sample_size,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -55,7 +60,6 @@ __all__ = [
     "ScalingStudy",
     "bootstrap_f1_ci",
     "compute_scaling_noise_floor",
-    "compute_sla_crossings",
     "find_kneedle_knee",
     "run_scaling_sweep",
 ]
@@ -69,15 +73,25 @@ class PairedTrialOutcomes(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    n10: NonNegativeInt = Field(
-        description="Probes successful at baseline but failed at scaled catalog"
-    )
-    n01: NonNegativeInt = Field(
-        description="Probes failed at baseline but successful at scaled catalog"
-    )
-    total_paired: NonNegativeInt = Field(
-        description="Total mutually executed probes in both baseline and scaled arms"
-    )
+    n10: Annotated[
+        NonNegativeInt,
+        Field(description="Probes successful at baseline but failed at scaled catalog"),
+    ]
+    n01: Annotated[
+        NonNegativeInt,
+        Field(description="Probes failed at baseline but successful at scaled catalog"),
+    ]
+    total_paired: Annotated[
+        NonNegativeInt,
+        Field(description="Total mutually executed probes in both baseline and scaled arms"),
+    ]
+    effective_paired: Annotated[
+        NonNegativeInt | None,
+        Field(
+            default=None,
+            description="Effective sample size adjusting for repeated attempts",
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def _validate_paired_totals(self) -> Self:
@@ -123,6 +137,8 @@ class ScalingPoint(BaseModel):
     probes_errored: NonNegativeInt = 0
     prompt_tokens_mean: float | None = None
     duration_ms_mean: float = 0.0
+    step_efficiency_mean: float = 0.0
+    skill_f1_mean: float = 0.0
 
     @property
     def all_probes_errored(self) -> bool:
@@ -140,10 +156,7 @@ class ScalingStudy(BaseModel):
     scales: tuple[int, ...]
     points: tuple[ScalingPoint, ...]
     knee_scale: int | None = None
-    sla_90_scale: int | None = None
-    sla_90_interpolated: float | None = None
-    sla_85_scale: int | None = None
-    sla_85_interpolated: float | None = None
+    knee_scale_interval: tuple[int, int] | None = None
     baseline_pass_rate: float
     final_pass_rate: float
     total_delta: float
@@ -156,7 +169,7 @@ class ScalingStudy(BaseModel):
     paired_outcomes: PairedTrialOutcomes | None = None
 
     @model_validator(mode="after")
-    def _validate_target_skill_for_mode(self) -> ScalingStudy:
+    def _validate_target_skill_for_mode(self) -> Self:
         """Ensure targeted sweeps specify a target skill."""
         if not self.is_corpus_sweep and self.target_skill is None:
             msg = "Targeted scaling sweep requires target_skill to be specified."
@@ -166,10 +179,6 @@ class ScalingStudy(BaseModel):
 
 _MIN_KNEE_POINTS: int = 3
 _MIN_DIFF_POINTS: int = 2
-_MIN_EARLY_STOP_POINTS: int = 2
-_EARLY_STOP_F1_THRESHOLD: float = 0.80
-_SLA_90_THRESHOLD: float = 0.90
-_SLA_85_THRESHOLD: float = 0.85
 _MIN_NOISE_FLOOR: float = 0.01
 _PAVA_DECIMAL_PRECISION: int = 4
 
@@ -232,9 +241,13 @@ def compute_scaling_noise_floor(
 ) -> float:
     """Calculate minimum scaling pass-rate drop distinguishable from noise using diff."""
     if paired_outcomes is not None:
-        n = max(1, paired_outcomes.total_paired)
+        n_raw = max(1, paired_outcomes.total_paired)
+        n_eff = max(1, paired_outcomes.effective_paired or n_raw)
         n10, n01 = paired_outcomes.n10, paired_outcomes.n01
-        var_paired = max(0.0, (n10 + n01 - ((n10 - n01) ** 2) / n) / (n * n))
+        # Asymptotic McNemar variance scaled by cluster survey design effect (DEFF = n_raw / n_eff)
+        # Var_cluster = Var_raw * DEFF = (n10 + n01 - (n10 - n01)^2 / n_raw) / (n_raw * n_eff)
+        var_num = max(0.0, float(n10 + n01) - ((float(n10 - n01) ** 2) / n_raw))
+        var_paired = var_num / (float(n_raw) * float(n_eff))
         se_paired = math.sqrt(var_paired)
         floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, noise_inflation)
         return max(_MIN_NOISE_FLOOR, floor)
@@ -274,6 +287,7 @@ def find_kneedle_knee(
     pass_rates: Sequence[float],
     noise_floor: float = 0.10,
     *,
+    weights: Sequence[float] | None = None,
     auto_smooth: bool = False,
 ) -> int | None:
     """Identify the inflection knee scale k* using normalized log-scale Kneedle curvature."""
@@ -284,10 +298,17 @@ def find_kneedle_knee(
     ):
         return None
 
-    points = sorted(zip(scales, pass_rates, strict=True), key=lambda p: p[0])
-    k_vals = [p[0] for p in points]
-    y_raw = [p[1] for p in points]
-    y_vals = _isotonic_regression_pava(y_raw) if auto_smooth else y_raw
+    if weights is not None and len(weights) == len(scales):
+        paired = sorted(zip(scales, pass_rates, weights, strict=True), key=lambda p: p[0])
+        k_vals = [p[0] for p in paired]
+        y_raw = [p[1] for p in paired]
+        w_sorted = [p[2] for p in paired]
+        y_vals = _isotonic_regression_pava(y_raw, weights=w_sorted) if auto_smooth else y_raw
+    else:
+        points = sorted(zip(scales, pass_rates, strict=True), key=lambda p: p[0])
+        k_vals = [p[0] for p in points]
+        y_raw = [p[1] for p in points]
+        y_vals = _isotonic_regression_pava(y_raw) if auto_smooth else y_raw
 
     if (y_vals[0] - y_vals[-1]) <= noise_floor:
         return None
@@ -392,13 +413,13 @@ def bootstrap_f1_ci(
     *,
     trajectory: bool = True,
 ) -> tuple[float, float]:
-    """Compute empirical bootstrap confidence interval for micro F1 score."""
-    m = len(results)
-    if m <= 0 or iterations <= 0:
+    """Compute cluster-bootstrap confidence interval for micro F1 score clustered by query."""
+    if not results or iterations <= 0:
         return (0.0, 1.0)
 
-    outcomes = [
-        _classify_probe_outcome(
+    outcomes_by_query: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+    for r in results:
+        is_tp, is_fp, is_fn = _classify_probe_outcome(
             r,
             truth.get(r.query_id),
             installed_skills,
@@ -406,95 +427,63 @@ def bootstrap_f1_ci(
             query=queries_by_id.get(r.query_id) if queries_by_id is not None else None,
             trajectory=trajectory,
         )
-        for r in results
+        outcomes_by_query[r.query_id].append((int(is_tp), int(is_fp), int(is_fn)))
+
+    qids = list(outcomes_by_query.keys())
+    m_queries = len(qids)
+    if m_queries == 0:
+        return (0.0, 1.0)
+
+    query_sums = [
+        (
+            sum(tp for tp, _, _ in outcomes_by_query[qid]),
+            sum(fp for _, fp, _ in outcomes_by_query[qid]),
+            sum(fn for _, _, fn in outcomes_by_query[qid]),
+        )
+        for qid in qids
     ]
-    tp_arr = [int(tp) for tp, _, _ in outcomes]
-    fp_arr = [int(fp) for _, fp, _ in outcomes]
-    fn_arr = [int(fn) for _, _, fn in outcomes]
 
     rng = random.Random(seed)  # noqa: S311
     f1_boots: list[float] = []
-    indices = list(range(m))
 
     for _ in range(iterations):
-        sample_idx = [rng.choice(indices) for _ in range(m)]
-        tp_s = sum(tp_arr[i] for i in sample_idx)
-        fp_s = sum(fp_arr[i] for i in sample_idx)
-        fn_s = sum(fn_arr[i] for i in sample_idx)
+        sample_sums = [rng.choice(query_sums) for _ in range(m_queries)]
+        tp_s = sum(s[0] for s in sample_sums)
+        fp_s = sum(s[1] for s in sample_sums)
+        fn_s = sum(s[2] for s in sample_sums)
         denom = 2 * tp_s + fp_s + fn_s
         f1_boots.append(2.0 * tp_s / denom if denom > 0 else 0.0)
 
     f1_boots.sort()
-    low_idx = max(0, int(iterations * 0.025))
-    high_idx = min(int(iterations * 0.975), iterations - 1)
+    q_low, q_high = bootstrap_quantiles()
+    low_idx = max(0, int(iterations * q_low))
+    high_idx = min(int(iterations * q_high), iterations - 1)
     return (round(f1_boots[low_idx], 4), round(f1_boots[high_idx], 4))
 
 
-def _log_interpolate_scale(
-    p1: ScalingPoint,
-    p2: ScalingPoint,
-    threshold: float,
+def _extract_query_outcomes(
+    results: Sequence[ProbeResult],
+    truth: Mapping[str, str | None],
+    installed_skills: set[str],
+    target_skill: str | None = None,
+    queries_by_id: Mapping[str, Query] | None = None,
     *,
-    f1_1: float | None = None,
-    f1_2: float | None = None,
-) -> float | None:
-    """Interpolate log-linear scale crossing between two adjacent scaling points."""
-    val1 = f1_1 if f1_1 is not None else p1.f1_score
-    val2 = f1_2 if f1_2 is not None else p2.f1_score
-    denom = val2 - val1
-    if denom == 0.0:
-        return None
-    t = (threshold - val1) / denom
-    log_k1 = math.log(max(1, p1.scale))
-    log_k2 = math.log(max(1, p2.scale))
-    return round(math.exp(log_k1 + t * (log_k2 - log_k1)), 1)
-
-
-def compute_sla_crossings(
-    points: Sequence[ScalingPoint],
-    threshold: float,
-    *,
-    smoothed_rates: Sequence[float] | None = None,
-    auto_smooth: bool = False,
-) -> tuple[int | None, float | None]:
-    """Compute discrete conservative scale and log-linear continuous crossing for an SLA target."""
-    if not points:
-        return None, None
-
-    ordered = sorted(points, key=lambda p: p.scale)
-    if smoothed_rates is not None and len(smoothed_rates) == len(ordered):
-        effective_f1 = list(smoothed_rates)
-    elif auto_smooth:
-        effective_f1 = _isotonic_regression_pava([p.f1_score for p in ordered])
-    else:
-        effective_f1 = [p.f1_score for p in ordered]
-    discrete_k: int | None = None
-    interp_k: float | None = None
-
-    for i in range(len(ordered) - 1):
-        f1_1, f1_2 = effective_f1[i], effective_f1[i + 1]
-        if f1_1 >= threshold > f1_2:
-            discrete_k = ordered[i].scale
-            interp_k = _log_interpolate_scale(
-                ordered[i], ordered[i + 1], threshold, f1_1=f1_1, f1_2=f1_2
-            )
-            break
-
-    if discrete_k is None:
-        qualifying = [ordered[i].scale for i in range(len(ordered)) if effective_f1[i] >= threshold]
-        discrete_k = max(qualifying) if qualifying else None
-        for i in range(len(ordered) - 1):
-            f1_1, f1_2 = effective_f1[i], effective_f1[i + 1]
-            if f1_1 <= threshold < f1_2:
-                interp_k = _log_interpolate_scale(
-                    ordered[i], ordered[i + 1], threshold, f1_1=f1_1, f1_2=f1_2
-                )
-                break
-
-    if interp_k is None and discrete_k is not None:
-        interp_k = float(discrete_k)
-
-    return discrete_k, interp_k
+    trajectory: bool = True,
+) -> dict[str, tuple[int, int, int]]:
+    """Aggregate (tp, fp, fn) counts grouped by query_id for a single scale."""
+    outcomes: dict[str, tuple[int, int, int]] = defaultdict(lambda: (0, 0, 0))
+    for r in results:
+        is_tp, is_fp, is_fn = _classify_probe_outcome(
+            r,
+            truth.get(r.query_id),
+            installed_skills,
+            target_skill=target_skill,
+            query=queries_by_id.get(r.query_id) if queries_by_id is not None else None,
+            trajectory=trajectory,
+        )
+        cur_tp, cur_fp, cur_fn = outcomes[r.query_id]
+        outcomes[r.query_id] = (cur_tp + int(is_tp), cur_fp + int(is_fp), cur_fn + int(is_fn))
+    return dict(outcomes)
 
 
 _FUZZY_MATCH_CUTOFF = 0.5
@@ -600,6 +589,8 @@ class _ScaleClassificationMetrics(NamedTuple):
     abstention_interval: tuple[float, float] | None
     f1_score: float
     f1_interval: tuple[float, float]
+    step_efficiency_mean: float = 0.0
+    skill_f1_mean: float = 0.0
 
 
 class _ScaleTelemetry(NamedTuple):
@@ -617,6 +608,14 @@ class _ScaleDecomposition(NamedTuple):
     delta_context: float
     delta_shadowing: float
     decomposition: DecompositionResult | None
+
+
+def _estimate_query_attempts(results: Sequence[ProbeResult]) -> int:
+    """Estimate average attempts per query across probe results."""
+    if not results:
+        return 1
+    attempts_counter = Counter(r.query_id for r in results)
+    return max(1, round(statistics.fmean(attempts_counter.values())))
 
 
 def _calculate_scale_pass_rate(
@@ -646,7 +645,8 @@ def _calculate_scale_pass_rate(
                 hits += 1
     fails = executed - hits
     pass_rate = hits / executed if executed else 0.0
-    interval_obj = wilson_interval(hits, executed)
+    attempts = _estimate_query_attempts(results)
+    interval_obj = cluster_wilson_interval(hits, executed, attempts=attempts)
     pass_interval = (interval_obj.low, interval_obj.high) if interval_obj else (0.0, 1.0)
     return _ScalePassRate(
         executed=executed,
@@ -689,7 +689,8 @@ def _compute_scope_counts(
     tp = sum(1 for is_tp, _, _ in outcomes if is_tp)
     internal_fp = sum(1 for _, is_fp, _ in outcomes if is_fp)
     recall = tp / len(relevant) if relevant else 0.0
-    rec_int = wilson_interval(tp, len(relevant))
+    attempts = _estimate_query_attempts(relevant)
+    rec_int = cluster_wilson_interval(tp, len(relevant), attempts=attempts)
     recall_interval = (rec_int.low, rec_int.high) if rec_int else (0.0, 1.0)
     return tp, internal_fp, recall, recall_interval
 
@@ -728,7 +729,8 @@ def _compute_negative_counts(
     if not negative:
         return tn, fp_distractor, None, None
     abstention_rate = round(tn / len(negative), 4)
-    abst_int = wilson_interval(tn, len(negative))
+    attempts = _estimate_query_attempts(negative)
+    abst_int = cluster_wilson_interval(tn, len(negative), attempts=attempts)
     abstention_interval = (round(abst_int.low, 4), round(abst_int.high, 4)) if abst_int else None
     return tn, fp_distractor, abstention_rate, abstention_interval
 
@@ -738,6 +740,7 @@ def _compute_precision_metrics(
     internal_fp: int,
     fp_distractor: int,
     has_negatives: bool,
+    attempts: int = 1,
 ) -> tuple[float, float | None, float, tuple[float, float]]:
     """Compute internal precision, external distractor precision, and overall precision."""
     internal_precision = tp / (tp + internal_fp) if (tp + internal_fp) else 1.0
@@ -748,7 +751,11 @@ def _compute_precision_metrics(
     )
     overall_fp = internal_fp + fp_distractor
     precision = tp / (tp + overall_fp) if (tp + overall_fp) else 1.0
-    prec_int = wilson_interval(tp, tp + overall_fp) if (tp + overall_fp) else None
+    prec_int = (
+        cluster_wilson_interval(tp, tp + overall_fp, attempts=attempts)
+        if (tp + overall_fp)
+        else None
+    )
     precision_interval = (prec_int.low, prec_int.high) if prec_int else (1.0, 1.0)
     return internal_precision, ext_prec, precision, precision_interval
 
@@ -798,8 +805,9 @@ def _calculate_scale_classification(
         target_skill=target_skill,
         trajectory=trajectory,
     )
+    attempts = _estimate_query_attempts(results)
     internal_prec, ext_prec, precision, precision_interval = _compute_precision_metrics(
-        tp, internal_fp, fp_distractor, bool(negative)
+        tp, internal_fp, fp_distractor, bool(negative), attempts=attempts
     )
 
     f1 = _compute_f1_score(precision, recall)
@@ -819,6 +827,25 @@ def _calculate_scale_classification(
         rounded_f1 = round(f1, 4)
         f1_ci = (rounded_f1, rounded_f1)
 
+    step_effs: list[float] = []
+    skill_f1s: list[float] = []
+    for r in results:
+        if r.error:
+            continue
+        q = queries_by_id.get(r.query_id)
+        if q is not None:
+            raw_seq = (
+                tuple(r.invoked_skills)
+                if r.invoked_skills
+                else ((r.invoked_skill,) if r.invoked_skill is not None else ())
+            )
+            t_score = score_trajectory(q, raw_seq)
+            step_effs.append(t_score.step_efficiency)
+            skill_f1s.append(t_score.skill_f1)
+
+    step_eff_mean = round(statistics.fmean(step_effs), 4) if step_effs else 0.0
+    sk_f1_mean = round(statistics.fmean(skill_f1s), 4) if skill_f1s else 0.0
+
     return _ScaleClassificationMetrics(
         in_scope_probes=len(in_scope),
         negative_probes=len(negative),
@@ -832,6 +859,8 @@ def _calculate_scale_classification(
         abstention_interval=abstention_interval,
         f1_score=f1,
         f1_interval=(f1_ci[0], f1_ci[1]),
+        step_efficiency_mean=step_eff_mean,
+        skill_f1_mean=sk_f1_mean,
     )
 
 
@@ -984,6 +1013,8 @@ def _build_scaling_point(
         probes_errored=sum(1 for r in results if r.error),
         prompt_tokens_mean=telemetry.prompt_tokens_mean,
         duration_ms_mean=telemetry.duration_ms_mean,
+        step_efficiency_mean=class_stats.step_efficiency_mean,
+        skill_f1_mean=class_stats.skill_f1_mean,
     )
     return point, decomp_stats.decomposition
 
@@ -991,14 +1022,17 @@ def _build_scaling_point(
 def _prepare_sweep_config(
     config: RunConfig | None,
     attempts: int | None,
-    early_stop: bool | None,
+    bootstrap_iterations: int | None = None,
+    seed: int | None = None,
 ) -> RunConfig:
     """Apply CLI overrides to execution configuration."""
     cfg = config or RunConfig()
     plan_update = {"attempts": cfg.plan.resolve_sweep_attempts(attempts)}
     study_update: dict[str, object] = {}
-    if early_stop is not None:
-        study_update["early_stop"] = early_stop
+    if bootstrap_iterations is not None:
+        study_update["bootstrap_iterations"] = bootstrap_iterations
+    if seed is not None:
+        study_update["bootstrap_seed"] = seed
 
     cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
@@ -1017,21 +1051,9 @@ def _build_study_result(
     decomp: DecompositionResult | None,
     anchor_skills: Sequence[str] | None = None,
     paired_outcomes: PairedTrialOutcomes | None = None,
+    knee_interval: tuple[int, int] | None = None,
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
-    sla_90_scale: int | None = None
-    sla_90_interp: float | None = None
-    sla_85_scale: int | None = None
-    sla_85_interp: float | None = None
-
-    if is_corpus:
-        sla_90_scale, sla_90_interp = compute_sla_crossings(
-            points, _SLA_90_THRESHOLD, auto_smooth=True
-        )
-        sla_85_scale, sla_85_interp = compute_sla_crossings(
-            points, _SLA_85_THRESHOLD, auto_smooth=True
-        )
-
     b_rate = points[0].pass_rate if points else 0.0
     f_rate = points[-1].pass_rate if points else 0.0
     t_delta = points[-1].delta_vs_baseline if len(points) > 1 else 0.0
@@ -1044,10 +1066,7 @@ def _build_study_result(
         scales=tuple(evaluated_scales),
         points=tuple(points),
         knee_scale=knee,
-        sla_90_scale=sla_90_scale,
-        sla_90_interpolated=sla_90_interp,
-        sla_85_scale=sla_85_scale,
-        sla_85_interpolated=sla_85_interp,
+        knee_scale_interval=knee_interval,
         baseline_pass_rate=b_rate,
         final_pass_rate=f_rate,
         total_delta=t_delta,
@@ -1213,7 +1232,104 @@ def _calculate_paired_outcomes(
 
     n10 = sum(1 for k in common_keys if base_map[k] and not final_map[k])
     n01 = sum(1 for k in common_keys if not base_map[k] and final_map[k])
-    return PairedTrialOutcomes(n10=n10, n01=n01, total_paired=len(common_keys))
+    unique_qids = {k[0] for k in common_keys}
+    attempts = max(1, round(len(common_keys) / max(1, len(unique_qids))))
+    neff = effective_sample_size(len(common_keys), attempts=attempts)
+    return PairedTrialOutcomes(
+        n10=n10, n01=n01, total_paired=len(common_keys), effective_paired=neff
+    )
+
+
+def _bootstrap_knee_interval(
+    scales: Sequence[int],
+    points: Sequence[ScalingPoint],
+    noise_floor: float,
+    iterations: int = 200,
+    seed: int = 42,
+    scale_query_sums: Mapping[int, Mapping[str, tuple[int, int, int]]] | None = None,
+    confidence: float = DEFAULT_CONFIDENCE,
+) -> tuple[int, int] | None:
+    """Calculate bootstrap confidence interval for knee scale k* using weighted PAVA."""
+    if len(points) < _MIN_DIFF_POINTS or iterations <= 0:
+        return None
+
+    rng = random.Random(seed)  # noqa: S311
+    knees: list[int] = []
+
+    ci_span = ci_span_sigmas(confidence)
+    q_low, q_high = bootstrap_quantiles(confidence)
+
+    weights = [
+        1.0
+        / max(
+            1e-4,
+            ((p.f1_interval[1] - p.f1_interval[0]) / ci_span) ** 2,
+        )
+        if (p.f1_interval[1] > p.f1_interval[0])
+        else 1.0
+        for p in points
+    ]
+
+    # Non-parametric cluster bootstrap when scale query outcomes are available
+    if scale_query_sums and all(s in scale_query_sums for s in scales):
+        common_qids = list(scale_query_sums[scales[0]].keys())
+        if common_qids:
+            for _ in range(iterations):
+                sample_qids = [rng.choice(common_qids) for _ in range(len(common_qids))]
+                resampled_curve: list[float] = []
+                for s in scales:
+                    tp = sum(scale_query_sums[s].get(q, (0, 0, 0))[0] for q in sample_qids)
+                    fp = sum(scale_query_sums[s].get(q, (0, 0, 0))[1] for q in sample_qids)
+                    fn = sum(scale_query_sums[s].get(q, (0, 0, 0))[2] for q in sample_qids)
+                    denom = 2 * tp + fp + fn
+                    f1 = (2.0 * tp / denom) if denom > 0 else 0.0
+                    resampled_curve.append(f1)
+
+                k = find_kneedle_knee(
+                    scales,
+                    resampled_curve,
+                    noise_floor=noise_floor,
+                    weights=weights,
+                    auto_smooth=True,
+                )
+                if k is not None:
+                    knees.append(k)
+
+            if knees:
+                knees.sort()
+                low_idx = int(len(knees) * q_low)
+                high_idx = min(int(len(knees) * q_high), len(knees) - 1)
+                return (knees[low_idx], knees[high_idx])
+            return None
+
+    # Parametric perturbation fallback
+    for _ in range(iterations):
+        perturbed_rates: list[float] = []
+        sampled_weights: list[float] = []
+        for p in points:
+            ci_width = max(0.001, p.f1_interval[1] - p.f1_interval[0])
+            se = max(0.005, ci_width / ci_span)
+            sampled_f1 = max(0.0, min(1.0, rng.gauss(p.f1_score, se)))
+            perturbed_rates.append(sampled_f1)
+            sampled_weights.append(1.0 / (se * se))
+
+        k = find_kneedle_knee(
+            scales,
+            perturbed_rates,
+            noise_floor=noise_floor,
+            weights=sampled_weights,
+            auto_smooth=True,
+        )
+        if k is not None:
+            knees.append(k)
+
+    if not knees:
+        return None
+
+    knees.sort()
+    low_idx = int(len(knees) * q_low)
+    high_idx = min(int(len(knees) * q_high), len(knees) - 1)
+    return (knees[low_idx], knees[high_idx])
 
 
 def _assemble_scaling_study(
@@ -1228,6 +1344,8 @@ def _assemble_scaling_study(
     decomp: DecompositionResult | None,
     anchor_skills: Sequence[str] | None,
     paired_outcomes: PairedTrialOutcomes | None = None,
+    study_config: StudySettings | None = None,
+    scale_query_sums: Mapping[int, Mapping[str, tuple[int, int, int]]] | None = None,
 ) -> ScalingStudy:
     """Compute effective noise floor and knee and construct a ScalingStudy."""
     effective_noise_floor = _compute_effective_noise_floor(
@@ -1235,11 +1353,38 @@ def _assemble_scaling_study(
     )
     evaluated_scales = actual_scales[: len(points)]
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
+    ci_span = ci_span_sigmas(DEFAULT_CONFIDENCE)
+    weights = [
+        1.0
+        / max(
+            1e-4,
+            ((p.f1_interval[1] - p.f1_interval[0]) / ci_span) ** 2,
+        )
+        if (p.f1_interval[1] > p.f1_interval[0])
+        else 1.0
+        for p in points
+    ]
     knee = find_kneedle_knee(
         evaluated_scales,
         rate_curve,
         noise_floor=effective_noise_floor,
+        weights=weights,
         auto_smooth=True,
+    )
+    bootstrap_iterations = study_config.bootstrap_iterations if study_config is not None else 200
+    bootstrap_seed = study_config.bootstrap_seed if study_config is not None else 42
+    effective_seed = bootstrap_seed if bootstrap_seed is not None else 42
+    knee_int = (
+        _bootstrap_knee_interval(
+            evaluated_scales,
+            points,
+            effective_noise_floor,
+            iterations=bootstrap_iterations,
+            seed=effective_seed,
+            scale_query_sums=scale_query_sums,
+        )
+        if is_corpus
+        else None
     )
     return _build_study_result(
         target=target,
@@ -1252,6 +1397,7 @@ def _assemble_scaling_study(
         decomp=decomp,
         anchor_skills=anchor_skills,
         paired_outcomes=paired_outcomes,
+        knee_interval=knee_int,
     )
 
 
@@ -1307,6 +1453,16 @@ def _prepare_scale_iteration(
     return scale_config, scale_query_set, composed
 
 
+def _resolve_sweep_work_dir(
+    study_workdir: Path | None,
+) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+    """Resolve active sweep workspace directory, initializing temporary directory if needed."""
+    if study_workdir is not None:
+        return study_workdir, None
+    temp_dir_obj = tempfile.TemporaryDirectory(prefix="reach_sweep_", delete=False)
+    return Path(temp_dir_obj.name), temp_dir_obj
+
+
 def run_scaling_sweep(
     config: RunConfig | None = None,
     target_skill: str | None = None,
@@ -1319,12 +1475,18 @@ def run_scaling_sweep(
     skills: Sequence[Skill] | None = None,
     query_set: QuerySet | None = None,
     attempts: int | None = None,
-    early_stop: bool | None = None,
     allow_truncation: bool = True,
+    bootstrap_iterations: int | None = None,
+    seed: int | None = None,
     on_scale_complete: Callable[[int, int, ScalingPoint, ScalingStudy], None] | None = None,
 ) -> ScalingStudy:
     """Execute multi-scale catalog evaluation sweep and return scaling analysis."""
-    effective_config = _prepare_sweep_config(config, attempts, early_stop)
+    effective_config = _prepare_sweep_config(
+        config,
+        attempts=attempts,
+        bootstrap_iterations=bootstrap_iterations,
+        seed=seed,
+    )
     resolved_skills = (
         list(skills) if skills is not None else load_skills(effective_config.require_skills())
     )
@@ -1365,11 +1527,7 @@ def run_scaling_sweep(
     points: list[ScalingPoint] = []
     final_decomp: DecompositionResult | None = None
 
-    work_dir = effective_config.study.workdir
-    temp_dir_obj: tempfile.TemporaryDirectory[str] | None = None
-    if work_dir is None:
-        temp_dir_obj = tempfile.TemporaryDirectory(prefix="reach_sweep_", delete=False)
-        work_dir = Path(temp_dir_obj.name)
+    work_dir, temp_dir_obj = _resolve_sweep_work_dir(effective_config.study.workdir)
 
     raw_query_map = {q.id: q for q in raw_query_set.queries}
     ctx = _SweepContext(
@@ -1386,6 +1544,7 @@ def run_scaling_sweep(
     reference_scale = max(actual_scales[0], _ADAPTIVE_WORKER_REFERENCE_SCALE)
     total_scales = len(actual_scales)
     shared_outcome_cache: dict[Any, Any] = {}
+    scale_query_sums: dict[int, dict[str, tuple[int, int, int]]] = {}
     for step_idx, (scale, catalog) in enumerate(zip(actual_scales, catalogs, strict=True), start=1):
         scale_config, scale_query_set, composed = _prepare_scale_iteration(ctx, catalog)
 
@@ -1412,6 +1571,15 @@ def run_scaling_sweep(
         )
         points.append(point)
         latest_results = outcome.results
+        scale_query_map = {q.id: q for q in scale_query_set.queries}
+        truth_expected = {q.id: q.expected_skill for q in scale_query_set.queries}
+        scale_query_sums[scale] = _extract_query_outcomes(
+            outcome.results,
+            truth_expected,
+            set(catalog.skills),
+            target_skill=target if not is_corpus else None,
+            queries_by_id=scale_query_map,
+        )
 
         if scale == actual_scales[0]:
             baseline_results = outcome.results
@@ -1436,18 +1604,12 @@ def run_scaling_sweep(
                 decomp=final_decomp,
                 anchor_skills=resolved_anchors,
                 paired_outcomes=partial_paired,
+                study_config=effective_config.study,
+                scale_query_sums=scale_query_sums,
             )
             on_scale_complete(step_idx, total_scales, point, partial_study)
 
-        if effective_config.study.early_stop and step_idx == 1 and point.all_probes_errored:
-            break
-
-        if (
-            effective_config.study.early_stop
-            and is_corpus
-            and len(points) >= _MIN_EARLY_STOP_POINTS
-            and point.f1_interval[1] < _EARLY_STOP_F1_THRESHOLD
-        ):
+        if step_idx == 1 and point.all_probes_errored:
             break
 
     final_paired = _calculate_paired_outcomes(
@@ -1467,6 +1629,8 @@ def run_scaling_sweep(
         decomp=final_decomp,
         anchor_skills=resolved_anchors,
         paired_outcomes=final_paired,
+        study_config=effective_config.study,
+        scale_query_sums=scale_query_sums,
     )
     if temp_dir_obj is not None:
         temp_dir_obj.cleanup()

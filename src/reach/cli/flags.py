@@ -178,19 +178,6 @@ NoCacheFlag = Annotated[
     ),
 ]
 
-#: Flag parameter for enabling/disabling early stopping in scaling sweeps.
-EarlyStopFlag = Annotated[
-    bool,
-    Parameter(
-        name="--early-stop",
-        negative="--no-early-stop",
-        help=(
-            "Terminate scaling sweep early if F1 95% CI upper bound drops below minimum SLA "
-            "(default: True)"
-        ),
-    ),
-]
-
 #: Parameter for reach.toml configuration file path.
 ConfigFlag = Annotated[
     Path | None,

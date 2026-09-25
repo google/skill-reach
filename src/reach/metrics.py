@@ -30,7 +30,12 @@ from reach.models import (
     Query,
     Skill,
 )
-from reach.uncertainty import Interval, wilson_interval
+from reach.uncertainty import (
+    DEFAULT_CONFIDENCE,
+    Interval,
+    bootstrap_quantiles,
+    wilson_interval,
+)
 
 #: Minimum number of skill invocations required to trace transition precursors.
 MIN_TRANSITION_STEPS: Final = 2
@@ -671,6 +676,7 @@ def _bootstrap_decomposition_ci(
     q_shd_deltas: Sequence[float],
     iterations: int,
     seed: int,
+    confidence: float = DEFAULT_CONFIDENCE,
 ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
     """Compute empirical bootstrap confidence intervals for loss components."""
     m = len(q_deltas)
@@ -694,8 +700,9 @@ def _bootstrap_decomposition_ci(
     boot_ctx.sort()
     boot_shd.sort()
 
-    low_idx = max(0, int(iterations * 0.025))
-    high_idx = min(int(iterations * 0.975), iterations - 1)
+    q_low, q_high = bootstrap_quantiles(confidence)
+    low_idx = max(0, int(iterations * q_low))
+    high_idx = min(int(iterations * q_high), iterations - 1)
     delta_ci = (round(boot_deltas[low_idx], 4), round(boot_deltas[high_idx], 4))
     ctx_ci = (round(boot_ctx[low_idx], 4), round(boot_ctx[high_idx], 4))
     shd_ci = (round(boot_shd[low_idx], 4), round(boot_shd[high_idx], 4))
