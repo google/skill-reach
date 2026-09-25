@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -78,6 +78,185 @@ def test_compute_scaling_noise_floor_reuses_diff() -> None:
     """Verify compute_scaling_noise_floor calculates threshold using diff noise floor."""
     floor = compute_scaling_noise_floor(1.0, 0.5, sample_size=20)
     assert floor > 0.0
+
+
+def test_paired_trial_outcomes_validation() -> None:
+    """Verify PairedTrialOutcomes enforces valid counts and invariants."""
+    from pydantic import ValidationError
+
+    from reach.sweep import PairedTrialOutcomes
+
+    p = PairedTrialOutcomes(n10=4, n01=2, total_paired=10)
+    assert p.n10 == 4
+    assert p.n01 == 2
+    assert p.total_paired == 10
+
+    with pytest.raises(ValidationError, match=r"total_paired .* cannot be less than"):
+        PairedTrialOutcomes(n10=6, n01=5, total_paired=10)
+
+    with pytest.raises(ValidationError):
+        PairedTrialOutcomes(n10=0, n01=0, total_paired=-1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("base_invocations", "scaled_invocations", "expected_counts"),
+    [
+        (
+            [("q1", "s1"), ("q2", "other"), ("q3", "s3")],
+            [("q1", "other"), ("q2", "s2"), ("q3", "s3", "timeout")],
+            (1, 1, 2),
+        ),
+        (
+            [("q1", "s1"), ("q2", "s2")],
+            [("q1", "s1"), ("q2", "s2")],
+            (0, 0, 2),
+        ),
+        (
+            [("q1", "other"), ("q2", "other")],
+            [("q1", "other"), ("q2", "other")],
+            (0, 0, 2),
+        ),
+    ],
+    ids=["discordant-drop-and-gain-with-error", "all-concordant-pass", "all-concordant-fail"],
+)
+def test_calculate_paired_outcomes(
+    make_result: Any,
+    base_invocations: list[tuple[Any, ...]],
+    scaled_invocations: list[tuple[Any, ...]],
+    expected_counts: tuple[int, int, int],
+) -> None:
+    """Verify _calculate_paired_outcomes computes discordant pairs and ignores errored probes."""
+    from reach.models import Query
+    from reach.sweep import _calculate_paired_outcomes
+
+    queries = {
+        "q1": Query(id="q1", text="text 1", expected_skill="s1"),
+        "q2": Query(id="q2", text="text 2", expected_skill="s2"),
+        "q3": Query(id="q3", text="text 3", expected_skill="s3"),
+    }
+
+    def _build_results(specs: list[tuple[Any, ...]]) -> list[Any]:
+        results = []
+        for spec in specs:
+            qid, invoked = spec[0], spec[1]
+            err = spec[2] if len(spec) > 2 else None
+            results.append(make_result(query_id=qid, invoked=invoked, error=err))
+        return results
+
+    base_res = _build_results(base_invocations)
+    scaled_res = _build_results(scaled_invocations)
+
+    outcomes = _calculate_paired_outcomes(base_res, scaled_res, queries)
+    assert outcomes is not None
+    assert (outcomes.n10, outcomes.n01, outcomes.total_paired) == expected_counts
+
+
+def test_compute_scaling_noise_floor_paired_mcnemar_variance() -> None:
+    """Verify paired McNemar variance yields a tighter noise floor than independent samples."""
+    from reach.sweep import PairedTrialOutcomes
+
+    floor_indep = compute_scaling_noise_floor(0.96, 0.80, sample_size=50)
+    paired = PairedTrialOutcomes(n10=8, n01=0, total_paired=50)
+    floor_paired = compute_scaling_noise_floor(0.96, 0.80, sample_size=50, paired_outcomes=paired)
+
+    assert 0.01 <= floor_paired < floor_indep
+    assert floor_paired < floor_indep * 0.75
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([], []),
+        ([0.9], [0.9]),
+        ([1.0, 0.9, 0.8], [1.0, 0.9, 0.8]),
+        ([0.96, 0.98, 0.90], [0.97, 0.97, 0.90]),
+        ([0.9, 0.8, 0.85], [0.9, 0.825, 0.825]),
+        ([0.5, 0.6, 0.7], [0.6, 0.6, 0.6]),
+    ],
+)
+def test_isotonic_regression_pava(values: list[float], expected: list[float]) -> None:
+    """Verify PAVA projects sequences onto monotone non-increasing cone."""
+    from reach.sweep import _isotonic_regression_pava
+
+    assert _isotonic_regression_pava(values) == expected
+
+
+def test_pava_block_invariants() -> None:
+    """Verify _PavaBlock merges weighted averages and maintains total sample weights."""
+    from reach.sweep import _merge_pava_blocks, _PavaBlock
+
+    b1 = _PavaBlock(mean=0.80, weight=2.0, size=2)
+    b2 = _PavaBlock(mean=0.90, weight=3.0, size=3)
+    merged = _merge_pava_blocks(b1, b2)
+
+    assert merged.size == 5
+    assert merged.weight == 5.0
+    assert merged.mean == round((0.80 * 2.0 + 0.90 * 3.0) / 5.0, 4)
+
+
+@pytest.mark.parametrize(
+    ("scales", "rates", "auto_smooth", "expected_knee"),
+    [
+        ((10, 25, 50, 100, 147), (0.96, 0.98, 0.96, 0.70, 0.50), True, 50),
+        ((10, 25, 50, 100, 147), (1.0, 0.95, 0.90, 0.50, 0.20), False, 50),
+    ],
+    ids=["upward-bump-auto-smooth", "monotone-raw"],
+)
+def test_find_kneedle_knee_auto_smooth(
+    scales: tuple[int, ...],
+    rates: tuple[float, ...],
+    auto_smooth: bool,
+    expected_knee: int | None,
+) -> None:
+    """Verify find_kneedle_knee supports opt-in auto_smooth behavior."""
+    assert (
+        find_kneedle_knee(scales, rates, noise_floor=0.05, auto_smooth=auto_smooth) == expected_knee
+    )
+
+
+def test_compute_sla_crossings_auto_pava() -> None:
+    """Verify compute_sla_crossings automatically applies PAVA when smoothed_rates is None."""
+    from reach.sweep import compute_sla_crossings
+
+    points = (
+        ScalingPoint(
+            scale=10,
+            catalog_id="cat10",
+            pass_rate=0.96,
+            pass_rate_interval=(0.90, 0.99),
+            f1_score=0.96,
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=50,
+        ),
+        ScalingPoint(
+            scale=25,
+            catalog_id="cat25",
+            pass_rate=0.98,
+            pass_rate_interval=(0.92, 1.0),
+            f1_score=0.98,
+            delta_vs_baseline=0.02,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=50,
+        ),
+        ScalingPoint(
+            scale=50,
+            catalog_id="cat50",
+            pass_rate=0.88,
+            pass_rate_interval=(0.80, 0.94),
+            f1_score=0.88,
+            delta_vs_baseline=-0.08,
+            delta_context=0.0,
+            delta_shadowing=-0.08,
+            probes_executed=50,
+        ),
+    )
+    discrete_k, interp_k = compute_sla_crossings(points, threshold=0.90, auto_smooth=True)
+    assert discrete_k == 25
+    assert interp_k is not None
+    assert 25.0 < interp_k < 50.0
 
 
 def test_run_scaling_sweep_insufficient_corpus(tmp_path: Path) -> None:

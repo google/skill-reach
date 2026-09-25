@@ -998,6 +998,167 @@ def test_corpus_scaling_plan_with_anchors(tmp_path: Path) -> None:
         assert {q.expected_skill for q in sliced_queries.queries} == {"skill-03", "skill-07"}
 
 
+def test_corpus_scaling_plan_low_discrepancy_striding(tmp_path: Path) -> None:
+    """Verify CorpusScalingPlan interleaves rivals proportionally across scales."""
+    from reach.catalog import CorpusScalingPlan
+
+    skills = [
+        # Anchor 1 and its rivals
+        Skill(name="a1", description="cloud storage bucket lifecycle", path=tmp_path / "a1"),
+        Skill(name="a1-r1", description="cloud storage bucket policy", path=tmp_path / "a1_r1"),
+        Skill(name="a1-r2", description="cloud storage bucket acl", path=tmp_path / "a1_r2"),
+        # Anchor 2 and its rivals
+        Skill(name="a2", description="kubernetes container deployment", path=tmp_path / "a2"),
+        Skill(name="a2-r1", description="kubernetes cluster upgrade", path=tmp_path / "a2_r1"),
+        Skill(name="a2-r2", description="kubernetes ingress service", path=tmp_path / "a2_r2"),
+        # Orthogonal filler
+        Skill(name="f1", description="quantum physics simulation", path=tmp_path / "f1"),
+        Skill(name="f2", description="astronomy planetary mechanics", path=tmp_path / "f2"),
+        Skill(name="f3", description="biology sequence alignment", path=tmp_path / "f3"),
+        Skill(name="f4", description="geology seismic wave propagation", path=tmp_path / "f4"),
+    ]
+    anchors = ("a1", "a2")
+    plan = CorpusScalingPlan.create(skills=skills, scales=(2, 4, 7, 10), anchor_skills=anchors)
+
+    assert plan.sequence[:2] == ("a1", "a2")
+    assert len(plan.sequence) == 10
+    assert set(plan.sequence) == {s.name for s in skills}
+
+    # At K=4 (adding 2 distractors), rivals should not be locked out until K=10
+    cat4_skills = set(plan.catalogs[1].skills)
+    assert "a1" in cat4_skills
+    assert "a2" in cat4_skills
+
+    # Sibling rivals must arrive across intermediate scales, not all at index >= 8
+    rival_indices = [plan.sequence.index(r) for r in ("a1-r1", "a1-r2", "a2-r1", "a2-r2")]
+    # At least one rival should arrive before scale 6
+    assert any(idx < 6 for idx in rival_indices)
+
+
+def test_build_scaling_sequence_nested_containment(tmp_path: Path) -> None:
+    """Verify scaling catalogs satisfy strict subset containment S_K1 subset S_K2."""
+    from reach.catalog import CorpusScalingPlan
+
+    skills = [
+        Skill(
+            name=f"skill_{i:02d}",
+            description=f"cloud system capability {i}",
+            path=tmp_path / f"s{i}",
+        )
+        for i in range(20)
+    ]
+    anchors = ("skill_00", "skill_05", "skill_10")
+    scales = (3, 6, 10, 15, 20)
+    plan = CorpusScalingPlan.create(skills=skills, scales=scales, anchor_skills=anchors)
+
+    # 1. Determinism
+    plan2 = CorpusScalingPlan.create(skills=skills, scales=scales, anchor_skills=anchors)
+    assert plan.sequence == plan2.sequence
+
+    # 2. Strict nested catalog containment
+    for i in range(len(plan.catalogs) - 1):
+        c_current = set(plan.catalogs[i].skills)
+        c_next = set(plan.catalogs[i + 1].skills)
+        assert c_current.issubset(c_next)
+        assert len(c_current) < len(c_next)
+
+    # 3. Anchors present in every catalog
+    for cat in plan.catalogs:
+        for a in anchors:
+            assert a in cat.skills
+
+
+def test_find_cluster_medoids_display_quantiles(tmp_path: Path) -> None:
+    """Verify cluster medoids balance semantic centrality with alphabetical display quantiles."""
+    skills = [
+        # Cluster Alpha (late alphabet initial z)
+        Skill(
+            name="z_cluster_lead",
+            description="kubernetes pod deployment service",
+            path=tmp_path / "z1",
+        ),
+        Skill(
+            name="z_cluster_sub",
+            description="kubernetes container deployment cluster",
+            path=tmp_path / "z2",
+        ),
+        # Cluster Beta (early alphabet initial a)
+        Skill(
+            name="a_cluster_lead",
+            description="database sql postgres schema",
+            path=tmp_path / "a1",
+        ),
+        Skill(
+            name="a_cluster_sub",
+            description="database relational table query",
+            path=tmp_path / "a2",
+        ),
+        # Cluster Gamma (mid alphabet initial m)
+        Skill(
+            name="m_cluster_lead",
+            description="machine learning neural network train",
+            path=tmp_path / "m1",
+        ),
+        Skill(
+            name="m_cluster_sub",
+            description="machine learning model inference tensor",
+            path=tmp_path / "m2",
+        ),
+    ]
+
+    medoids = find_cluster_medoids(skills, k=3)
+    assert len(medoids) == 3
+    # Anchors should be chosen across distinct alphabet groups
+    assert any(m.startswith("a_") for m in medoids)
+    assert any(m.startswith("m_") for m in medoids)
+    assert any(m.startswith("z_") for m in medoids)
+
+
+def test_low_discrepancy_striding_intra_cluster_threat_ordering() -> None:
+    """Verify _low_discrepancy_striding preserves descending similarity within clusters."""
+    from reach.catalog import _low_discrepancy_striding
+
+    names = ["a0", "a1", "d_high", "d_mid", "d_low", "e_high", "e_mid", "e_low"]
+    sim = [[0.0] * 8 for _ in range(8)]
+    sim[2][0] = 0.9
+    sim[3][0] = 0.6
+    sim[4][0] = 0.3
+    sim[5][1] = 0.9
+    sim[6][1] = 0.6
+    sim[7][1] = 0.3
+
+    order = _low_discrepancy_striding(names, sim, [0, 1])
+    ordered_names = [names[i] for i in order]
+
+    assert ordered_names[:2] == ["a0", "a1"]
+
+    d_indices = [ordered_names.index(name) for name in ("d_high", "d_mid", "d_low")]
+    assert d_indices == sorted(d_indices)
+
+    e_indices = [ordered_names.index(name) for name in ("e_high", "e_mid", "e_low")]
+    assert e_indices == sorted(e_indices)
+
+    assert ordered_names.index("d_high") < ordered_names.index("e_low")
+    assert ordered_names.index("e_high") < ordered_names.index("d_low")
+
+
+def test_find_cluster_medoids_configurable_parameters(tmp_path: Path) -> None:
+    """Verify find_cluster_medoids accepts configurable ratios and weights."""
+    skills = [
+        Skill(name="k1", description="kubernetes cluster pod", path=tmp_path / "k1"),
+        Skill(name="k2", description="kubernetes cluster container", path=tmp_path / "k2"),
+        Skill(name="d1", description="database postgres table", path=tmp_path / "d1"),
+        Skill(name="d2", description="database postgres schema", path=tmp_path / "d2"),
+    ]
+    medoids = find_cluster_medoids(
+        skills,
+        k=2,
+        near_optimal_ratio=0.85,
+        display_quantile_weight=0.25,
+    )
+    assert len(medoids) == 2
+
+
 def test_build_corpus_scaling_queries_with_anchors() -> None:
     """Verify build_corpus_scaling_queries restricts evaluation to installed anchor skills."""
     from reach.models import Query

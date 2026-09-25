@@ -36,8 +36,10 @@ from reach.runtime.antigravity_cli import (
     AntigravityCliOptions,
     AntigravityCliRuntime,
     ToolAttempt,
+    _AgyResultEvent,
     _conversation_state_paths,
     _ensure_isolated_settings,
+    _extract_result_event,
     _isolated_settings_path,
     _leaked_tools,
     parse_stream,
@@ -115,6 +117,140 @@ def test_a_result_with_no_structured_output_reports_no_selection() -> None:
 def test_duration_is_converted_from_seconds_to_milliseconds() -> None:
     """Verify duration_seconds is converted to milliseconds in summary output."""
     assert parse_stream(agy_stream(duration_seconds=2.5)).duration_ms == 2500
+
+
+def test_prompt_tokens_parsed_from_result_usage() -> None:
+    """Verify parse_stream extracts prompt tokens from result usage payload."""
+    summary = parse_stream(agy_stream(prompt_tokens=15420))
+    assert summary.prompt_tokens == 15420
+
+
+def test_prompt_tokens_parsed_from_step_update_usage() -> None:
+    """Verify parse_stream extracts prompt tokens from step_update usage when result is missing."""
+    lines = [
+        json.dumps({"event": "init", "init": {"model": "gemini-3.8-flash"}}),
+        json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_type": "agent_response",
+                    "usage": {"input_tokens": 8400, "output_tokens": 12},
+                },
+            }
+        ),
+    ]
+    summary = parse_stream(lines)
+    assert summary.prompt_tokens == 8400
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, {}, {"input_tokens": None}, {"input_tokens": -5}, {"input_tokens": "many"}],
+    ids=["none", "empty", "null-tokens", "negative-tokens", "non-integer"],
+)
+def test_prompt_tokens_invalid_or_missing_defaults_to_none(usage: dict[str, Any] | None) -> None:
+    """Verify missing, non-integer, or negative token values gracefully evaluate to None."""
+    summary = parse_stream(agy_stream(usage=usage))
+    assert summary.prompt_tokens is None
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (
+            {
+                "event": "result",
+                "result": {
+                    "status": "success",
+                    "duration_seconds": 1.25,
+                    "structured_output": {
+                        "selected_skill": "skill-a",
+                        "reasoning": "  selected based on task  ",
+                    },
+                    "error": "  warning logged  ",
+                    "usage": {"input_tokens": 1500},
+                    "extra_unmodeled_field": 42,
+                },
+            },
+            {
+                "status": "success",
+                "duration_ms": 1250,
+                "selected_skill": "skill-a",
+                "reasoning": "selected based on task",
+                "error": "warning logged",
+                "prompt_tokens": 1500,
+            },
+        ),
+        (
+            {"event": "result", "result": {}},
+            {
+                "status": "unknown",
+                "duration_ms": None,
+                "selected_skill": None,
+                "reasoning": None,
+                "error": None,
+                "prompt_tokens": None,
+            },
+        ),
+        (
+            {
+                "event": "result",
+                "result": {
+                    "status": "error",
+                    "duration_seconds": -1.0,
+                    "structured_output": {"selected_skill": "", "reasoning": "   "},
+                    "error": "   ",
+                    "usage": {"input_tokens": -10},
+                },
+            },
+            {
+                "status": "error",
+                "duration_ms": None,
+                "selected_skill": None,
+                "reasoning": None,
+                "error": None,
+                "prompt_tokens": None,
+            },
+        ),
+    ],
+    ids=["full-event", "empty-event", "whitespace-and-negative-fallback"],
+)
+def test_extract_result_event_produces_validated_model(
+    event: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    """Verify _extract_result_event constructs a validated _AgyResultEvent model."""
+    res = _extract_result_event(event)
+    assert isinstance(res, _AgyResultEvent)
+    assert res.status == expected["status"]
+    assert res.duration_ms == expected["duration_ms"]
+    assert res.selected_skill == expected["selected_skill"]
+    assert res.reasoning == expected["reasoning"]
+    assert res.error == expected["error"]
+    assert res.prompt_tokens == expected["prompt_tokens"]
+
+
+def test_agy_result_event_model_invariants() -> None:
+    """Verify _AgyResultEvent enforces immutability, extra='ignore', and field constraints."""
+    event = _AgyResultEvent.model_validate(
+        {
+            "status": "done",
+            "duration_ms": 500,
+            "prompt_tokens": 100,
+            "unmodeled_key": "ignored",
+        }
+    )
+    assert event.status == "done"
+    assert not hasattr(event, "unmodeled_key")
+
+    with pytest.raises(ValidationError):
+        _AgyResultEvent(duration_ms=-1)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError):
+        _AgyResultEvent(prompt_tokens=-10)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError):
+        setattr(event, "status", "mutated")  # noqa: B010
 
 
 def test_a_view_file_call_records_its_target_path() -> None:

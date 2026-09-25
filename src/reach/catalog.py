@@ -667,19 +667,73 @@ def _farthest_first_traversal(
     return order
 
 
+_NEAR_OPTIMAL_SIMILARITY_RATIO: float = 0.90
+_DISPLAY_QUANTILE_WEIGHT: float = 0.15
+
+
+def _compute_skill_display_widths(skills: Sequence[Skill]) -> list[int]:
+    """Compute formatted prompt display character width for each skill."""
+    return [len(f"- {s.name}: {s.description}") for s in skills]
+
+
 def _extract_cluster_medoid_indices(
     partition_clusters: Sequence[Any],
     name_to_idx: Mapping[str, int],
     sim: Sequence[Sequence[float]],
+    display_quantiles: Mapping[int, float] | None = None,
+    near_optimal_ratio: float = _NEAR_OPTIMAL_SIMILARITY_RATIO,
+    display_quantile_weight: float = _DISPLAY_QUANTILE_WEIGHT,
 ) -> list[int]:
-    """Select the central medoid skill index from each partition cluster."""
-    chosen_indices: list[int] = []
-    chosen_set: set[int] = set()
+    """Select the central medoid skill index from each partition cluster.
+
+    Clusters are ordered by their median alphabetical display quantile so target
+    quantiles align with natural cluster positions across prompt space.
+    """
+    valid_clusters = []
     for c in partition_clusters:
         c_indices = [name_to_idx[name] for name in c.skills if name in name_to_idx]
-        if not c_indices:
-            continue
-        best_idx = max(c_indices, key=lambda i: (sum(sim[i][j] for j in c_indices), -i))
+        if c_indices:
+            valid_clusters.append(c_indices)
+
+    if not valid_clusters:
+        return []
+
+    if display_quantiles is not None:
+        dq = display_quantiles
+
+        def cluster_display_median(indices: list[int]) -> float:
+            q_vals = sorted(dq.get(i, 0.5) for i in indices)
+            return q_vals[len(q_vals) // 2]
+
+        valid_clusters.sort(key=cluster_display_median)
+
+    chosen_indices: list[int] = []
+    chosen_set: set[int] = set()
+    num_clusters = len(valid_clusters)
+
+    for c_idx, c_indices in enumerate(valid_clusters):
+        sim_scores = {i: sum(sim[i][j] for j in c_indices) for i in c_indices}
+        max_sim = max(sim_scores.values()) if sim_scores else 0.0
+
+        if display_quantiles is not None and max_sim > 0:
+            target_q = (c_idx + 0.5) / max(1, num_clusters)
+            min_acceptable_sim = near_optimal_ratio * max_sim
+            candidates = [i for i in c_indices if sim_scores[i] >= min_acceptable_sim]
+            if not candidates:
+                candidates = c_indices
+
+            best_idx = max(
+                candidates,
+                key=lambda i: (
+                    sim_scores[i]
+                    - display_quantile_weight * abs(display_quantiles.get(i, 0.5) - target_q),
+                    sim_scores[i],
+                    -i,
+                ),
+            )
+        else:
+            best_idx = max(c_indices, key=lambda i: (sim_scores[i], -i))
+
         if best_idx not in chosen_set:
             chosen_set.add(best_idx)
             chosen_indices.append(best_idx)
@@ -690,6 +744,9 @@ def find_cluster_medoids(
     skills: Sequence[Skill],
     k: int,
     scorer: Scorer | None = None,
+    *,
+    near_optimal_ratio: float = _NEAR_OPTIMAL_SIMILARITY_RATIO,
+    display_quantile_weight: float = _DISPLAY_QUANTILE_WEIGHT,
 ) -> tuple[str, ...]:
     """Find k representative skill medoids across modularity clusters.
 
@@ -702,6 +759,8 @@ def find_cluster_medoids(
         skills: The corpus of skills to partition and select from.
         k: The desired number of anchor medoid skills.
         scorer: Optional BM25 scorer for computing skill distances.
+        near_optimal_ratio: Relative fraction of max cluster similarity to retain.
+        display_quantile_weight: Penalty weight for deviations from prompt display quantiles.
 
     Returns:
         Tuple of up to k representative skill names.
@@ -719,10 +778,113 @@ def find_cluster_medoids(
 
     partition = cluster_skills(unique_skills, resolution=1.5, max_clusters=k)
     name_to_idx = {name: i for i, name in enumerate(names)}
-    chosen_indices = _extract_cluster_medoid_indices(partition.clusters, name_to_idx, sim)
+
+    sorted_indices = sorted(range(n), key=lambda i: names[i])
+    sorted_skills = [unique_skills[i] for i in sorted_indices]
+    widths = _compute_skill_display_widths(sorted_skills)
+    total_w = sum(widths) or 1
+    cum_w = 0
+    display_quantiles: dict[int, float] = {}
+    for rank, idx in enumerate(sorted_indices):
+        cum_w += widths[rank]
+        display_quantiles[idx] = cum_w / total_w
+
+    chosen_indices = _extract_cluster_medoid_indices(
+        partition.clusters,
+        name_to_idx,
+        sim,
+        display_quantiles=display_quantiles,
+        near_optimal_ratio=near_optimal_ratio,
+        display_quantile_weight=display_quantile_weight,
+    )
 
     order = _farthest_first_traversal(dist, chosen_indices, min(k, n))
     return tuple(names[i] for i in order)
+
+
+def _van_der_corput(n: int) -> float:
+    """Compute base-2 Van der Corput radical inverse for positive integer n."""
+    res = 0.0
+    denom = 1.0
+    while n > 0:
+        denom *= 2.0
+        res += (n % 2) / denom
+        n //= 2
+    return res
+
+
+def _permute_by_van_der_corput(candidates: Sequence[int]) -> list[int]:
+    """Deterministically permute candidate indices via Van der Corput radical inverse."""
+    m = len(candidates)
+    if m <= 1:
+        return list(candidates)
+    available = list(range(m))
+    ordered: list[int] = []
+    t = 1
+    denom = max(1, m - 1)
+    while available:
+        target = _van_der_corput(t)
+        best_pos = min(
+            range(len(available)),
+            key=lambda idx: (abs(available[idx] / denom - target), available[idx]),
+        )
+        ordered.append(candidates[available.pop(best_pos)])
+        t += 1
+    return ordered
+
+
+def _low_discrepancy_striding(
+    names: Sequence[str],
+    sim: Sequence[Sequence[float]],
+    anchor_indices: Sequence[int],
+    skills: Sequence[Skill] | None = None,
+) -> list[int]:
+    """Order non-anchor skills via cluster-partitioned 2D low-discrepancy striding."""
+    n = len(names)
+    anchors = list(dict.fromkeys(anchor_indices))
+    if len(anchors) >= n:
+        return anchors[:n]
+
+    anchor_set = set(anchors)
+    non_anchors = [i for i in range(n) if i not in anchor_set]
+    if not non_anchors:
+        return anchors
+
+    # Compute formatted display character width for tie-breaking
+    if skills is not None and len(skills) == n:
+        widths = _compute_skill_display_widths(skills)
+    else:
+        widths = [len(names[i]) for i in range(n)]
+
+    # Partition non-anchors into nearest anchor clusters
+    clusters_by_anchor: dict[int, list[int]] = {a: [] for a in anchors}
+    for i in non_anchors:
+        best_anchor = max(anchors, key=lambda a: (sim[i][a], -a))
+        clusters_by_anchor[best_anchor].append(i)
+
+    # Sort each cluster's candidate pool by similarity descending, then
+    # display width descending, then alphabetically
+    for a in anchors:
+        clusters_by_anchor[a].sort(key=lambda i: (-sim[i][a], -widths[i], names[i]))
+
+    from collections import deque
+
+    # Interleave active clusters using Van der Corput radical inverse sequence
+    active_anchors = [a for a in anchors if clusters_by_anchor[a]]
+    cluster_order = _permute_by_van_der_corput(active_anchors)
+    cluster_queues = {a: deque(clusters_by_anchor[a]) for a in cluster_order}
+
+    interleaved: list[int] = []
+    active = list(cluster_order)
+    while active:
+        next_active = []
+        for a in active:
+            interleaved.append(cluster_queues[a].popleft())
+            if cluster_queues[a]:
+                next_active.append(a)
+        active = next_active
+
+    return [*anchors, *interleaved]
 
 
 def _build_scaling_sequence(
@@ -731,14 +893,15 @@ def _build_scaling_sequence(
     sim: list[list[float]],
     name_to_idx: Mapping[str, int],
     resolved_anchors: tuple[str, ...] | None,
+    skills: Sequence[Skill] | None = None,
 ) -> tuple[str, ...]:
-    """Determine complete k-Center scaling order across unique skills."""
+    """Determine complete scaling order across unique skills."""
     n = len(names)
     if n <= 1:
         return names
     if resolved_anchors:
         initial = [name_to_idx[a] for a in resolved_anchors]
-        order = _farthest_first_traversal(dist, initial, n)
+        order = _low_discrepancy_striding(names, sim, initial, skills=skills)
         return tuple(names[i] for i in order)
 
     medoid_idx = max(range(n), key=lambda i: (sum(sim[i]), -i))
@@ -795,7 +958,9 @@ class CorpusScalingPlan(BaseModel):
             if valid_anchors:
                 resolved_anchors = valid_anchors
 
-        seq = _build_scaling_sequence(names, dist, sim, name_to_idx, resolved_anchors)
+        seq = _build_scaling_sequence(
+            names, dist, sim, name_to_idx, resolved_anchors, skills=unique_skills
+        )
         catalogs = _build_nested_catalogs(seq, scales)
 
         return cls(
