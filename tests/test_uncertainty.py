@@ -32,6 +32,8 @@ from reach.uncertainty import (
     DEFAULT_CONFIDENCE,
     DEFAULT_POWER,
     Interval,
+    bootstrap_quantiles,
+    ci_span_sigmas,
     cluster_wilson_interval,
     critical_value,
     detectable_delta,
@@ -145,6 +147,21 @@ def test_the_deviate_refuses_a_confidence_no_interval_would_accept() -> None:
     for confidence in (0.0, 1.0, -0.5, 1.5):
         with pytest.raises(ValueError, match="strictly between"):
             critical_value(confidence)
+
+
+def test_ci_span_sigmas_matches_two_times_critical_value() -> None:
+    """Verify ci_span_sigmas returns exactly 2 * critical_value for given confidence."""
+    assert ci_span_sigmas(0.95) == pytest.approx(3.919928, abs=1e-5)
+    assert ci_span_sigmas(0.95) == pytest.approx(2.0 * critical_value(0.95))
+    assert ci_span_sigmas(0.90) == pytest.approx(2.0 * critical_value(0.90))
+    assert ci_span_sigmas(0.99) == pytest.approx(2.0 * critical_value(0.99))
+
+
+def test_bootstrap_quantiles_derives_symmetric_tail_probabilities() -> None:
+    """Verify bootstrap_quantiles computes symmetric tails from confidence level."""
+    assert bootstrap_quantiles(0.95) == (pytest.approx(0.025), pytest.approx(0.975))
+    assert bootstrap_quantiles(0.90) == (pytest.approx(0.05), pytest.approx(0.95))
+    assert bootstrap_quantiles(0.99) == (pytest.approx(0.005), pytest.approx(0.995))
 
 
 def test_nothing_probed_is_absent_rather_than_the_whole_unit() -> None:

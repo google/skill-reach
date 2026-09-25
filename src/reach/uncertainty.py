@@ -24,9 +24,15 @@ from typing import Annotated, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
+    "BOOTSTRAP_QUANTILE_HIGH",
+    "BOOTSTRAP_QUANTILE_LOW",
+    "DEFAULT_CI_SPAN_SIGMAS",
     "DEFAULT_CONFIDENCE",
     "DEFAULT_POWER",
+    "NORMAL_95_CI_SPAN_SIGMAS",
     "Interval",
+    "bootstrap_quantiles",
+    "ci_span_sigmas",
     "cluster_wilson_interval",
     "critical_value",
     "detectable_delta",
@@ -37,6 +43,10 @@ __all__ = [
 
 #: Default confidence level for statistical intervals (95%).
 DEFAULT_CONFIDENCE = 0.95
+
+#: Tail quantiles for two-sided bootstrap confidence intervals derived from DEFAULT_CONFIDENCE.
+BOOTSTRAP_QUANTILE_LOW: float = (1.0 - DEFAULT_CONFIDENCE) / 2.0
+BOOTSTRAP_QUANTILE_HIGH: float = 1.0 - BOOTSTRAP_QUANTILE_LOW
 
 #: Default statistical power for hypothesis comparisons (80%).
 DEFAULT_POWER = 0.80
@@ -62,6 +72,22 @@ def _checked_confidence(confidence: float) -> float:
 def critical_value(confidence: float = DEFAULT_CONFIDENCE) -> float:
     """Calculate two-sided normal critical value for a given confidence level."""
     return _z((1.0 - _checked_confidence(confidence)) / 2.0)
+
+
+def ci_span_sigmas(confidence: float = DEFAULT_CONFIDENCE) -> float:
+    """Calculate two-sided normal confidence interval span in standard errors (2 * z)."""
+    return 2.0 * critical_value(confidence)
+
+
+def bootstrap_quantiles(confidence: float = DEFAULT_CONFIDENCE) -> tuple[float, float]:
+    """Calculate lower and upper tail quantiles for a two-sided confidence interval."""
+    alpha = 1.0 - _checked_confidence(confidence)
+    return (alpha / 2.0, 1.0 - alpha / 2.0)
+
+
+#: Multiplier (2 * z) converting confidence interval width to SE, derived from DEFAULT_CONFIDENCE.
+DEFAULT_CI_SPAN_SIGMAS: float = ci_span_sigmas(DEFAULT_CONFIDENCE)
+NORMAL_95_CI_SPAN_SIGMAS: float = DEFAULT_CI_SPAN_SIGMAS
 
 
 class Interval(BaseModel):

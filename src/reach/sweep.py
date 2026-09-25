@@ -44,7 +44,12 @@ from reach.models import NO_SKILL, Catalog, CatalogMode, ProbeResult, Query, Que
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
-from reach.uncertainty import cluster_wilson_interval, effective_sample_size
+from reach.uncertainty import (
+    bootstrap_quantiles,
+    ci_span_sigmas,
+    cluster_wilson_interval,
+    effective_sample_size,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -450,8 +455,9 @@ def bootstrap_f1_ci(
         f1_boots.append(2.0 * tp_s / denom if denom > 0 else 0.0)
 
     f1_boots.sort()
-    low_idx = max(0, int(iterations * 0.025))
-    high_idx = min(int(iterations * 0.975), iterations - 1)
+    q_low, q_high = bootstrap_quantiles()
+    low_idx = max(0, int(iterations * q_low))
+    high_idx = min(int(iterations * q_high), iterations - 1)
     return (round(f1_boots[low_idx], 4), round(f1_boots[high_idx], 4))
 
 
@@ -1241,6 +1247,7 @@ def _bootstrap_knee_interval(
     iterations: int = 200,
     seed: int = 42,
     scale_query_sums: Mapping[int, Mapping[str, tuple[int, int, int]]] | None = None,
+    confidence: float = DEFAULT_CONFIDENCE,
 ) -> tuple[int, int] | None:
     """Calculate bootstrap confidence interval for knee scale k* using weighted PAVA."""
     if len(points) < _MIN_DIFF_POINTS or iterations <= 0:
@@ -1249,8 +1256,15 @@ def _bootstrap_knee_interval(
     rng = random.Random(seed)  # noqa: S311
     knees: list[int] = []
 
+    ci_span = ci_span_sigmas(confidence)
+    q_low, q_high = bootstrap_quantiles(confidence)
+
     weights = [
-        1.0 / max(1e-4, ((p.f1_interval[1] - p.f1_interval[0]) / 3.92) ** 2)
+        1.0
+        / max(
+            1e-4,
+            ((p.f1_interval[1] - p.f1_interval[0]) / ci_span) ** 2,
+        )
         if (p.f1_interval[1] > p.f1_interval[0])
         else 1.0
         for p in points
@@ -1283,8 +1297,8 @@ def _bootstrap_knee_interval(
 
             if knees:
                 knees.sort()
-                low_idx = int(len(knees) * 0.025)
-                high_idx = min(int(len(knees) * 0.975), len(knees) - 1)
+                low_idx = int(len(knees) * q_low)
+                high_idx = min(int(len(knees) * q_high), len(knees) - 1)
                 return (knees[low_idx], knees[high_idx])
             return None
 
@@ -1294,7 +1308,7 @@ def _bootstrap_knee_interval(
         sampled_weights: list[float] = []
         for p in points:
             ci_width = max(0.001, p.f1_interval[1] - p.f1_interval[0])
-            se = max(0.005, ci_width / 3.92)
+            se = max(0.005, ci_width / ci_span)
             sampled_f1 = max(0.0, min(1.0, rng.gauss(p.f1_score, se)))
             perturbed_rates.append(sampled_f1)
             sampled_weights.append(1.0 / (se * se))
@@ -1313,8 +1327,8 @@ def _bootstrap_knee_interval(
         return None
 
     knees.sort()
-    low_idx = int(len(knees) * 0.025)
-    high_idx = min(int(len(knees) * 0.975), len(knees) - 1)
+    low_idx = int(len(knees) * q_low)
+    high_idx = min(int(len(knees) * q_high), len(knees) - 1)
     return (knees[low_idx], knees[high_idx])
 
 
@@ -1339,8 +1353,13 @@ def _assemble_scaling_study(
     )
     evaluated_scales = actual_scales[: len(points)]
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
+    ci_span = ci_span_sigmas(DEFAULT_CONFIDENCE)
     weights = [
-        1.0 / max(1e-4, ((p.f1_interval[1] - p.f1_interval[0]) / 3.92) ** 2)
+        1.0
+        / max(
+            1e-4,
+            ((p.f1_interval[1] - p.f1_interval[0]) / ci_span) ** 2,
+        )
         if (p.f1_interval[1] > p.f1_interval[0])
         else 1.0
         for p in points
