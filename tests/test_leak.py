@@ -380,3 +380,63 @@ def test_leak_check_with_skills_by_name_and_none_expected(skills: list[Skill]) -
 
     query_without_target = make_query("Out of scope query.", None)
     assert leak_check(query_without_target, skills, skills_by_name=skills_by_name) is None
+
+
+def test_lucene_stopwords_match_bm25s() -> None:
+    """Verify LUCENE_STOPWORDS matches canonical Apache Lucene / bm25s.stopwords.STOPWORDS_EN."""
+    from bm25s.stopwords import STOPWORDS_EN
+
+    from reach.leak import LUCENE_STOPWORDS, PRONOUNS
+
+    expected_lucene = frozenset(STOPWORDS_EN)
+    assert expected_lucene == LUCENE_STOPWORDS
+    assert FUNCTION_WORDS == LUCENE_STOPWORDS | PRONOUNS
+
+
+@pytest.mark.parametrize(
+    "stopword",
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "if",
+        "in",
+        "into",
+        "is",
+        "no",
+        "not",
+        "of",
+        "on",
+        "or",
+        "such",
+        "that",
+        "the",
+        "then",
+        "there",
+        "these",
+        "this",
+        "to",
+        "was",
+        "will",
+        "with",
+    ],
+)
+def test_lucene_stopwords_never_leak_as_distinctive_tokens(
+    make_skill,
+    stopword: str,
+) -> None:
+    """Verify canonical Lucene stopwords are in FUNCTION_WORDS and never leak."""
+    assert stopword in FUNCTION_WORDS
+    corpus = [
+        make_skill("target-skill", f"Configure {stopword} storage bucket."),
+        make_skill("rival-skill", "Roll nodes onto control plane."),
+    ]
+    table = distinctive_tokens(corpus)
+    assert stopword not in table["target-skill"]

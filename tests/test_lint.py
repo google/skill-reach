@@ -536,7 +536,8 @@ def test_lockfile_drift_warns_on_hash_mismatch(
     report = lint_file(manifest)
     issue = next((i for i in report.issues if i.rule == "lockfile-drift"), None)
     assert issue is not None
-    assert issue.severity == Severity.WARN
+    assert issue.severity == Severity.INFO
+    assert report.infos == (issue,)
     assert "drift-skill" in issue.message
 
 
@@ -1368,3 +1369,157 @@ def test_catalog_budget_overflow_skipped_when_budget_is_none(tmp_path: Path) -> 
     report = lint_tree(corpus, config=cfg)
     overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
     assert len(overflow_issues) == 0
+
+
+def test_lockfile_clean_when_folder_tree_hash_matches(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """Verify lockfile-drift accepts npx skills folder tree SHA-256 computedHash."""
+    import hashlib
+    import json
+
+    skill_dir = write_skill(
+        name="folder-hashed-skill",
+        description="A skill pinned using npx skills computeSkillFolderHash algorithm.",
+        root=tmp_path / ".agents" / "skills",
+    )
+    helper_file = skill_dir / "references" / "guide.md"
+    helper_file.parent.mkdir(parents=True)
+    helper_file.write_text("# Reference Guide\n", encoding="utf-8")
+    # Ignored directories (.git, node_modules) should not affect folder hash
+    git_dir = skill_dir / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    manifest = skill_dir / "SKILL.md"
+    hasher = hashlib.sha256()
+    for rel_posix, file_path in [
+        ("references/guide.md", helper_file),
+        ("SKILL.md", manifest),
+    ]:
+        hasher.update(rel_posix.encode("utf-8"))
+        hasher.update(file_path.read_bytes())
+    folder_hash = hasher.hexdigest()
+
+    lockfile = tmp_path / "skills-lock.json"
+    lockfile.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": {"folder-hashed-skill": {"computedHash": folder_hash}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = lint_file(manifest)
+    drift_issues = [i for i in report.issues if i.rule == "lockfile-drift"]
+    assert drift_issues == []
+
+
+def test_empty_skill_directory_emits_info(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """Verify lint_tree emits an INFO-level empty-skill-directory issue for empty skill folders."""
+    write_skill(
+        name="valid-skill",
+        description="A valid skill sibling next to an empty skill directory.",
+    )
+    empty_dir = tmp_path / "empty-skill"
+    empty_dir.mkdir()
+
+    report = lint_tree(tmp_path)
+    empty_issues = [i for i in report.issues if i.rule == "empty-skill-directory"]
+    assert len(empty_issues) == 1
+    assert empty_issues[0].skill == "empty-skill"
+    assert empty_issues[0].severity == Severity.INFO
+    assert report.infos == (empty_issues[0],)
+
+
+def test_claims_neighbor_name_phrase_ignores_parenthetical_clarification(
+    tmp_path: Path,
+) -> None:
+    """Verify parenthetical product clarification does not trigger neighbor name phrase claim."""
+    from reach.lint import _claims_neighbor_name_phrase
+    from reach.models import Skill
+
+    gateway_skill = Skill(
+        name="beacon-gateway",
+        description=(
+            "Official skill for integrating Beacon Gateway (Flux API) into web applications."
+        ),
+        path=tmp_path / "beacon-gateway",
+    )
+    flux_skill = Skill(
+        name="flux-api",
+        description="Guides usage of the Flux API with the core client SDK.",
+        path=tmp_path / "flux-api",
+    )
+    assert not _claims_neighbor_name_phrase(gateway_skill, flux_skill, frozenset())
+
+
+def test_missing_mutual_handoff_unacknowledged_overlap_is_info_by_default(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """Verify unacknowledged peer overlap emits INFO while explicit overriding elevates severity."""
+    write_skill(
+        name="db-cost-optimizer",
+        description=(
+            "Analyzes PostgreSQL worker utilization, query execution bottlenecks, and "
+            "pg_stat_statements telemetry. Use when diagnosing slow SQL queries, "
+            "worker starvation, high query costs, or join performance bottlenecks. "
+            "Don't use for generic database administration (use `db-basics`)."
+        ),
+    )
+    write_skill(
+        name="db-observability",
+        description=(
+            "Monitors PostgreSQL operational telemetry, worker utilization, and query "
+            "execution bottlenecks using pg_stat_statements. Use when investigating worker "
+            "usage trends, query concurrency, or capacity planning. "
+            "Don't use for generic database administration (use `db-basics`)."
+        ),
+    )
+    write_skill(
+        name="db-basics",
+        description=(
+            "Creates and administers PostgreSQL schemas and tables. "
+            "Don't use for query cost optimization (use `db-cost-optimizer`) "
+            "or operational telemetry (use `db-observability`)."
+        ),
+    )
+
+    report = lint_tree(tmp_path)
+    mutual_issues = [i for i in report.issues if i.rule == "missing-mutual-handoff"]
+    assert len(mutual_issues) == 2
+    assert all(i.severity == Severity.INFO for i in mutual_issues)
+
+    warn_cfg = LintSettings(rules={"missing-mutual-handoff": Severity.WARN})
+    warn_report = lint_tree(tmp_path, config=warn_cfg)
+    warn_issues = [i for i in warn_report.issues if i.rule == "missing-mutual-handoff"]
+    assert all(i.severity == Severity.WARN for i in warn_issues)
+
+
+def test_lint_settings_from_settings_preserves_mutual_handoff_thresholds_and_validates_rules() -> (
+    None
+):
+    """Verify LintSettings.from_settings preserves mutual handoff thresholds and validates rules."""
+    from pydantic import ValidationError
+
+    cfg = LintSettings.from_settings(
+        {
+            "lint": {
+                "mutual_handoff_similarity_threshold": 0.82,
+                "mutual_handoff_lexical_threshold": 0.45,
+                "rules": {"lockfile-drift": "INFO"},
+            }
+        }
+    )
+    assert cfg.mutual_handoff_similarity_threshold == pytest.approx(0.82)
+    assert cfg.mutual_handoff_lexical_threshold == pytest.approx(0.45)
+    assert cfg.rules["lockfile-drift"] == Severity.INFO
+
+    with pytest.raises(ValidationError):
+        LintSettings.from_settings({"lint": {"rules": {"lockfile-drift": "not-a-severity"}}})

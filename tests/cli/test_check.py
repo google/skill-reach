@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
     import pytest
 
+    from reach.check import CheckOutcome
+
 
 def test_check_help(capsys: pytest.CaptureFixture[str]) -> None:
     """Verify reach check --help prints command options and exits 0."""
@@ -352,7 +354,7 @@ def test_check_cli_filter_flags(
 
     passed_kwargs = {}
 
-    def _mock_run_check(*args, **kwargs):
+    def _mock_run_check(*args, **kwargs) -> CheckOutcome:
         passed_kwargs.update(kwargs)
         from reach.check import CheckOutcome
         from reach.lint import LintReport
@@ -396,7 +398,7 @@ def test_check_cli_filter_glob_flags(
 
     passed_kwargs = {}
 
-    def _mock_run_check(*args, **kwargs):
+    def _mock_run_check(*args, **kwargs) -> CheckOutcome:
         passed_kwargs.update(kwargs)
         from reach.check import CheckOutcome
         from reach.lint import LintReport

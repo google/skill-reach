@@ -21,12 +21,14 @@ import os
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
-from typing import Any, ClassVar, NamedTuple, Self, cast
+from typing import Annotated, Any, ClassVar, NamedTuple, Self, cast
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     ValidationError,
@@ -39,6 +41,7 @@ from reach.uncertainty import DEFAULT_CONFIDENCE, DEFAULT_POWER
 
 __all__ = [
     "DEFAULT_CATALOG_BUDGET_CHARS",
+    "QUICK_ATTEMPTS",
     "AgentProfile",
     "CatalogSettings",
     "CheckSettings",
@@ -68,6 +71,12 @@ __all__ = [
 
 #: Default probe attempts per query.
 DEFAULT_ATTEMPTS = 5
+
+#: Default probe attempts per query in quick evaluation mode.
+QUICK_ATTEMPTS = 3
+
+#: Canonical identifier for the deterministic offline keyword/BM25 runtime agent.
+KEYWORD_AGENT = "keyword"
 
 #: Default resident listing budget in characters before truncation occurs in rationing runtimes.
 DEFAULT_CATALOG_BUDGET_CHARS = 30_000
@@ -471,19 +480,36 @@ class RuntimeSettings(BaseModel):
         return cls(agent=resolved_agent, options=merged_opts)
 
 
+class Severity(StrEnum):
+    """Specify the severity level for a lint diagnostic."""
+
+    ERROR = "error"
+    IGNORE = "ignore"
+    INFO = "info"
+    WARN = "warn"
+
+
+def _normalize_severity(value: object) -> object:
+    """Normalize string severity values to lowercase before enum validation."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+type RuleSeverity = Annotated[Severity, BeforeValidator(_normalize_severity)]
+
+
 class LintSettings(BaseModel):
     """Configuration settings for static skill linting and validation thresholds."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_description_length: int = Field(default=1024, ge=1)
-    max_name_length: int = Field(default=64, ge=1)
-    min_description_length: int = Field(default=20, ge=1)
-    catalog_budget_chars: int | None = Field(default=DEFAULT_CATALOG_BUDGET_CHARS, ge=1)
-    similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
-    mutual_handoff_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
-    mutual_handoff_lexical_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
-    rules: dict[str, Any] = Field(default_factory=dict)
+    max_description_length: Annotated[int, Field(ge=1)] = 1024
+    max_name_length: Annotated[int, Field(ge=1)] = 64
+    min_description_length: Annotated[int, Field(ge=1)] = 20
+    catalog_budget_chars: Annotated[int, Field(ge=1)] | None = DEFAULT_CATALOG_BUDGET_CHARS
+    similarity_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.92
+    mutual_handoff_similarity_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.75
+    mutual_handoff_lexical_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.35
+    rules: dict[str, RuleSeverity] = Field(default_factory=dict)
 
     @classmethod
     def from_settings(
@@ -497,55 +523,24 @@ class LintSettings(BaseModel):
 
         lint_section = settings.get("lint", {}) if isinstance(settings, Mapping) else {}
         retrieval_section = settings.get("retrieval", {}) if isinstance(settings, Mapping) else {}
-        defaults = cls()
 
-        max_desc = defaults.max_description_length
-        max_name = defaults.max_name_length
-        min_desc = defaults.min_description_length
-        cat_budget = defaults.catalog_budget_chars
-        sim_threshold = defaults.similarity_threshold
-        rules: dict[str, Any] = {}
-
+        payload: dict[str, Any] = {}
         if isinstance(lint_section, Mapping):
-            int_vals = {
-                k: v
-                for k in (
-                    "max_description_length",
-                    "max_name_length",
-                    "min_description_length",
-                )
-                if isinstance(v := lint_section.get(k), int)
-            }
-            max_desc = int_vals.get("max_description_length", max_desc)
-            max_name = int_vals.get("max_name_length", max_name)
-            min_desc = int_vals.get("min_description_length", min_desc)
-            if "catalog_budget_chars" in lint_section:
-                raw_budget = lint_section["catalog_budget_chars"]
-                if raw_budget is None or isinstance(raw_budget, int):
-                    cat_budget = raw_budget
-            raw_sim = lint_section.get("similarity_threshold")
-            if isinstance(raw_sim, (int, float)):
-                sim_threshold = float(raw_sim)
-            raw_rules = lint_section.get("rules")
-            if isinstance(raw_rules, Mapping):
-                rules = dict(raw_rules)
+            payload.update(lint_section)
+        if (
+            isinstance(retrieval_section, Mapping)
+            and "similarity_threshold" in retrieval_section
+            and "similarity_threshold" not in payload
+        ):
+            payload["similarity_threshold"] = retrieval_section["similarity_threshold"]
 
-        if isinstance(retrieval_section, Mapping):
-            raw_sim = retrieval_section.get("similarity_threshold")
-            if isinstance(raw_sim, (int, float)):
-                sim_threshold = float(raw_sim)
-
+        raw_rules = payload.get("rules")
+        rules: dict[str, Any] = dict(raw_rules) if isinstance(raw_rules, Mapping) else {}
         if overrides:
             rules.update(overrides)
+        payload["rules"] = rules
 
-        return cls(
-            max_description_length=max_desc,
-            max_name_length=max_name,
-            min_description_length=min_desc,
-            catalog_budget_chars=cat_budget,
-            similarity_threshold=sim_threshold,
-            rules=rules,
-        )
+        return cls.model_validate(payload)
 
 
 class CheckSettings(BaseModel):
@@ -584,11 +579,11 @@ class OverlapSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    contender_band: float = Field(default=0.90, ge=0.0, le=1.0)
-    material_share: float = Field(default=0.01, ge=0.0, le=1.0)
-    claim_limit: int = Field(default=8, ge=1)
-    min_claim_length: int = Field(default=3, ge=1)
-    min_claim_uses: int = Field(default=2, ge=1)
+    contender_band: Annotated[float, Field(ge=0.0, le=1.0)] = 0.90
+    material_share: Annotated[float, Field(ge=0.0, le=1.0)] = 0.01
+    claim_limit: Annotated[int, Field(ge=1)] = 8
+    min_claim_length: Annotated[int, Field(ge=1)] = 3
+    min_claim_uses: Annotated[int, Field(ge=1)] = 2
 
 
 class DiffSettings(BaseModel):
@@ -669,6 +664,25 @@ class PlanSettings(BaseModel):
                 raise ValueError(msg)
             return cli_attempts
         return self.attempts if "attempts" in self.model_fields_set else 1
+
+    def resolve_eval_attempts(
+        self,
+        agent: str,
+        cli_attempts: int | None = None,
+        *,
+        quick: bool = False,
+    ) -> int:
+        """Return effective eval attempts, defaulting to 1 for deterministic keyword runs."""
+        if cli_attempts is not None:
+            if cli_attempts < 1:
+                msg = f"Eval attempts must be at least 1, got {cli_attempts}"
+                raise ValueError(msg)
+            return cli_attempts
+        if "attempts" in self.model_fields_set:
+            return self.attempts
+        if agent == KEYWORD_AGENT:
+            return 1
+        return QUICK_ATTEMPTS if quick else self.attempts
 
 
 class StudySettings(BaseModel):

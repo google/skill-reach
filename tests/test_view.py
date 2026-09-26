@@ -587,3 +587,28 @@ def test_view_rejects_unparseable_artifact_with_dual_schema_guidance(
     assert "Cannot read artifact" in err
     assert "neither a valid evaluation artifact" in err
     assert "nor a valid scaling sweep study" in err
+
+
+def test_html_view_renders_consistency_dash_when_no_repeated_queries(
+    artifact: Artifact,
+) -> None:
+    """Verify render_view_html displays '—' for consistency when repeated_queries is zero."""
+    single_attempt = artifact.model_copy(
+        update={
+            "spread": artifact.spread.model_copy(
+                update={"replicates": 1, "repeated_queries": 0},
+            ),
+        },
+    )
+    tree = HTMLParser(render_view_html(single_attempt))
+    cells = tree.css(".figures .figure-cell")
+    consistency_cell = next(
+        c
+        for c in cells
+        if (dt := c.css_first("dt")) is not None and dt.text().strip() == "consistency"
+    )
+    dd = consistency_cell.css_first("dd")
+    assert dd is not None
+    dd_text = dd.text().strip()
+    assert dd_text.startswith("—")
+    assert "no repeated queries" in dd_text

@@ -1364,3 +1364,40 @@ def test_confusion_pairs_retains_turn1_collision_on_multi_turn_trajectory_hit(
     assert built.confusion[0].invoked == BASICS
     assert built.confusion[0].collisions == 1
     assert built.scores.trajectory_reachability == 1.0
+
+
+def test_symlinked_skill_is_attributed_to_enclosing_root(
+    whole_catalog_results: list[ProbeResult],
+    whole_catalog_queries: QuerySet,
+    skill_repo: Path,
+    config: RunConfig,
+    tmp_path: Path,
+    write_skill: Any,
+) -> None:
+    """Verify skills symlinked inside a corpus root are attributed in resolved_roots."""
+    from reach.catalog import build_catalogs, load_skills
+
+    external_dir = tmp_path / "external_store" / "symlinked-skill"
+    write_skill(
+        name="symlinked-skill",
+        description="A skill stored outside the repo and linked via symlink.",
+        path=external_dir,
+    )
+    link_path = skill_repo / "symlinked-skill"
+    link_path.symlink_to(external_dir, target_is_directory=True)
+
+    loaded = load_skills(skill_repo)
+    assert any(s.name == "symlinked-skill" for s in loaded)
+    catalog = build_catalogs(loaded, CatalogMode.ALL)[0]
+
+    built = assemble(
+        whole_catalog_results,
+        whole_catalog_queries,
+        catalog,
+        loaded,
+        config,
+        roots=[skill_repo],
+    )
+    assert [(r.path, r.skills) for r in built.resolved_roots] == [(skill_repo.resolve(), 4)]
+    symlinked_score = next(s for s in built.skills if s.skill == "symlinked-skill")
+    assert symlinked_score.root == skill_repo.resolve()

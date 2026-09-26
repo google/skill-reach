@@ -24,6 +24,7 @@ from reach.catalog import resolve_sweep_scales
 from reach.config import CatalogSettings, PlanSettings, RunConfig, StudySettings
 from reach.models import CatalogMode, Query, QueryKind, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
+from reach.run import RunOutcome
 from reach.runtime import SelectionOutcome
 from reach.runtime.fake import FakeRuntime
 from reach.sweep import (
@@ -1289,7 +1290,7 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
     observed_workers: list[tuple[int, int]] = []
     orig_conduct = sweep_mod.conduct
 
-    def spy_conduct(*args, **kwargs):
+    def spy_conduct(*args, **kwargs) -> RunOutcome:
         composed = kwargs["composed"]
         observed_workers.append((len(composed.catalog.skills), kwargs["workers"]))
         return orig_conduct(*args, **kwargs)
@@ -1339,7 +1340,7 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
             err_msg = "Simulated mid-sweep interruption"
             raise RuntimeError(err_msg)
 
-    def capture_workdir(*args, **kwargs):
+    def capture_workdir(*args, **kwargs) -> RunOutcome:
         cfg_arg = kwargs["config"]
         interrupted_workdirs.append(cfg_arg.study.workdir)
         return orig_conduct(*args, **kwargs)

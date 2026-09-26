@@ -254,7 +254,7 @@ def extract_skill_references(
 class SkillLintSemantics(BaseModel):
     """Represent structured routing boundaries and scope attractors for a skill."""
 
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     skill: str
     handoff_targets: tuple[str, ...] = ()

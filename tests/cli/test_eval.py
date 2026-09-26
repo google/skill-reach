@@ -1469,7 +1469,7 @@ def test_a_typed_query_is_probed_as_authored_ground_truth_without_drafting(
     )
 
     assert generator.prompts == [], "a typed query was drafted over"
-    assert "ground truth  the 1 question you typed" in capsys.readouterr().err
+    assert "ground truth the 1 question you typed" in capsys.readouterr().err
 
 
 def test_several_typed_queries_all_take_the_one_label_they_were_given(
@@ -1709,3 +1709,68 @@ def test_eval_filters_existing_queries_file_by_skill_flag(
     artifact = json.loads(out_file.read_text(encoding="utf-8"))
     evaluated_skills = {q["expected"] for q in artifact["queries"]}
     assert evaluated_skills == {"gke-basics"}
+
+
+def test_quick_eval_with_keyword_agent_drafts_and_saves_cleanly(
+    bodied_corpus: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify quick eval with --agent keyword drafts offline, uses 1 attempt, and saves."""
+    saved_dir = tmp_path / "saved_run"
+    rc = main(
+        [
+            "eval",
+            "gke-basics",
+            "--skills",
+            str(bodied_corpus),
+            "--agent",
+            "keyword",
+            "--save",
+            str(saved_dir),
+            "--yes",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "1 attempt per query" in combined
+    assert "keyword/keyword" in combined
+    assert "keyword/gemini-" not in combined
+    assert str(saved_dir / "queries.json.artifact.json") in combined
+    assert combined.count("wrote  ") == 1
+
+    saved_qs = load_query_set(saved_dir / "queries.json")
+    assert len(saved_qs.queries) > 0
+    assert saved_qs.provenance is not None
+    assert saved_qs.provenance.generator_model == "keyword"
+
+
+def test_draft_generation_aborts_with_error_when_zero_queries_produced(
+    bodied_corpus: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify query drafting exits with code 1 when the generator produces 0 verified queries."""
+    from unittest.mock import patch
+
+    from reach.runtime.keyword import KeywordGenerator
+
+    with patch.object(KeywordGenerator, "complete", return_value='{"queries": []}'):
+        rc = main(
+            [
+                "query",
+                "draft",
+                "--skills",
+                str(bodied_corpus),
+                "--skill",
+                "gke-basics",
+                "--out",
+                str(tmp_path / "empty_queries.json"),
+                "--agent",
+                "keyword",
+            ]
+        )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "0 verified queries" in err

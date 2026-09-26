@@ -7,7 +7,7 @@ Scaffold a new Reach project configuration and initialize skill directories.
 ## Synopsis
 
 ```bash
-reach init [OPTIONS]
+reach init [PATH] [OPTIONS]
 ```
 
 ---
@@ -64,9 +64,10 @@ reach init --force
 
 ## Options
 
-| Option           | Type   | Default          | Description                                               |
-| :--------------- | :----- | :--------------- | :-------------------------------------------------------- |
-| `--agent`        | `TEXT` | Auto-detected    | Default agent runtime to configure in `reach.toml`.       |
-| `--skills`, `-s` | `PATH` | `.agents/skills` | Directory path where skills are stored.                   |
-| `--force`, `-f`  | `flag` | `false`          | Overwrite existing `reach.toml` configuration if present. |
-| `--quiet`, `-q`  | `flag` | `false`          | Suppress summary output.                                  |
+| Option                 | Type   | Default           | Description                                               |
+| :--------------------- | :----- | :---------------- | :-------------------------------------------------------- |
+| `PATH`, `--path`, `-p` | `PATH` | Current directory | Project root directory to initialize.                     |
+| `--agent`              | `TEXT` | Auto-detected     | Default agent runtime to configure in `reach.toml`.       |
+| `--skills`, `-s`       | `PATH` | `.agents/skills`  | Directory path where skills are stored.                   |
+| `--force`, `-f`        | `flag` | `false`           | Overwrite existing `reach.toml` configuration if present. |
+| `--quiet`, `-q`        | `flag` | `false`           | Suppress summary output.                                  |

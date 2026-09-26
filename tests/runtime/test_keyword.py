@@ -155,3 +155,107 @@ def test_keyword_generator_complete() -> None:
     generator = KeywordGenerator()
     assert generator.complete("hello") == ""
     assert generator.completions == 1
+
+
+def test_keyword_generator_synthesizes_grounded_queries_from_target_documentation() -> None:
+    """Verify KeywordGenerator synthesizes valid cited JSON queries from target documentation."""
+    from reach.generate import (
+        build_adversarial_prompt,
+        build_prompt,
+        parse_response,
+        verify_citation,
+    )
+
+    target_body = (
+        "## Telemetry Relay Buffers\n"
+        "Use Beacon Relay to buffer and forward high-volume telemetry packets.\n"
+        "Configure ring buffer capacity, flush intervals, and batch compression.\n"
+    )
+    generator = KeywordGenerator()
+    prompt = build_prompt(target_body, count=2)
+    raw = generator.complete(prompt)
+
+    drafts = parse_response(raw)
+    assert len(drafts) == 2
+    assert all(verify_citation(d, target_body) for d in drafts)
+    assert len({d.text for d in drafts}) == 2
+
+    adv_prompt = build_adversarial_prompt(
+        target_body,
+        rival_bodies=("Reconcile double-entry ledger journals and immutable tape snapshots.",),
+        count=1,
+    )
+    adv_drafts = parse_response(generator.complete(adv_prompt))
+    assert len(adv_drafts) == 1
+    assert adv_drafts[0].rival_index == 1
+    assert verify_citation(
+        adv_drafts[0],
+        "Reconcile double-entry ledger journals and immutable tape snapshots.",
+    )
+
+
+def test_keyword_runtime_bm25_description_fallback(tmp_path: Path) -> None:
+    """Verify KeywordRuntime falls back to BM25 description scoring when literal name is absent."""
+    skills = [
+        Skill(
+            name="beacon-relay",
+            description="Buffer and forward high-volume telemetry packets and ring buffers.",
+            path=tmp_path / "src" / "beacon-relay",
+        ),
+        Skill(
+            name="vault-ledger",
+            description=(
+                "Manage double-entry ledger journals, reconciliations, and audit snapshots."
+            ),
+            path=tmp_path / "src" / "vault-ledger",
+        ),
+    ]
+    for skill in skills:
+        skill.path.mkdir(parents=True, exist_ok=True)
+        (skill.path / "SKILL.md").write_text(f"# {skill.name}\n", encoding="utf-8")
+
+    catalog = Catalog(
+        id="cat1",
+        mode=CatalogMode.ALL,
+        skills=tuple(s.name for s in skills),
+    )
+    runtime = KeywordRuntime()
+    runtime.install(catalog, skills, tmp_path / "work")
+
+    # Query does not mention 'beacon-relay' or 'vault-ledger' literally
+    outcome_relay = runtime.select(
+        "How do I buffer high-volume telemetry packets with ring buffers?",
+        tmp_path,
+    )
+    assert outcome_relay.invoked_skill == "beacon-relay"
+
+    outcome_ledger = runtime.select(
+        "Configure audit snapshots for double-entry ledger journals",
+        tmp_path,
+    )
+    assert outcome_ledger.invoked_skill == "vault-ledger"
+
+    # Literal skill name match still takes Priority 1 over description terms
+    outcome_literal = runtime.select(
+        "Use beacon-relay to export double-entry ledger journals",
+        tmp_path,
+    )
+    assert outcome_literal.invoked_skill == "beacon-relay"
+
+
+def test_keyword_generator_strips_urls_from_query_text_while_preserving_verbatim_citation() -> None:
+    """Verify KeywordGenerator strips URLs and script paths while keeping verbatim citation."""
+    from reach.generate import build_prompt, parse_response, verify_citation
+
+    target_body = (
+        "Draft, schedule, and publish dispatch bulletins via [REDACTED] or when the user "
+        "drops a bulletin URL such as https://chronicle.example.com/?w=<ws_id>&d=<draft_id>.\n"
+        "Run the CLI via `./scripts/chronicle.js` to manage dispatch queues and schedules.\n"
+    )
+    generator = KeywordGenerator()
+    drafts = parse_response(generator.complete(build_prompt(target_body, count=2)))
+    assert len(drafts) == 2
+    for draft in drafts:
+        assert verify_citation(draft, target_body)
+        assert "chronicle" not in draft.text
+        assert "https://" not in draft.text

@@ -262,3 +262,32 @@ def test_lint_positional_path(write_skill: Callable[..., Path], tmp_path: Path) 
         description="A sufficiently detailed description that satisfies standard rules.",
     )
     assert main(["lint", str(tmp_path)]) == 0
+
+
+def test_lint_info_flag_and_summary(
+    write_skill: Callable[..., Path],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify --info downgrades a rule to info severity and does not fail --strict."""
+    write_skill(
+        name="short-desc",
+        description="Too brief.",
+    )
+    assert (
+        main(
+            [
+                "lint",
+                "--skills",
+                str(tmp_path),
+                "--strict",
+                "--info",
+                "description-too-short",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "INFO" in out
+    assert "1 info" in out

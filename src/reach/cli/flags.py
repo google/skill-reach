@@ -80,11 +80,14 @@ def build_rule_overrides(
     ignore: tuple[str, ...],
     warn: tuple[str, ...],
     error: tuple[str, ...],
+    info: tuple[str, ...] = (),
 ) -> dict[str, Severity]:
     """Map rule override CLI lists to their configured Severity enum values."""
     overrides: dict[str, Severity] = {}
     for rule_name in ignore:
         overrides[rule_name] = Severity.IGNORE
+    for rule_name in info:
+        overrides[rule_name] = Severity.INFO
     for rule_name in warn:
         overrides[rule_name] = Severity.WARN
     for rule_name in error:
@@ -299,6 +302,14 @@ class RuleOverrideFlags(Flags):
             help="Disable specific lint rule(s) (repeatable)",
         ),
     ] = ()
+    info: Annotated[
+        tuple[str, ...],
+        LIST,
+        Parameter(
+            name="--info",
+            help="Treat specific lint rule(s) as info (repeatable)",
+        ),
+    ] = ()
     error: Annotated[
         tuple[str, ...],
         LIST,
@@ -318,7 +329,7 @@ class RuleOverrideFlags(Flags):
 
     def to_overrides(self) -> dict[str, Severity]:
         """Convert configured rule lists into severity override dictionary."""
-        return build_rule_overrides(self.ignore, self.warn, self.error)
+        return build_rule_overrides(self.ignore, self.warn, self.error, self.info)
 
 
 def _coerce_opt_value(raw: str) -> object:

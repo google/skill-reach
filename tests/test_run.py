@@ -298,7 +298,7 @@ def test_workers_reaches_conduct_without_changing_the_fingerprint(
     observed_workers: list[int] = []
     orig_harness = run_mod.ProbeHarness
 
-    def spy_harness(*args, **kwargs):
+    def spy_harness(*args, **kwargs) -> ProbeHarness:
         observed_workers.append(kwargs.get("workers", 1))
         return orig_harness(*args, **kwargs)
 

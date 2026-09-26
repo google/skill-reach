@@ -41,6 +41,7 @@ from reach.rewrite import (
     CededTerm,
     Rewrite,
     Verdict,
+    ceded_terms,
     skill_body,
     suggest_all,
     suggest_rewrite,
@@ -489,7 +490,8 @@ def test_a_crowded_field_is_reported_beside_the_one_rival_that_was_named(
     )
 
     assert rewrite.crowded
-    assert "within a tenth" in shown(rewrite)
+    rendered_rewrite = shown(rewrite)
+    assert "1 more rival scores within 10% (widget-" in rendered_rewrite
 
 
 def test_a_field_of_one_says_nothing_about_how_many_others_are_close(suggest, shown) -> None:
@@ -497,7 +499,7 @@ def test_a_field_of_one_says_nothing_about_how_many_others_are_close(suggest, sh
     rewrite = suggest()
 
     assert rewrite.contenders == ("widget-rollout",)
-    assert "within a tenth" not in shown(rewrite)
+    assert "also within reach" not in shown(rewrite)
 
 
 def test_the_terms_survive_a_terminal_too_narrow_for_the_line(suggest, shown) -> None:
@@ -825,38 +827,197 @@ def test_suggest_rewrite_tracks_missing_mutual_handoffs(corpus_builder) -> None:
     unreciprocated = (
         corpus_builder()
         .add(
-            "bigquery-observability",
-            "Monitors BigQuery slot utilization and INFORMATION_SCHEMA telemetry. "
-            "Don't use for query cost tuning (use `bigquery-slot-cost-optimizer`).",
+            "warehouse-telemetry",
+            "Monitors warehouse worker pool utilization and execution telemetry. "
+            "Don't use for query cost tuning (use `warehouse-cost-tuner`).",
         )
         .add(
-            "bigquery-slot-cost-optimizer",
-            "Analyzes BigQuery slot consumption and query costs using INFORMATION_SCHEMA.",
+            "warehouse-cost-tuner",
+            "Analyzes warehouse worker pool consumption and query costs using execution telemetry.",
         )
         .build_skills()
     )
     overlap_1 = rank_corpus(unreciprocated)
-    rw_1 = suggest_rewrite(overlap_1.find("bigquery-observability"), unreciprocated)
-    assert rw_1.rival == "bigquery-slot-cost-optimizer"
+    rw_1 = suggest_rewrite(overlap_1.find("warehouse-telemetry"), unreciprocated)
+    assert rw_1.rival == "warehouse-cost-tuner"
     assert rw_1.rival_disclaims_target is False
-    assert "bigquery-slot-cost-optimizer" in rw_1.missing_mutual_handoffs
+    assert "warehouse-cost-tuner" in rw_1.missing_mutual_handoffs
 
     reciprocated = (
         corpus_builder()
         .add(
-            "bigquery-observability",
-            "Monitors BigQuery slot utilization and INFORMATION_SCHEMA telemetry. "
-            "Don't use for query cost tuning (use `bigquery-slot-cost-optimizer`).",
+            "warehouse-telemetry",
+            "Monitors warehouse worker pool utilization and execution telemetry. "
+            "Don't use for query cost tuning (use `warehouse-cost-tuner`).",
         )
         .add(
-            "bigquery-slot-cost-optimizer",
-            "Analyzes BigQuery slot consumption and query costs using INFORMATION_SCHEMA. "
-            "Don't use for operational telemetry monitoring (use `bigquery-observability`).",
+            "warehouse-cost-tuner",
+            "Analyzes warehouse worker pool consumption and query costs using execution telemetry. "
+            "Don't use for operational telemetry monitoring (use `warehouse-telemetry`).",
         )
         .build_skills()
     )
     overlap_2 = rank_corpus(reciprocated)
-    rw_2 = suggest_rewrite(overlap_2.find("bigquery-observability"), reciprocated)
-    assert rw_2.rival == "bigquery-slot-cost-optimizer"
+    rw_2 = suggest_rewrite(overlap_2.find("warehouse-telemetry"), reciprocated)
+    assert rw_2.rival == "warehouse-cost-tuner"
     assert rw_2.rival_disclaims_target is True
     assert rw_2.missing_mutual_handoffs == ()
+
+
+@pytest.mark.parametrize(
+    ("band", "contenders", "expected_text"),
+    [
+        (
+            0.90,
+            ("primary-rival", "second-rival"),
+            "1 more rival scores within 10% (second-rival)",
+        ),
+        (
+            0.85,
+            ("primary-rival", "second-rival", "third-rival"),
+            "2 more rivals score within 15% (second-rival, third-rival)",
+        ),
+    ],
+)
+def test_print_rewrite_formats_dynamic_contender_band_and_names(
+    shown,
+    band: float,
+    contenders: tuple[str, ...],
+    expected_text: str,
+) -> None:
+    """Verify print_rewrite formats contender percentage from rewrite.band and lists rival names."""
+    rw = Rewrite(
+        skill="target-skill",
+        rival=contenders[0],
+        contenders=contenders,
+        band=band,
+    )
+    rendered_text = shown(rw, width=120)
+    assert expected_text in rendered_text
+
+
+def test_overlap_cli_wires_overlap_settings_from_reach_toml(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach overlap --suggest respects [overlap] contender_band configured in reach.toml."""
+    skills_dir = tmp_path / "skills"
+    for name, desc in (
+        ("widget-basics", "Explain widget fundamentals, rollout and rollback planning."),
+        ("widget-rollout", "Plan and execute a widget rollout across fleets."),
+        ("widget-rollback", "Plan and execute a widget rollback across fleets."),
+        ("gadget-tuning", "Tune gadget throughput for busy pipelines."),
+        ("ledger-audit", "Reconcile ledger entries against statements."),
+    ):
+        d = skills_dir / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {desc}\n---\n{BODY}",
+            encoding="utf-8",
+        )
+    toml_path = tmp_path / "reach.toml"
+    toml_path.write_text("[overlap]\ncontender_band = 0.80\n", encoding="utf-8")
+
+    code = main(
+        [
+            "overlap",
+            "--skills",
+            str(skills_dir),
+            "--skill",
+            "widget-basics",
+            "--suggest",
+            "--config",
+            str(toml_path),
+        ]
+    )
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "within 20%" in err
+
+
+def test_ceded_terms_excludes_target_skill_name_tokens(corpus_builder) -> None:
+    """Verify ceded_terms never flags tokens from the target skill's own name."""
+    corpus = (
+        corpus_builder()
+        .add(
+            "flux-engine",
+            "Guide Flux Engine usage on relay clusters with batch pipeline transforms.",
+        )
+        .add(
+            "flux-engine-streaming",
+            "Use the Flux Engine streaming endpoint for Flux Engine events and Flux Engine hooks.",
+        )
+        .add(
+            "vault-archives",
+            "Manage cold storage vaults and archive retention lock policies.",
+        )
+        .add(
+            "parcel-routing",
+            "Route inbound freight parcels across regional sorting hubs.",
+        )
+        .build_skills()
+    )
+    scorer = Bm25Scorer.from_skills(corpus)
+    overlap = rank_corpus(corpus)
+    comp = overlap.find("flux-engine")
+    assert comp.nearest_rival is not None
+    target = next(s for s in corpus if s.name == "flux-engine")
+    rival = next(s for s in corpus if s.name == comp.nearest_rival.name)
+
+    ceded = ceded_terms(target, rival, scorer, comp.nearest_rival.score)
+    ceded_names = {c.term for c in ceded}
+    assert "flux" not in ceded_names
+    assert "engine" not in ceded_names
+
+
+def test_suggest_all_honors_overlap_settings_min_claim_length_and_uses(
+    corpus_builder,
+    tmp_path: Path,
+) -> None:
+    """Verify suggest_all wires all OverlapSettings fields including min_claim_length and uses."""
+    from reach.config import OverlapSettings
+
+    body = (
+        "Use zod schema validation (zod parser, zod types) or "
+        "orchestration pipelines (orchestration workflows) to validate manifests."
+    )
+    builder = (
+        corpus_builder()
+        .add(
+            "widget-basics",
+            "Explain widget fundamentals, rollout and rollback planning.",
+            body=body,
+        )
+        .add("widget-rollout", "Plan and execute a widget rollout across fleets.")
+        .add("widget-rollback", "Plan and execute a widget rollback across fleets.")
+        .add("gadget-tuning", "Tune gadget throughput for busy pipelines.")
+        .add("ledger-audit", "Reconcile ledger entries against statements.")
+    )
+    builder.build_disk(tmp_path)
+    corpus = builder.build_skills(tmp_path)
+    overlap = rank_corpus(corpus)
+
+    # Default min_claim_length=3, min_claim_uses=2 includes both 'zod' and 'orchestration'
+    default_rw = suggest_all(overlap, corpus, ["widget-basics"], settings=OverlapSettings())[0]
+    assert "zod" in default_rw.unclaimed
+    assert "orchestration" in default_rw.unclaimed
+
+    # Raising min_claim_length=6 excludes 'zod' while keeping 'orchestration'
+    long_only_rw = suggest_all(
+        overlap,
+        corpus,
+        ["widget-basics"],
+        settings=OverlapSettings(min_claim_length=6, min_claim_uses=2),
+    )[0]
+    assert "zod" not in long_only_rw.unclaimed
+    assert "orchestration" in long_only_rw.unclaimed
+
+    # Raising min_claim_uses=3 excludes 'orchestration' (2 uses) while keeping 'zod' (3 uses)
+    frequent_only_rw = suggest_all(
+        overlap,
+        corpus,
+        ["widget-basics"],
+        settings=OverlapSettings(min_claim_length=3, min_claim_uses=3),
+    )[0]
+    assert "zod" in frequent_only_rw.unclaimed
+    assert "orchestration" not in frequent_only_rw.unclaimed

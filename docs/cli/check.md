@@ -181,6 +181,7 @@ reach check --format github --step-summary
 | `--step-summary` | Flag   | `true` (in GitHub Actions) | Write GFM Markdown scorecard to `$GITHUB_STEP_SUMMARY`.            |
 | `--yes`, `-y`    | Flag   | `false`                    | Bypass interactive safety confirmation prompts.                    |
 | `--ignore`       | String | -                          | Disable specific lint rule(s) (repeatable).                        |
+| `--info`         | String | -                          | Treat specific lint rule(s) as info (repeatable).                  |
 | `--error`        | String | -                          | Treat specific lint rule(s) as error (repeatable).                 |
 | `--warn`         | String | -                          | Treat specific lint rule(s) as warning (repeatable).               |
 | `--config`, `-c` | Path   | -                          | Path to `reach.toml` configuration file.                           |

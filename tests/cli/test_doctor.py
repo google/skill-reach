@@ -263,3 +263,14 @@ def test_check_cli_binary_supports_alternates() -> None:
         )
         assert res.status == "ok"
         assert res.detail == "/usr/local/bin/antigravity"
+
+
+def test_doctor_positional_path(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Verify reach doctor accepts target directory as a positional argument."""
+    assert main(["doctor", str(tmp_path)]) == 0
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "Reach Environment & Runtime Diagnostics" in out

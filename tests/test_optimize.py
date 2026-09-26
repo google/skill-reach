@@ -368,7 +368,9 @@ def test_synthesize_candidates_returns_requested_count_even_without_rivals(
     [
         (
             OptimizationCandidate(
-                description="A perfectly valid description that satisfies all static constraints.",
+                description=(
+                    "Validate parcel routing manifests and schema definitions against constraints."
+                ),
                 rationale="Adds distinctive terms.",
             ),
             True,
@@ -384,6 +386,13 @@ def test_synthesize_candidates_returns_requested_count_even_without_rivals(
             OptimizationCandidate(
                 description="A" * 1200,
                 rationale="Exceeds maximum allowable description length.",
+            ),
+            False,
+        ),
+        (
+            OptimizationCandidate(
+                description="Use when handling every workflow setup and standard configuration.",
+                rationale="Short broad attractor without domain anchors.",
             ),
             False,
         ),
@@ -2364,3 +2373,123 @@ def test_compute_paired_delta_clamps_extreme_bounds() -> None:
         target_name="test",
     )
     assert clamped_low == -1.0
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_reason_fragment"),
+    [
+        (
+            "Assist with any task and help with everything in the repository.",
+            "unbounded attractor",
+        ),
+        (
+            "Route inbound parcels across regional sorting hubs. TODO: add weight limits.",
+            "unresolved template placeholder",
+        ),
+        (
+            "Route inbound parcels across hubs. For customs forms, use customs-broker instead.",
+            "unknown skill",
+        ),
+    ],
+)
+def test_filter_candidates_rejects_semantic_and_placeholder_lint_violations(
+    description: str,
+    expected_reason_fragment: str,
+) -> None:
+    """Verify filter_candidates marks candidates with attractors, placeholders, or unknown refs."""
+    cand = OptimizationCandidate(description=description, rationale="test")
+    filtered = filter_candidates(
+        [cand],
+        skill_name="parcel-router",
+        known_skills={"parcel-router", "parcel-packer", "freight-auditor"},
+    )
+    assert len(filtered) == 1
+    assert filtered[0].lint_clean is False
+    assert expected_reason_fragment in filtered[0].filter_reason.lower()
+
+
+def test_filter_candidates_rejects_missing_reciprocal_handoff_when_rival_hands_off(
+    tmp_path: Path,
+) -> None:
+    """Verify filter_candidates requires reciprocal handoff when a rival hands off to target."""
+    rival = Skill(
+        name="widget-deployer",
+        description=(
+            "Deploy compiled widget services to production fleets. "
+            "Do NOT use for project scaffolding (use widget-scaffolder)."
+        ),
+        path=tmp_path / "widget-deployer",
+    )
+    bad_cand = OptimizationCandidate(
+        description="Scaffold new widget service projects with templates and build pipelines.",
+        rationale="Drops reciprocal handoff to deploy.",
+    )
+    good_cand = OptimizationCandidate(
+        description=(
+            "Scaffold new widget service projects with templates and build pipelines. "
+            "Do not use for deployment operations (use widget-deployer)."
+        ),
+        rationale="Preserves reciprocal handoff to deploy.",
+    )
+    filtered = filter_candidates(
+        [bad_cand, good_cand],
+        skill_name="widget-scaffolder",
+        known_skills={"widget-scaffolder", "widget-deployer"},
+        rivals=[rival],
+    )
+    assert filtered[0].lint_clean is False
+    assert "widget-deployer" in filtered[0].filter_reason
+    assert filtered[1].lint_clean is True
+
+
+def test_synthesize_via_heuristics_trims_oversized_and_strips_unknown_refs_and_keeps_handoff(
+    tmp_path: Path,
+) -> None:
+    """Verify _synthesize_via_heuristics produces lint-clean candidates for faulty base."""
+    long_sentences = " ".join(
+        f"Sentence {i} describes telemetry packet buffering, metric aggregation, and trace spans."
+        for i in range(18)
+    )
+    base_desc = (
+        f"{long_sentences} "
+        "For incident alerting, see incident-pager. "
+        "For long-term capacity forecasting, see capacity-forecaster."
+    )
+    assert len(base_desc) > 1024
+
+    target = Skill(
+        name="telemetry-collector",
+        description=base_desc,
+        path=tmp_path / "telemetry-collector",
+    )
+    rival = Skill(
+        name="telemetry-exporter",
+        description=(
+            "Manage outbound telemetry export queues and batch forwarding. "
+            "For local metric collection and sampling, use telemetry-collector instead."
+        ),
+        path=tmp_path / "telemetry-exporter",
+    )
+    candidates = _synthesize_via_heuristics(
+        target=target,
+        rivals=[rival],
+        unclaimed_terms=("histogram", "ringbuffer", "downsampling"),
+        count=3,
+        ceded_terms=("forwarding", "queue"),
+        known_skills={"telemetry-collector", "telemetry-exporter"},
+    )
+    assert len(candidates) == 3
+    linted = filter_candidates(
+        candidates,
+        skill_name="telemetry-collector",
+        known_skills={"telemetry-collector", "telemetry-exporter"},
+        rivals=[rival],
+    )
+    for cand in linted:
+        assert cand.lint_clean is True, (
+            f"Expected clean candidate, got: {cand.filter_reason} ({cand.description!r})"
+        )
+        assert len(cand.description) <= 1024
+        assert "incident-pager" not in cand.description
+        assert "capacity-forecaster" not in cand.description
+        assert "telemetry-exporter" in cand.description

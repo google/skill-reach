@@ -141,8 +141,12 @@ def _init_or_recover_checkpoint(
 
 def _effective_generator_model(settings: RunConfig, generate: GenerateFlags) -> str:
     """Resolve the effective model for query drafting."""
+    from reach.runtime import KEYWORD_AGENT
+
     generator_agent = generate.generator_agent or settings.runtime.agent
     model = generate.generator_model
+    if generator_agent == KEYWORD_AGENT and model == DEFAULT_GEMINI_MODEL:
+        return KEYWORD_AGENT
     if (
         generator_agent
         and model == DEFAULT_GEMINI_MODEL
@@ -318,6 +322,14 @@ def _execute_draft_generation(
         same_invocation_probe=same_invocation_probe,
         existing_query_set=existing_query_set,
     )
+    if not query_set.queries and covered:
+        in_progress.unlink(missing_ok=True)
+        print_generation_spend(console, drafter.completion_cost_usd, drafter.completions)
+        console.print(
+            "[reach.error]error:[/reach.error] query drafting produced 0 verified queries; "
+            "check generator credentials or target documentation."
+        )
+        return 1
     if review and query_set.queries:
         from reach.review import launch_query_review
 

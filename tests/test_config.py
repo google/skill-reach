@@ -2007,3 +2007,38 @@ def test_generate_flags_from_query_settings_handles_zero_constraints(
     assert flags.adversarial is expected_adversarial
     assert flags.adversarial_count == expected_adversarial_count
     assert flags.top_rivals == expected_top_rivals
+
+
+@pytest.mark.parametrize(
+    ("plan_kwargs", "agent", "cli_attempts", "quick", "expected"),
+    [
+        ({}, "keyword", None, False, 1),
+        ({}, "keyword", None, True, 1),
+        ({}, "antigravity-cli", None, True, 3),
+        ({}, "antigravity-cli", None, False, 5),
+        ({"attempts": 4}, "keyword", None, True, 4),
+        ({}, "keyword", 3, True, 3),
+    ],
+    ids=[
+        "keyword-formal-default-1",
+        "keyword-quick-default-1",
+        "llm-quick-default-3",
+        "llm-formal-default-5",
+        "explicit-config-attempts-preserved",
+        "explicit-cli-attempts-preserved",
+    ],
+)
+def test_plan_settings_resolve_eval_attempts(
+    plan_kwargs: dict[str, int],
+    agent: str,
+    cli_attempts: int | None,
+    quick: bool,
+    expected: int,
+) -> None:
+    """Verify PlanSettings.resolve_eval_attempts defaults to 1 for keyword unless overridden."""
+    from reach.config import PlanSettings
+
+    plan = PlanSettings(**plan_kwargs)
+    assert (
+        plan.resolve_eval_attempts(agent=agent, cli_attempts=cli_attempts, quick=quick) == expected
+    )

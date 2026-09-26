@@ -22,6 +22,7 @@ Agent execution runtime interfaces, CLI subprocess template drivers, Antigravity
         - CliOptions
         - FAKE_AGENT
         - find_agent_for_model
+        - KEYWORD_AGENT
         - known_agents
         - options_model
         - register_agent

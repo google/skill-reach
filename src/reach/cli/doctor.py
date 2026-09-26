@@ -318,6 +318,13 @@ def run_doctor_checks(workdir: Path | None = None) -> list[CheckResult]:
 
 @app.command(name="doctor", group=SETUP)
 def _doctor(
+    path: Annotated[
+        Path | None,
+        Parameter(
+            name=["path", "--path"],
+            help="Target project directory to inspect (defaults to current working directory)",
+        ),
+    ] = None,
     *,
     verbose: Annotated[
         bool,
@@ -327,12 +334,6 @@ def _doctor(
             help="Display detailed diagnostics and recommended remediation steps",
         ),
     ] = False,
-    path: Annotated[
-        Path | None,
-        Parameter(
-            help="Target project directory to inspect (defaults to current working directory)",
-        ),
-    ] = None,
 ) -> int:
     """Inspect local development environment, runtime agent binaries, keys, and skill catalogs."""
     console = build_console()

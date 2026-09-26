@@ -21,7 +21,7 @@ import statistics
 from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
     BaseModel,
@@ -103,7 +103,7 @@ class ResolvedRoot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     path: Path
-    skills: int = Field(ge=0)
+    skills: Annotated[int, Field(ge=0)]
 
 
 class ContestedSkill(BaseModel):
@@ -678,15 +678,22 @@ def _attribute(
 ) -> dict[str, Path | None]:
     """Map each skill to the most specific resolved root containing it."""
     ordered = sorted(
-        {resolve_path(root) for root in roots},
-        key=lambda p: len(p.parts),
+        {(root.expanduser().absolute(), resolve_path(root)) for root in roots},
+        key=lambda pair: (len(pair[1].parts), len(pair[0].parts)),
         reverse=True,
     )
     attributed: dict[str, Path | None] = {}
     for skill in skills:
-        path = resolve_path(skill.path)
+        lexical = skill.path.expanduser().absolute()
+        resolved = resolve_path(skill.path)
         attributed[skill.name] = next(
-            (root for root in ordered if path.is_relative_to(root)),
+            (
+                resolved_root
+                for lexical_root, resolved_root in ordered
+                if lexical.is_relative_to(lexical_root)
+                or lexical.is_relative_to(resolved_root)
+                or resolved.is_relative_to(resolved_root)
+            ),
             None,
         )
     return attributed

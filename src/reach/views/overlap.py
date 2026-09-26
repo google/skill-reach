@@ -24,6 +24,7 @@ from rich import box
 from rich.table import Table
 from rich.text import Text
 
+from reach.config import OverlapSettings
 from reach.overlap import OVERLAP_CAVEAT, Standing
 from reach.rendering import csv_document, dispatch_render
 from reach.retrieval import OverlapQuadrant, classify_overlap_quadrant, tokenize
@@ -133,9 +134,11 @@ def filter_rewrites(
     overlap_filter: OverlapFilter | None = None,
     semantic_similarities: Mapping[tuple[str, str], float] | None = None,
     default_top: int | None = None,
+    overlap_settings: OverlapSettings | None = None,
 ) -> tuple[tuple[Rewrite, ...], int]:
     """Filter and slice rewrite proposals, returning (shown_rewrites, total_matching)."""
     filt = overlap_filter or OverlapFilter()
+    cfg = overlap_settings or OverlapSettings()
     if names:
         target_names: Sequence[str] = names
         only_actionable = False
@@ -149,7 +152,13 @@ def filter_rewrites(
         target_names = [c.skill for c in filtered_comps]
         only_actionable = not filt.all_skills
 
-    rewrites = suggest_all(overlap, skills, target_names, only_actionable=only_actionable)
+    rewrites = suggest_all(
+        overlap,
+        skills,
+        target_names,
+        only_actionable=only_actionable,
+        settings=cfg,
+    )
     total_matching = len(rewrites)
     effective_top = filt.top if filt.top is not None else (None if filt.all_skills else default_top)
     shown = rewrites[:effective_top] if effective_top is not None else rewrites
@@ -405,6 +414,10 @@ _REWRITE_LABELS = {
 }
 
 
+#: Maximum number of extra contender skill names listed inline before "+N more".
+_MAX_EXTRA_CONTENDERS: Final = 3
+
+
 def print_rewrite(
     console: Console,
     rewrite: Rewrite,
@@ -413,9 +426,16 @@ def print_rewrite(
 ) -> None:
     """Render rewrite suggestions and contested vocabulary analysis for a skill."""
     console.print(_rewrite_heading(rewrite), soft_wrap=True)
-    more_rivals = len(rewrite.contenders) - 1
+    extra = [c for c in rewrite.contenders if c != rewrite.rival]
+    more_rivals = len(extra)
+    extra_names = ", ".join(extra[:_MAX_EXTRA_CONTENDERS]) + (
+        f", +{len(extra) - _MAX_EXTRA_CONTENDERS} more"
+        if len(extra) > _MAX_EXTRA_CONTENDERS
+        else ""
+    )
     contender_desc = (
-        f"{more_rivals} more rival{'' if more_rivals == 1 else 's'} score within a tenth of it"
+        f"{more_rivals} more rival{'' if more_rivals == 1 else 's'} "
+        f"score{'s' if more_rivals == 1 else ''} within {1.0 - rewrite.band:.0%} ({extra_names})"
         if rewrite.crowded
         else ""
     )
@@ -803,6 +823,7 @@ def suggest_view(
     *,
     overlap_filter: OverlapFilter | None = None,
     semantic_similarities: Mapping[tuple[str, str], float] | None = None,
+    overlap_settings: OverlapSettings | None = None,
 ) -> SuggestView:
     """Build a SuggestView containing proposals for the specified skills."""
     # Structured outputs (JSON/JSONL/CSV) remain uncapped unless --top is explicitly set.
@@ -813,6 +834,7 @@ def suggest_view(
         overlap_filter=overlap_filter,
         semantic_similarities=semantic_similarities,
         default_top=None,
+        overlap_settings=overlap_settings,
     )
     return SuggestView(
         corpus_size=len(overlap.competitions),

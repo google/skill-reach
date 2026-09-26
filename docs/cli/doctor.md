@@ -7,7 +7,7 @@ Inspect and diagnose local development environment, runtime agent binaries, API 
 ## Synopsis
 
 ```bash
-reach doctor [OPTIONS]
+reach doctor [PATH] [OPTIONS]
 ```
 
 ---
@@ -46,7 +46,7 @@ reach doctor --verbose
 
 ## Options
 
-| Option      | Type   | Default           | Description                                                     |
-| :---------- | :----- | :---------------- | :-------------------------------------------------------------- |
-| `--verbose` | `flag` | `false`           | Display detailed diagnostic info and recommended action panels. |
-| `--path`    | `PATH` | Current directory | Target workspace directory to inspect.                          |
+| Option           | Type   | Default           | Description                                                     |
+| :--------------- | :----- | :---------------- | :-------------------------------------------------------------- |
+| `PATH`, `--path` | `PATH` | Current directory | Target workspace directory to inspect.                          |
+| `--verbose`      | `flag` | `false`           | Display detailed diagnostic info and recommended action panels. |

@@ -73,3 +73,20 @@ def test_detect_shell(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
     assert _detect_shell() == "fish"
+
+
+def test_completion_deduplicates_dual_positional_and_flag_options() -> None:
+    """Verify _cached_extract_completion_data removes duplicate flag entries per command."""
+    from reach.cli.app import app
+    from reach.cli.completion import _cached_extract_completion_data, _completion_data_cache
+
+    _completion_data_cache.clear()
+    data = _cached_extract_completion_data(app)
+    for cmd_path, entry in data.items():
+        seen_names: set[str] = set()
+        for arg in entry.arguments:
+            for name in arg.parameter.name or ():
+                assert name not in seen_names, (
+                    f"Duplicate completion option {name!r} in command {cmd_path}"
+                )
+                seen_names.add(name)

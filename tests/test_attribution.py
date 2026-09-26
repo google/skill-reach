@@ -541,3 +541,33 @@ def test_cli_overlap_explain_abstention_with_semantic_flag(attributed_skills_dir
         ],
     )
     assert code == 0
+
+
+def test_attribute_query_excludes_function_words_from_drivers_and_anchors() -> None:
+    """Verify stopwords like 'a', 'and', 'for', 'to', 'on' are excluded from drivers and anchors."""
+    skills = [
+        Skill(
+            name="widget-deployer",
+            description=(
+                "Deploy a packaged widget service on relay nodes and scale for burst traffic."
+            ),
+            path=Path("/skills/widget-deployer"),
+        ),
+        Skill(
+            name="gadget-scheduler",
+            description="Deploy scheduled batch jobs and recurring workflows.",
+            path=Path("/skills/gadget-scheduler"),
+        ),
+    ]
+    scorer = Bm25Scorer.from_skills(skills)
+    attribution = attribute_query(
+        query_text="Use a skill to deploy and scale on relay nodes for burst traffic",
+        target_skill="gadget-scheduler",
+        rival_skill="widget-deployer",
+        scorer=scorer,
+    )
+    scored_tokens = {d.token for d in attribution.drivers} | {a.token for a in attribution.anchors}
+    for stopword in ("a", "and", "for", "on", "to"):
+        assert stopword not in scored_tokens
+        assert stopword in attribution.unscored_tokens
+    assert "relay" in scored_tokens or "scale" in scored_tokens

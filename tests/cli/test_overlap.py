@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 
 import pytest
+from _pytest.capture import CaptureFixture
 
 from reach.catalog import load_skills
 from reach.cli import main
@@ -659,7 +660,7 @@ def ranked(skill_repo: Path) -> CorpusOverlap:
     return rank_corpus(load_skills(skill_repo))
 
 
-def emitted(argv: list[str], capsys) -> str:
+def emitted(argv: list[str], capsys: CaptureFixture[str]) -> str:
     """Run CLI main with argv and return captured stdout string."""
     assert main(argv) == 0
     return capsys.readouterr().out

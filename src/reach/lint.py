@@ -21,7 +21,6 @@ import json
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, NamedTuple
 
@@ -37,7 +36,7 @@ from reach._lint_semantics import (
     extract_skill_references,
 )
 from reach.catalog import _skill_files, find_skill_manifest, parse_frontmatter, split_frontmatter
-from reach.config import LintSettings, resolve_path
+from reach.config import LintSettings, Severity, resolve_path
 
 if TYPE_CHECKING:
     from reach.models import Skill
@@ -74,18 +73,10 @@ _MIN_SHARED_TRIGGER_LENGTH: Final = 3
 _PLACEHOLDER = re.compile(r"\b(?:TODO|FIXME|XXX)\b|<FILL_IN>|<TODO>|\[TODO\]", re.IGNORECASE)
 
 
-class Severity(StrEnum):
-    """Specify the severity level for a lint diagnostic."""
-
-    ERROR = "error"
-    IGNORE = "ignore"
-    WARN = "warn"
-
-
 class RuleDefinition(BaseModel):
     """Describe a static lint rule, its rationale, and recommended remediation."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule: str
     default_severity: Severity
@@ -234,7 +225,7 @@ RULES: dict[str, RuleDefinition] = {
     ),
     "lockfile-drift": RuleDefinition(
         rule="lockfile-drift",
-        default_severity=Severity.WARN,
+        default_severity=Severity.INFO,
         summary="SKILL.md digest does not match lockfile computedHash",
         explanation=(
             "The skill contents have changed locally since being pinned in skills-lock.json."
@@ -298,6 +289,16 @@ RULES: dict[str, RuleDefinition] = {
             "skill_listing_budget_fraction."
         ),
     ),
+    "empty-skill-directory": RuleDefinition(
+        rule="empty-skill-directory",
+        default_severity=Severity.INFO,
+        summary="Skill directory contains no SKILL.md manifest file",
+        explanation=(
+            "Empty or uninitialized child directories inside a skill catalog root "
+            "are ignored by discovery and may indicate an incomplete skill checkout."
+        ),
+        remedy="Add a SKILL.md manifest to the directory or remove the empty folder.",
+    ),
 }
 
 
@@ -309,7 +310,7 @@ def explain_rule(rule_name: str) -> RuleDefinition | None:
 class LintIssue(BaseModel):
     """Represent a single diagnostic finding for a skill file or catalog."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule: str
     severity: Severity
@@ -323,7 +324,7 @@ class LintIssue(BaseModel):
 class LintReport(BaseModel):
     """Aggregate lint issues across all evaluated skills."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     issues: tuple[LintIssue, ...] = ()
     skills_checked: int = 0
@@ -338,6 +339,11 @@ class LintReport(BaseModel):
     def warnings(self) -> tuple[LintIssue, ...]:
         """Filter report issues to return only those with WARN severity."""
         return tuple(issue for issue in self.issues if issue.severity == Severity.WARN)
+
+    @property
+    def infos(self) -> tuple[LintIssue, ...]:
+        """Filter report issues to return only those with INFO severity."""
+        return tuple(issue for issue in self.issues if issue.severity == Severity.INFO)
 
     @property
     def clean(self) -> bool:
@@ -507,6 +513,28 @@ def _lint_frontmatter_dict(
     return issues, effective_name
 
 
+_LOCKFILE_EXCLUDED_DIRS: Final = frozenset({".git", "node_modules"})
+
+
+def _compute_skill_folder_hash(skill_dir: Path) -> str:
+    """Compute SHA-256 tree hash of a skill directory matching npx skills computeSkillFolderHash."""
+    files: list[tuple[str, Path]] = []
+    for root, dirnames, filenames in skill_dir.walk(follow_symlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in _LOCKFILE_EXCLUDED_DIRS]
+        for fname in filenames:
+            fpath = root / fname
+            if fpath.is_symlink() or not fpath.is_file():
+                continue
+            rel_posix = fpath.relative_to(skill_dir).as_posix()
+            files.append((rel_posix, fpath))
+    files.sort(key=lambda item: (item[0].lower(), item[0]))
+    hasher = hashlib.sha256()
+    for rel_posix, fpath in files:
+        hasher.update(rel_posix.encode("utf-8"))
+        hasher.update(fpath.read_bytes())
+    return hasher.hexdigest()
+
+
 def _check_lockfile_drift(
     path: Path,
     skill_name: str,
@@ -539,7 +567,10 @@ def _check_lockfile_drift(
         except (UnicodeDecodeError, OSError):
             norm_hash = raw_hash
 
-        if expected_hash not in (raw_hash, norm_hash):
+        if expected_hash not in (
+            raw_hash,
+            norm_hash,
+        ) and expected_hash != _compute_skill_folder_hash(path.parent):
             msg = (
                 f"Skill {skill_name!r} content hash ({raw_hash[:8]}...) diverges from "
                 f"pinned lockfile hash ({expected_hash[:8]}...)."
@@ -810,7 +841,8 @@ def _claims_neighbor_name_phrase(
     from reach.leak import FUNCTION_WORDS, contains_run
     from reach.retrieval import tokenize
 
-    pos_tokens = tokenize(_positive_capability_text(source.description))
+    unparenthesized = re.sub(r"\([^)]*\)", " ", _positive_capability_text(source.description))
+    pos_tokens = tokenize(unparenthesized)
     neighbor_tokens = [t for t in tokenize(neighbor.name) if t not in FUNCTION_WORDS]
     if (
         len(neighbor_tokens) >= _MIN_DISTINCTIVE_NAME_TOKENS
@@ -1148,7 +1180,8 @@ def _check_missing_mutual_handoffs(
                 and len(sem_lex_adj[s2.name]) < _MAX_PEER_HANDOFF_DEGREE
                 and not (sem_lex_adj[s1.name] & sem_lex_adj[s2.name])
             )
-            high_neighbor_contention = _has_bidirectional_name_claim(s1, s2, taxonomy_tokens) or (
+            has_name_claim = _has_bidirectional_name_claim(s1, s2, taxonomy_tokens)
+            high_neighbor_contention = has_name_claim or (
                 unacknowledged
                 and (is_peer_sem_lex or (above_thresh and has_pair_exclusive_triggers))
             )
@@ -1162,6 +1195,7 @@ def _check_missing_mutual_handoffs(
                 paths_by_name=paths_by_name,
                 cfg=cfg,
                 skill_filter=skill_filter,
+                is_one_way=one_way_handoff or has_name_claim,
             )
 
     return issues
@@ -1174,6 +1208,7 @@ def _emit_mutual_handoff_pair_issues(
     paths_by_name: Mapping[str, Sequence[Path]],
     cfg: LintSettings,
     skill_filter: str | None,
+    is_one_way: bool = True,
 ) -> None:
     """Append missing-mutual-handoff diagnostics for the side(s) lacking reciprocation."""
     shared_str = (
@@ -1202,14 +1237,17 @@ def _emit_mutual_handoff_pair_issues(
                 f'(e.g. "Don\'t use for ... (use {partner.name})").'
             )
         for skill_path in paths_by_name.get(subject.name, ()):
-            _record_issue(
-                issues,
+            issue = _create_issue(
                 "missing-mutual-handoff",
                 subject.name,
                 skill_path,
                 msg,
                 cfg,
             )
+            if issue is not None:
+                if not is_one_way and "missing-mutual-handoff" not in cfg.rules:
+                    issue = issue.model_copy(update={"severity": Severity.INFO})
+                issues.append(issue)
 
 
 def _compute_dense_similarities(skills: Sequence[Skill]) -> dict[tuple[str, str], float]:
@@ -1442,11 +1480,40 @@ def lint_tree(
     """
     resolved_root = resolve_path(root)
     cfg = config if config is not None else LintSettings.from_settings()
-    return _lint_paths(
+    report = _lint_paths(
         _skill_files(resolved_root),
         cfg,
         skill_filter=skill_filter,
     )
+    if resolved_root.is_dir():
+        child_dirs = sorted(
+            d for d in resolved_root.iterdir() if d.is_dir() and not d.name.startswith(".")
+        )
+        if any((d / "SKILL.md").is_file() for d in child_dirs):
+            empty_issues: list[LintIssue] = []
+            for d in child_dirs:
+                if not (d / "SKILL.md").is_file():
+                    if skill_filter is not None and d.name != skill_filter:
+                        continue
+                    _record_issue(
+                        empty_issues,
+                        "empty-skill-directory",
+                        d.name,
+                        d,
+                        f"Directory {d.name!r} inside skills root contains no SKILL.md file.",
+                        cfg,
+                    )
+            if empty_issues:
+                merged = sorted(
+                    (*report.issues, *empty_issues),
+                    key=lambda i: (str(i.path or ""), i.line or 0, i.rule),
+                )
+                return LintReport(
+                    issues=tuple(merged),
+                    skills_checked=report.skills_checked,
+                    skill_name=report.skill_name,
+                )
+    return report
 
 
 def lint_skills(

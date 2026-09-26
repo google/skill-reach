@@ -54,7 +54,9 @@ from reach.uncertainty import (
 class VaryFactor(StrEnum):
     """Specify the single experimental factor varied between compared runs."""
 
+    AGENT = "agent"
     DESCRIPTION = "description"
+    MODEL = "model"
     RIVAL = "rival"
     SCOPE = "scope"
 
@@ -513,10 +515,20 @@ def load_arm(
 
 
 _EXPECTED = {
+    VaryFactor.AGENT: (
+        "the runtime agent driver should have moved while the corpus digest "
+        "and resident catalog held: switching agent runtimes changes how the "
+        "corpus is probed, not what the skills say or who is resident"
+    ),
     VaryFactor.DESCRIPTION: (
         "the corpus digest should have moved and the arm should have held: a "
         "description is not a setting, so rewriting one changes what was "
         "probed without changing how"
+    ),
+    VaryFactor.MODEL: (
+        "the runtime model should have moved while the corpus digest and "
+        "resident catalog held: switching models changes how the corpus is "
+        "probed, not what the skills say or who is resident"
     ),
     VaryFactor.RIVAL: (
         "the resident catalog should differ by the rival, and the corpus "
@@ -538,12 +550,19 @@ def _corroborate(factor: VaryFactor, control: Arm, treatment: Arm) -> Corroborat
     )
     added = tuple(sorted(resident_treatment - resident_control))
     removed = tuple(sorted(resident_control - resident_treatment))
+    residents_held = not (added or removed)
     arm_moved = control.artifact.provenance.arm != treatment.artifact.provenance.arm
+    runtime_moved = control.artifact.provenance.runtime != treatment.artifact.provenance.runtime
+    model_moved = control.artifact.provenance.model != treatment.artifact.provenance.model
     corpus_moved = (
         control.artifact.digests.corpus_digest != treatment.artifact.digests.corpus_digest
     )
 
     match factor:
+        case VaryFactor.AGENT:
+            held = arm_moved and runtime_moved and not corpus_moved and residents_held
+        case VaryFactor.MODEL:
+            held = arm_moved and model_moved and not corpus_moved and residents_held
         case VaryFactor.DESCRIPTION:
             held = corpus_moved and not arm_moved
         case VaryFactor.RIVAL:
