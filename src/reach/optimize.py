@@ -1030,6 +1030,16 @@ def _sanitize_base_sentences(
     return clean_sentences, required_handoffs
 
 
+def _is_trailing_handoff_sentence(sentence: str) -> bool:
+    """Return True if a sentence is a negative scope boundary or skill handoff clause."""
+    from reach.lint import extract_skill_references
+
+    return bool(
+        extract_skill_references(sentence)
+        or re.match(r"^(?:do\s+not|don't|never)\s+use\b", sentence, re.IGNORECASE)
+    )
+
+
 def _assemble_bounded_candidate(
     clean_sentences: Sequence[str],
     required_handoffs: Sequence[str],
@@ -1043,16 +1053,23 @@ def _assemble_bounded_candidate(
     from reach.lint import hands_off_to_skill
 
     sentences = list(clean_sentences)
+    trailing_handoffs: list[str] = []
+    while len(sentences) > 1 and _is_trailing_handoff_sentence(sentences[-1]):
+        trailing_handoffs.append(sentences.pop())
+    trailing_handoffs.reverse()
+
     handoff_clauses = [
         (r_name, f"For {r_name.replace('-', ' ')} tasks, use {r_name} instead.")
         for r_name in required_handoffs
     ]
 
-    def _build(sents: Sequence[str]) -> str:
-        base = " ".join(sents).strip().rstrip(".")
+    def _build(pos_sents: Sequence[str], handoff_sents: Sequence[str]) -> str:
+        base = " ".join(pos_sents).strip().rstrip(".")
         if lowercase_first and base:
             base = base[0].lower() + base[1:]
         core = f"{prefix}{base}{suffix}"
+        if handoff_sents:
+            core = f"{core.rstrip('. ')}. {' '.join(handoff_sents)}"
         missing_clauses = [
             clause for r_name, clause in handoff_clauses if not hands_off_to_skill(core, r_name)
         ]
@@ -1060,17 +1077,21 @@ def _assemble_bounded_candidate(
             core = f"{core.rstrip('. ')}. {' '.join(missing_clauses)}"
         return core
 
-    assembled = _build(sentences)
+    assembled = _build(sentences, trailing_handoffs)
     while len(assembled) > max_length and len(sentences) > 1:
         sentences.pop()
-        assembled = _build(sentences)
+        assembled = _build(sentences, trailing_handoffs)
+
+    while len(assembled) > max_length and trailing_handoffs:
+        trailing_handoffs.pop()
+        assembled = _build(sentences, trailing_handoffs)
 
     if len(assembled) > max_length and sentences:
         words = sentences[0].split()
         while len(assembled) > max_length and len(words) > _MIN_TRUNCATED_WORDS:
             words.pop()
             sentences[0] = " ".join(words)
-            assembled = _build(sentences)
+            assembled = _build(sentences, trailing_handoffs)
 
     return assembled
 
@@ -1095,6 +1116,20 @@ def _build_rival_disclaimer_candidate(
         ),
         rationale=f"Sharpened contrastive boundaries against rival {primary_rival}",
         origin=origin,
+    )
+
+
+def _first_undisclaimed_rival(
+    clean_sents: Sequence[str],
+    rivals: Sequence[Skill],
+) -> str | None:
+    """Return the first rival name not already disclaimed in clean_sents."""
+    from reach.lint import hands_off_to_skill
+
+    base_text = " ".join(clean_sents)
+    return next(
+        (r.name for r in rivals if not hands_off_to_skill(base_text, r.name)),
+        None,
     )
 
 
@@ -1149,13 +1184,14 @@ def _synthesize_via_heuristics(
         )
 
     # Strategy 2: Contrastive differentiation against primary rival
-    if rivals and ceded_terms:
+    disclaimer_rival = _first_undisclaimed_rival(clean_sents, rivals) if ceded_terms else None
+    if disclaimer_rival is not None:
         results.append(
             _build_rival_disclaimer_candidate(
                 clean_sents,
                 req_handoffs,
                 max_len,
-                rivals[0].name,
+                disclaimer_rival,
                 ceded_terms,
             ),
         )
@@ -1254,15 +1290,17 @@ def synthesize_candidates(
                     lint_config,
                     known_skills=known_skills,
                 )
-                zero_cost_cand = _build_rival_disclaimer_candidate(
-                    clean_sents,
-                    req_handoffs,
-                    lint_config.max_description_length,
-                    rivals[0].name,
-                    ceded_terms,
-                    origin=CandidateOrigin.DISCLAIMER,
-                )
-                return [*llm_results, zero_cost_cand]
+                disclaimer_rival = _first_undisclaimed_rival(clean_sents, rivals)
+                if disclaimer_rival is not None:
+                    zero_cost_cand = _build_rival_disclaimer_candidate(
+                        clean_sents,
+                        req_handoffs,
+                        lint_config.max_description_length,
+                        disclaimer_rival,
+                        ceded_terms,
+                        origin=CandidateOrigin.DISCLAIMER,
+                    )
+                    return [*llm_results, zero_cost_cand]
             return llm_results
 
     return _synthesize_via_heuristics(
@@ -1559,7 +1597,7 @@ def _extract_lexical_rewrite_info(
     if not target_rewrite:
         return "", (), ()
     rival_name = target_rewrite.rival or ""
-    ceded_terms = tuple(t.term for t in target_rewrite.ceded)
+    ceded_terms = tuple(t.term for t in target_rewrite.reword)
     return rival_name, ceded_terms, target_rewrite.unclaimed
 
 

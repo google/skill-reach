@@ -35,6 +35,7 @@ from reach.optimize import (
     OptimizationReport,
     ReciprocalHandoff,
     _evaluate_all_candidates,
+    _extract_lexical_rewrite_info,
     _run_candidate_probes,
     _synthesize_via_heuristics,
     apply_optimization_candidate,
@@ -48,7 +49,7 @@ from reach.optimize import (
 )
 from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set
 from reach.retrieval import DenseScorer
-from reach.rewrite import synthesize_directional_disclaimer
+from reach.rewrite import _disclaims, synthesize_directional_disclaimer
 from reach.runtime.fake import FakeGenerator, FakeRuntime
 
 # ===========================================================================
@@ -305,21 +306,32 @@ def test_synthesize_directional_disclaimer_formatting(
 
 @pytest.mark.parametrize("mode", ["heuristic", "llm"])
 @pytest.mark.parametrize(
-    ("ceded_terms", "expect_disclaimer"),
+    ("ceded_terms", "already_disclaimed", "expect_new_disclaimer"),
     [
-        (("docker", "build"), True),
-        ((), False),
+        (("docker", "build"), False, True),
+        ((), False, False),
+        (("docker", "build"), True, False),
     ],
 )
 def test_synthesize_candidates_directional_disclaimer_inclusion(
     mode: str,
     ceded_terms: tuple[str, ...],
-    expect_disclaimer: bool,
+    already_disclaimed: bool,
+    expect_new_disclaimer: bool,
     target_and_rival: tuple[Skill, Skill],
     mock_llm_driver: MagicMock,
 ) -> None:
-    """Verify heuristic and LLM synthesis conditionally include directional disclaimer."""
+    """Verify synthesis skips duplicate disclaimers when rival is already disclaimed."""
     target, rival = target_and_rival
+    if already_disclaimed:
+        target = target.model_copy(
+            update={
+                "description": (
+                    f"{target.description.rstrip('.')} "
+                    f"Don't use for image builds (use {rival.name})."
+                )
+            }
+        )
     if mode == "heuristic":
         candidates = _synthesize_via_heuristics(
             target=target,
@@ -335,8 +347,91 @@ def test_synthesize_candidates_directional_disclaimer_inclusion(
         )
         assert candidates[0].description == "LLM description for cloud deployments."
 
-    has_disclaimer = any("use container-builder instead" in c.description for c in candidates)
-    assert has_disclaimer is expect_disclaimer
+    has_new_disclaimer = any("use container-builder instead" in c.description for c in candidates)
+    assert has_new_disclaimer is expect_new_disclaimer
+    for cand in candidates:
+        assert cand.description.count(rival.name) <= 1
+
+
+@pytest.mark.parametrize(
+    ("target_desc", "expected_ceded"),
+    [
+        (
+            "manage node credentials, and run rolling upgrades.",
+            ("upgrades", "node", "rolling"),
+        ),
+        (
+            "manage node credentials. Don't use for rolling upgrades (use fleet-upgrades).",
+            ("node",),
+        ),
+        (
+            "manage cluster credentials. Don't use for rolling upgrades (use fleet-upgrades).",
+            (),
+        ),
+    ],
+)
+def test_extract_lexical_rewrite_info_excludes_already_disclaimed_terms(
+    target_desc: str,
+    expected_ceded: tuple[str, ...],
+    write_skill_model: Callable[..., Skill],
+) -> None:
+    """Verify _extract_lexical_rewrite_info returns only undisclaimed reword terms."""
+    target = write_skill_model(
+        name="fleet-basics",
+        description=(
+            "Provision managed cluster topology, bootstrap worker credentials, "
+            f"configure workload identity policies, and {target_desc}"
+        ),
+    )
+    rival = write_skill_model(
+        name="fleet-upgrades",
+        description="Execute fleet rolling upgrades and node version upgrades.",
+    )
+    filler_a = write_skill_model(
+        name="invoice-archiver",
+        description="Archive quarterly ledger invoices and tax receipts.",
+    )
+    filler_b = write_skill_model(
+        name="calendar-scheduler",
+        description="Schedule recurring calendar invites and meeting reminders.",
+    )
+    _rival_name, ceded_terms, _unclaimed = _extract_lexical_rewrite_info(
+        [target, rival, filler_a, filler_b],
+        target,
+    )
+    assert ceded_terms == expected_ceded
+
+
+def test_synthesize_via_heuristics_places_unclaimed_terms_before_trailing_handoff(
+    write_skill_model: Callable[..., Skill],
+) -> None:
+    """Verify unclaimed terms attach to positive prose rather than trailing negative handoffs."""
+    target = write_skill_model(
+        name="fleet-basics",
+        description=(
+            "Provision fleet clusters and configure node credentials. "
+            "Don't use for network routing (use fleet-networking) "
+            "or node upgrades (use fleet-upgrades)."
+        ),
+    )
+    rival = write_skill_model(
+        name="fleet-upgrades",
+        description="Manage node pool version upgrades and surge drain policies.",
+    )
+    candidates = _synthesize_via_heuristics(
+        target=target,
+        rivals=[rival],
+        unclaimed_terms=("autoscaling", "taints"),
+        ceded_terms=(),
+        known_skills={"fleet-basics", "fleet-networking", "fleet-upgrades"},
+    )
+    featuring_cand = candidates[0].description
+    assert "featuring autoscaling, taints." in featuring_cand
+    assert featuring_cand.index("featuring autoscaling, taints.") < featuring_cand.index(
+        "Don't use for network routing"
+    )
+    assert not _disclaims(featuring_cand, "fleet-upgrades", "autoscaling")
+    assert not _disclaims(featuring_cand, "fleet-upgrades", "taints")
 
 
 def test_synthesize_candidates_returns_requested_count_even_without_rivals(
