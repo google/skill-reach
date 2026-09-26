@@ -472,8 +472,18 @@ def _resolve_eval_settings(
     )
     from reach.config import PlanSettings
 
-    has_config_attempts = config is not None and RunConfig.declared(config, "plan", "attempts")
-    base_plan = settings.plan if has_config_attempts else PlanSettings()
+    active_config = (
+        config
+        if config is not None
+        else (Path("reach.toml") if Path("reach.toml").is_file() else None)
+    )
+    has_config_attempts = active_config is not None and RunConfig.declared(
+        active_config, "plan", "attempts"
+    )
+    if has_config_attempts and active_config is not None:
+        base_plan = settings.plan if config is not None else RunConfig.from_toml(active_config).plan
+    else:
+        base_plan = PlanSettings()
     effective_attempts = base_plan.resolve_eval_attempts(
         agent=settings.runtime.agent,
         cli_attempts=cli_attempts,

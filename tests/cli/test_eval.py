@@ -1392,15 +1392,27 @@ def test_a_quick_run_states_the_scope_the_depth_and_the_rivals_behind_its_answer
     assert "drafted here and probed unreviewed, against 2 rivals" in shown
 
 
+@pytest.mark.parametrize("source", ["cli", "autodiscovered_config"])
 def test_the_depth_a_quick_run_states_is_the_one_it_was_given(
+    source: str,
     quick_argv: list[str],
     generator: FakeGenerator,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    """Verify attempts flag overrides default depth display in quick mode logs."""
-    assert main([*quick_argv, "--attempts", "1"]) == 0
+    """Verify CLI --attempts and auto-discovered reach.toml override quick mode depth."""
+    if source == "cli":
+        assert main([*quick_argv, "--attempts", "1"]) == 0
+        assert "1 attempt per query" in capsys.readouterr().err
+        return
 
-    assert "1 attempt per query" in capsys.readouterr().err
+    cfg_dir = tmp_path / "cfg_workspace"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "reach.toml").write_text("[plan]\nattempts = 4\n", encoding="utf-8")
+    monkeypatch.chdir(cfg_dir)
+    assert main(quick_argv) == 0
+    assert "4 attempts per query" in capsys.readouterr().err
 
 
 def test_a_quick_run_banks_nothing_where_a_later_run_would_find_it(

@@ -232,7 +232,7 @@ _FILTER_REFCOUNT = 0
 
 
 @contextlib.contextmanager
-def _suppress_retryable_step_warnings() -> Generator[None]:
+def _suppress_retryable_step_warnings() -> Generator[None, None, None]:
     """Attach _SuppressRetryableStepErrorFilter to the root logger while SDK calls are active."""
     global _FILTER_REFCOUNT  # noqa: PLW0603
     root_logger = logging.getLogger()

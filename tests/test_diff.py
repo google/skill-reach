@@ -442,6 +442,13 @@ def test_only_the_three_factors_are_accepted(arm) -> None:
             NARROW,
             False,
         ),
+        (
+            VaryFactor.MODEL,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "keyword", "options": {"model": "other-model"}},
+            WIDE,
+            False,
+        ),
     ],
 )
 def test_agent_and_model_vary_factors_corroborate_when_arm_moves_and_corpus_holds(

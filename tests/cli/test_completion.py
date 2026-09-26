@@ -103,3 +103,15 @@ def test_completion_deduplicates_dual_positional_and_flag_options() -> None:
         second_pass = _dedupe_argument_collection(entry.arguments)
         for orig_arg, deduped_arg in zip(entry.arguments, second_pass, strict=True):
             assert orig_arg is deduped_arg
+
+    import attrs
+    from cyclopts.argument import ArgumentCollection
+
+    sample_collection = next(iter(data.values())).arguments
+    unnamed_arg = attrs.evolve(
+        sample_collection[0],
+        parameter=attrs.evolve(sample_collection[0].parameter, name=()),
+    )
+    deduped_with_unnamed = _dedupe_argument_collection(ArgumentCollection([unnamed_arg]))
+    assert len(deduped_with_unnamed) == 1
+    assert deduped_with_unnamed[0] is unnamed_arg

@@ -254,6 +254,14 @@ def test_keyword_runtime_bm25_description_fallback(tmp_path: Path) -> None:
     )
     assert outcome_literal.invoked_skill == "beacon-relay"
 
+    # Cloned worker runtime must retain the BM25 description scorer
+    cloned = runtime.clone_isolated()
+    outcome_cloned = cloned.select(
+        "How do I buffer high-volume telemetry packets with ring buffers?",
+        tmp_path,
+    )
+    assert outcome_cloned.invoked_skill == "beacon-relay"
+
 
 def test_keyword_generator_strips_urls_and_defers_blockquote_meta_instructions() -> None:
     """Verify KeywordGenerator strips URLs/paths and defers blockquote meta-instructions."""

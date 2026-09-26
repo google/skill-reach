@@ -562,7 +562,13 @@ def _corroborate(factor: VaryFactor, control: Arm, treatment: Arm) -> Corroborat
         case VaryFactor.AGENT:
             held = arm_moved and runtime_moved and not corpus_moved and residents_held
         case VaryFactor.MODEL:
-            held = arm_moved and model_moved and not corpus_moved and residents_held
+            held = (
+                arm_moved
+                and model_moved
+                and not runtime_moved
+                and not corpus_moved
+                and residents_held
+            )
         case VaryFactor.DESCRIPTION:
             held = corpus_moved and not arm_moved
         case VaryFactor.RIVAL:

@@ -365,16 +365,14 @@ def _resolve_severity(
     """Determine effective severity for a rule based on configuration overrides."""
     configured = config.rules.get(rule_name)
     if configured is not None:
-        if isinstance(configured, Severity):
-            return None if configured == Severity.IGNORE else configured
         if isinstance(configured, str):
             try:
                 sev = Severity(configured.lower())
             except ValueError:
                 return None
-            else:
-                return None if sev is Severity.IGNORE else sev
-        return None if configured == Severity.IGNORE else configured
+        else:
+            sev = configured
+        return None if sev is Severity.IGNORE else sev
     if default_severity is not None:
         return None if default_severity == Severity.IGNORE else default_severity
     definition = RULES.get(rule_name)
@@ -553,11 +551,12 @@ def _compute_skill_folder_hash(skill_dir: Path) -> str:
     files.sort(key=lambda item: (item[0].lower(), item[0]))
     hasher = hashlib.sha256()
     for rel_posix, fpath in files:
-        hasher.update(rel_posix.encode("utf-8"))
         try:
-            hasher.update(fpath.read_bytes())
+            content = fpath.read_bytes()
         except OSError:
             continue
+        hasher.update(rel_posix.encode("utf-8"))
+        hasher.update(content)
     return hasher.hexdigest()
 
 

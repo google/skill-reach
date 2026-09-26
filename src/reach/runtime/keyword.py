@@ -115,11 +115,12 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
 
     @override
     def clone_isolated(self) -> Self:
-        """Create a thread-local isolated clone with fresh regex and term map state."""
+        """Create a thread-local isolated clone preserving compiled matcher and BM25 scorer."""
         clone = super().clone_isolated()
-        clone._pattern = None  # noqa: SLF001
-        clone._term_to_skill = {}  # noqa: SLF001
-        clone._bm25 = None  # noqa: SLF001
+        clone._resident = self._resident  # noqa: SLF001
+        clone._pattern = self._pattern  # noqa: SLF001
+        clone._term_to_skill = dict(self._term_to_skill)  # noqa: SLF001
+        clone._bm25 = self._bm25  # noqa: SLF001
         return clone
 
     @override
@@ -137,7 +138,7 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
         return target
 
     def match_skill(self, text: str, resident: Sequence[str] = ()) -> str | None:
-        """Find the first matching resident skill mentioned in the given text."""
+        """Return the most specific resident skill mentioned in the given text."""
         active = tuple(resident) if resident else self._resident
         if not active:
             return None
@@ -279,9 +280,7 @@ def _extract_doc_passages(doc_text: str) -> list[str]:
         if set(stripped) <= {"|", "-", ":", " "}:
             continue
         cleaned_cite = _MARKDOWN_PREFIX_RE.sub("", stripped).strip()
-        if (len(cleaned_cite) < _MIN_PASSAGE_LEN or "[REDACTED]" in cleaned_cite) and len(
-            cleaned_cite.replace("[REDACTED]", "").strip()
-        ) < _MIN_PASSAGE_LEN:
+        if len(cleaned_cite.replace("[REDACTED]", "").strip()) < _MIN_PASSAGE_LEN:
             continue
         if not cleaned_cite or cleaned_cite in passages or cleaned_cite in deferred:
             continue

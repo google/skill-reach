@@ -39,9 +39,13 @@ def _dedupe_argument_collection(collection: ArgumentCollection) -> ArgumentColle
     seen_flags: set[str] = set()
     cleaned = []
     for arg in collection:
+        names = tuple(arg.parameter.name or ())
+        if not names:
+            cleaned.append(arg)
+            continue
         unique_names: list[str] = []
         dropped_any = False
-        for n in arg.parameter.name or ():
+        for n in names:
             if n not in seen_flags:
                 seen_flags.add(n)
                 unique_names.append(n)
