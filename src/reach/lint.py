@@ -356,7 +356,12 @@ class LintReport(BaseModel):
         return bool(self.errors)
 
 
-def _resolve_severity(rule_name: str, config: LintSettings) -> Severity | None:
+def _resolve_severity(
+    rule_name: str,
+    config: LintSettings,
+    *,
+    default_severity: Severity | None = None,
+) -> Severity | None:
     """Determine effective severity for a rule based on configuration overrides."""
     configured = config.rules.get(rule_name)
     if configured is not None:
@@ -370,6 +375,8 @@ def _resolve_severity(rule_name: str, config: LintSettings) -> Severity | None:
             else:
                 return None if sev is Severity.IGNORE else sev
         return None if configured == Severity.IGNORE else configured
+    if default_severity is not None:
+        return None if default_severity == Severity.IGNORE else default_severity
     definition = RULES.get(rule_name)
     return definition.default_severity if definition is not None else Severity.WARN
 
@@ -381,9 +388,11 @@ def _create_issue(
     message: str,
     config: LintSettings,
     line: int | None = None,
+    *,
+    default_severity: Severity | None = None,
 ) -> LintIssue | None:
     """Construct a LintIssue if the rule is not ignored under active configuration."""
-    severity = _resolve_severity(rule_name, config)
+    severity = _resolve_severity(rule_name, config, default_severity=default_severity)
     if severity is None:
         return None
     definition = RULES.get(rule_name)
@@ -514,24 +523,41 @@ def _lint_frontmatter_dict(
 
 
 _LOCKFILE_EXCLUDED_DIRS: Final = frozenset({".git", "node_modules"})
+_MAX_SKILL_FOLDER_DEPTH: Final = 8
 
 
 def _compute_skill_folder_hash(skill_dir: Path) -> str:
     """Compute SHA-256 tree hash of a skill directory matching npx skills computeSkillFolderHash."""
+    if not skill_dir.is_dir() or skill_dir.is_symlink():
+        return ""
     files: list[tuple[str, Path]] = []
     for root, dirnames, filenames in skill_dir.walk(follow_symlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in _LOCKFILE_EXCLUDED_DIRS]
+        try:
+            rel_dir = root.relative_to(skill_dir)
+        except ValueError:
+            dirnames.clear()
+            continue
+        if len(rel_dir.parts) >= _MAX_SKILL_FOLDER_DEPTH:
+            dirnames.clear()
+        else:
+            dirnames[:] = [d for d in dirnames if d not in _LOCKFILE_EXCLUDED_DIRS]
         for fname in filenames:
             fpath = root / fname
             if fpath.is_symlink() or not fpath.is_file():
                 continue
-            rel_posix = fpath.relative_to(skill_dir).as_posix()
+            try:
+                rel_posix = fpath.relative_to(skill_dir).as_posix()
+            except ValueError:
+                continue
             files.append((rel_posix, fpath))
     files.sort(key=lambda item: (item[0].lower(), item[0]))
     hasher = hashlib.sha256()
     for rel_posix, fpath in files:
         hasher.update(rel_posix.encode("utf-8"))
-        hasher.update(fpath.read_bytes())
+        try:
+            hasher.update(fpath.read_bytes())
+        except OSError:
+            continue
     return hasher.hexdigest()
 
 
@@ -567,10 +593,10 @@ def _check_lockfile_drift(
         except (UnicodeDecodeError, OSError):
             norm_hash = raw_hash
 
-        if expected_hash not in (
-            raw_hash,
-            norm_hash,
-        ) and expected_hash != _compute_skill_folder_hash(path.parent):
+        if expected_hash not in (raw_hash, norm_hash) and (
+            path.parent == manifest.parent
+            or expected_hash != _compute_skill_folder_hash(path.parent)
+        ):
             msg = (
                 f"Skill {skill_name!r} content hash ({raw_hash[:8]}...) diverges from "
                 f"pinned lockfile hash ({expected_hash[:8]}...)."
@@ -832,6 +858,19 @@ def _catalog_taxonomy_tokens(skills: Sequence[Skill]) -> frozenset[str]:
     return frozenset(t for t, cnt in name_df.items() if cnt > cap)
 
 
+_INNERMOST_PARENS_RE: Final = re.compile(r"\([^()]*\)")
+
+
+def _strip_parentheticals(text: str) -> str:
+    """Strip matched parenthetical groups iteratively from innermost to outermost."""
+    current = text
+    while "(" in current and ")" in current:
+        current, count = _INNERMOST_PARENS_RE.subn(" ", current)
+        if count == 0:
+            break
+    return current
+
+
 def _claims_neighbor_name_phrase(
     source: Skill,
     neighbor: Skill,
@@ -841,7 +880,7 @@ def _claims_neighbor_name_phrase(
     from reach.leak import FUNCTION_WORDS, contains_run
     from reach.retrieval import tokenize
 
-    unparenthesized = re.sub(r"\([^)]*\)", " ", _positive_capability_text(source.description))
+    unparenthesized = _strip_parentheticals(_positive_capability_text(source.description))
     pos_tokens = tokenize(unparenthesized)
     neighbor_tokens = [t for t in tokenize(neighbor.name) if t not in FUNCTION_WORDS]
     if (
@@ -1243,10 +1282,9 @@ def _emit_mutual_handoff_pair_issues(
                 skill_path,
                 msg,
                 cfg,
+                default_severity=Severity.WARN if is_one_way else Severity.INFO,
             )
             if issue is not None:
-                if not is_one_way and "missing-mutual-handoff" not in cfg.rules:
-                    issue = issue.model_copy(update={"severity": Severity.INFO})
                 issues.append(issue)
 
 

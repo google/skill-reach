@@ -1043,6 +1043,10 @@ def _assemble_bounded_candidate(
     from reach.lint import hands_off_to_skill
 
     sentences = list(clean_sentences)
+    handoff_clauses = [
+        (r_name, f"For {r_name.replace('-', ' ')} tasks, use {r_name} instead.")
+        for r_name in required_handoffs
+    ]
 
     def _build(sents: Sequence[str]) -> str:
         base = " ".join(sents).strip().rstrip(".")
@@ -1050,9 +1054,7 @@ def _assemble_bounded_candidate(
             base = base[0].lower() + base[1:]
         core = f"{prefix}{base}{suffix}"
         missing_clauses = [
-            f"For {r_name.replace('-', ' ')} tasks, use {r_name} instead."
-            for r_name in required_handoffs
-            if not hands_off_to_skill(core, r_name)
+            clause for r_name, clause in handoff_clauses if not hands_off_to_skill(core, r_name)
         ]
         if missing_clauses:
             core = f"{core.rstrip('. ')}. {' '.join(missing_clauses)}"

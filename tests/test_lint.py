@@ -1171,38 +1171,77 @@ def test_shared_trigger_terms_uses_corpus_idf_without_stopword_list(tmp_path: Pa
     assert "workflow" not in shared
 
 
-def test_acronym_name_claim_and_suffix_subject_guard(tmp_path: Path) -> None:
-    """Verify acronym name claims (tdd <-> test-driven-development) and suffix subject guard."""
+@pytest.mark.parametrize(
+    ("source_name", "source_desc", "neighbor_name", "neighbor_desc", "taxonomy", "expected"),
+    [
+        (
+            "tdd",
+            "Test-driven development. Use when building features test-first.",
+            "test-driven-development",
+            "Use when implementing any feature before writing implementation code.",
+            frozenset({"use"}),
+            True,
+        ),
+        (
+            "numpy-best-practices",
+            "Best practices for NumPy array programming and performance optimization in Python.",
+            "python-performance-optimization",
+            "Profile and optimize Python code using cProfile and performance best practices.",
+            frozenset({"code"}),
+            False,
+        ),
+        (
+            "beacon-gateway",
+            "Official skill for integrating Beacon Gateway (Flux API) into web applications.",
+            "flux-api",
+            "Guides usage of the Flux API with the core client SDK.",
+            frozenset(),
+            False,
+        ),
+        (
+            "beacon-gateway",
+            (
+                "Official skill for integrating Beacon Gateway "
+                "(formerly (v1) Flux API) into web applications."
+            ),
+            "flux-api",
+            "Guides usage of the Flux API with the core client SDK.",
+            frozenset(),
+            False,
+        ),
+        (
+            "beacon-gateway",
+            "Official skill for integrating Beacon Gateway and Flux API into web applications.",
+            "flux-api",
+            "Guides usage of the Flux API with the core client SDK.",
+            frozenset(),
+            True,
+        ),
+    ],
+    ids=[
+        "acronym-expansion-claim",
+        "shared-suffix-different-subject",
+        "parenthetical-clarification",
+        "nested-parenthetical-clarification",
+        "unparenthesized-direct-claim",
+    ],
+)
+def test_claims_neighbor_name_phrase(
+    tmp_path: Path,
+    source_name: str,
+    source_desc: str,
+    neighbor_name: str,
+    neighbor_desc: str,
+    taxonomy: frozenset[str],
+    expected: bool,
+) -> None:
+    """Verify neighbor name phrase detection across acronyms, suffixes, and parentheticals."""
     from reach.lint import _claims_neighbor_name_phrase
     from reach.models import Skill
 
-    tdd = Skill(
-        name="tdd",
-        description="Test-driven development. Use when building features test-first.",
-        path=tmp_path / "tdd",
-    )
-    full = Skill(
-        name="test-driven-development",
-        description="Use when implementing any feature before writing implementation code.",
-        path=tmp_path / "test-driven-development",
-    )
-    assert _claims_neighbor_name_phrase(tdd, full, frozenset({"use"}))
-
-    numpy_skill = Skill(
-        name="numpy-best-practices",
-        description=(
-            "Best practices for NumPy array programming and performance optimization in Python."
-        ),
-        path=tmp_path / "numpy",
-    )
-    python_perf = Skill(
-        name="python-performance-optimization",
-        description=(
-            "Profile and optimize Python code using cProfile and performance best practices."
-        ),
-        path=tmp_path / "pyperf",
-    )
-    assert not _claims_neighbor_name_phrase(numpy_skill, python_perf, frozenset({"code"}))
+    source = Skill(name=source_name, description=source_desc, path=tmp_path / source_name)
+    neighbor = Skill(name=neighbor_name, description=neighbor_desc, path=tmp_path / neighbor_name)
+    assert _claims_neighbor_name_phrase(source, neighbor, taxonomy) is expected
 
 
 @pytest.mark.parametrize(
@@ -1417,6 +1456,53 @@ def test_lockfile_clean_when_folder_tree_hash_matches(
     assert drift_issues == []
 
 
+def test_lockfile_drift_skips_workspace_root_walk_and_symlink_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify root SKILL.md skips workspace root walk and symlink dirs return empty."""
+    import json
+
+    from reach import lint as lint_mod
+
+    manifest = tmp_path / "SKILL.md"
+    manifest.write_text(
+        (
+            "---\nname: root-skill\n"
+            "description: Standalone manifest alongside skills-lock.json.\n---\n"
+        ),
+        encoding="utf-8",
+    )
+    lockfile = tmp_path / "skills-lock.json"
+    lockfile.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": {"root-skill": {"computedHash": "stale-hash"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    walked_dirs: list[Path] = []
+    orig_compute = lint_mod._compute_skill_folder_hash
+
+    def spy_compute(skill_dir: Path) -> str:
+        walked_dirs.append(skill_dir)
+        return orig_compute(skill_dir)
+
+    monkeypatch.setattr(lint_mod, "_compute_skill_folder_hash", spy_compute)
+    report = lint_file(manifest)
+    assert any(i.rule == "lockfile-drift" for i in report.issues)
+    assert walked_dirs == []
+
+    real_dir = tmp_path / "real-dir"
+    real_dir.mkdir()
+    symlink_dir = tmp_path / "symlink-dir"
+    symlink_dir.symlink_to(real_dir, target_is_directory=True)
+    assert orig_compute(symlink_dir) == ""
+
+
 def test_empty_skill_directory_emits_info(
     write_skill: Callable[..., Path],
     tmp_path: Path,
@@ -1437,33 +1523,39 @@ def test_empty_skill_directory_emits_info(
     assert report.infos == (empty_issues[0],)
 
 
-def test_claims_neighbor_name_phrase_ignores_parenthetical_clarification(
-    tmp_path: Path,
-) -> None:
-    """Verify parenthetical product clarification does not trigger neighbor name phrase claim."""
-    from reach.lint import _claims_neighbor_name_phrase
-    from reach.models import Skill
-
-    gateway_skill = Skill(
-        name="beacon-gateway",
-        description=(
-            "Official skill for integrating Beacon Gateway (Flux API) into web applications."
-        ),
-        path=tmp_path / "beacon-gateway",
-    )
-    flux_skill = Skill(
-        name="flux-api",
-        description="Guides usage of the Flux API with the core client SDK.",
-        path=tmp_path / "flux-api",
-    )
-    assert not _claims_neighbor_name_phrase(gateway_skill, flux_skill, frozenset())
-
-
-def test_missing_mutual_handoff_unacknowledged_overlap_is_info_by_default(
+@pytest.mark.parametrize(
+    ("rules_override", "expected_severity"),
+    [
+        ({}, Severity.INFO),
+        ({"missing-mutual-handoff": Severity.WARN}, Severity.WARN),
+        ({"missing-mutual-handoff": Severity.IGNORE}, None),
+    ],
+    ids=["default-info", "override-warn", "override-ignore"],
+)
+def test_missing_mutual_handoff_unacknowledged_overlap_severity(
     write_skill: Callable[..., Path],
     tmp_path: Path,
+    rules_override: dict[str, Severity],
+    expected_severity: Severity | None,
 ) -> None:
-    """Verify unacknowledged peer overlap emits INFO while explicit overriding elevates severity."""
+    """Verify unacknowledged peer overlap defaults to INFO and honors rule overrides."""
+    from reach.lint import _create_issue
+
+    cfg = LintSettings(rules=rules_override)
+    direct_issue = _create_issue(
+        "missing-mutual-handoff",
+        "db-cost-optimizer",
+        tmp_path / "SKILL.md",
+        "Overlap diagnostic",
+        cfg,
+        default_severity=Severity.INFO,
+    )
+    if expected_severity is None:
+        assert direct_issue is None
+    else:
+        assert direct_issue is not None
+        assert direct_issue.severity == expected_severity
+
     write_skill(
         name="db-cost-optimizer",
         description=(
@@ -1491,15 +1583,13 @@ def test_missing_mutual_handoff_unacknowledged_overlap_is_info_by_default(
         ),
     )
 
-    report = lint_tree(tmp_path)
+    report = lint_tree(tmp_path, config=cfg)
     mutual_issues = [i for i in report.issues if i.rule == "missing-mutual-handoff"]
-    assert len(mutual_issues) == 2
-    assert all(i.severity == Severity.INFO for i in mutual_issues)
-
-    warn_cfg = LintSettings(rules={"missing-mutual-handoff": Severity.WARN})
-    warn_report = lint_tree(tmp_path, config=warn_cfg)
-    warn_issues = [i for i in warn_report.issues if i.rule == "missing-mutual-handoff"]
-    assert all(i.severity == Severity.WARN for i in warn_issues)
+    if expected_severity is None:
+        assert mutual_issues == []
+    else:
+        assert len(mutual_issues) == 2
+        assert all(i.severity == expected_severity for i in mutual_issues)
 
 
 def test_lint_settings_from_settings_preserves_mutual_handoff_thresholds_and_validates_rules() -> (

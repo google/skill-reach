@@ -40,17 +40,23 @@ def _dedupe_argument_collection(collection: ArgumentCollection) -> ArgumentColle
     cleaned = []
     for arg in collection:
         unique_names: list[str] = []
+        dropped_any = False
         for n in arg.parameter.name or ():
             if n not in seen_flags:
                 seen_flags.add(n)
                 unique_names.append(n)
+            else:
+                dropped_any = True
         if unique_names:
-            cleaned.append(
-                attrs.evolve(
-                    arg,
-                    parameter=attrs.evolve(arg.parameter, name=tuple(unique_names)),
+            if not dropped_any:
+                cleaned.append(arg)
+            else:
+                cleaned.append(
+                    attrs.evolve(
+                        arg,
+                        parameter=attrs.evolve(arg.parameter, name=tuple(unique_names)),
+                    )
                 )
-            )
     return ArgumentCollection(cleaned)
 
 

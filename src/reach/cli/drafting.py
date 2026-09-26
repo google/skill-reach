@@ -145,14 +145,11 @@ def _effective_generator_model(settings: RunConfig, generate: GenerateFlags) -> 
 
     generator_agent = generate.generator_agent or settings.runtime.agent
     model = generate.generator_model
-    if generator_agent == KEYWORD_AGENT and model == DEFAULT_GEMINI_MODEL:
-        return KEYWORD_AGENT
-    if (
-        generator_agent
-        and model == DEFAULT_GEMINI_MODEL
-        and (agent_default := agent_default_model(generator_agent))
-    ):
-        return agent_default
+    if generator_agent and model == DEFAULT_GEMINI_MODEL:
+        if agent_default := agent_default_model(generator_agent):
+            return agent_default
+        if generator_agent == KEYWORD_AGENT:
+            return KEYWORD_AGENT
     return model
 
 

@@ -59,7 +59,7 @@ _INLINE_MD_RE = re.compile(r"[*`~]")
 
 
 class _KeywordDraftItem(BaseModel):
-    """Represent a single deterministic query draft synthesized from documentation."""
+    """Hold a single deterministic query draft synthesized from documentation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -78,7 +78,7 @@ class _KeywordDraftEnvelope(BaseModel):
 
 
 class KeywordOptions(AgentOptions):
-    """Specify configuration options for keyword heuristic routing."""
+    """Configure options for keyword heuristic routing."""
 
     model: str = "keyword"
     scope: str = Field(default="user")
