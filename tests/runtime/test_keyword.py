@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from reach.models import Catalog, CatalogMode, Skill
 from reach.runtime.keyword import KeywordGenerator, KeywordOptions, KeywordRuntime
 
@@ -52,22 +54,32 @@ def test_keyword_runtime_select_exact_and_space_separated(tmp_path: Path) -> Non
     assert outcome2.invoked_skill == "cloud-storage"
 
 
-def test_keyword_runtime_specificity_priority(tmp_path: Path) -> None:
-    """Verify longer compound skill names take precedence over generic prefix rivals."""
-    # Alphabetically, 'cloud-run' comes before 'cloud-run-jobs'
-    names = ("cloud-run", "cloud-run-jobs")
+@pytest.mark.parametrize(
+    ("query", "expected_skill"),
+    [
+        ("Deploy batch task on cloud-run-jobs", "cloud-run-jobs"),
+        ("Deploy web service on cloud-run", "cloud-run"),
+        (
+            "Create and schedule social media dispatches using chronicle-publisher",
+            "chronicle-publisher",
+        ),
+        ("Write a Go worker for cloud-run-jobs", "cloud-run-jobs"),
+    ],
+)
+def test_keyword_runtime_specificity_priority(
+    tmp_path: Path,
+    query: str,
+    expected_skill: str,
+) -> None:
+    """Verify longer skill names take precedence over shorter prefix or generic matches."""
+    names = ("cloud-run", "cloud-run-jobs", "social", "go", "chronicle-publisher")
     skills = _mock_skills(tmp_path / "src", names)
     catalog = Catalog(id="cat1", mode=CatalogMode.ALL, skills=names)
     runtime = KeywordRuntime()
     runtime.install(catalog, skills, tmp_path / "work")
 
-    # Query mentioning cloud-run-jobs should match cloud-run-jobs, not cloud-run
-    outcome = runtime.select("Deploy batch task on cloud-run-jobs", tmp_path)
-    assert outcome.invoked_skill == "cloud-run-jobs"
-
-    # Query mentioning only cloud-run should still match cloud-run
-    outcome_run = runtime.select("Deploy web service on cloud-run", tmp_path)
-    assert outcome_run.invoked_skill == "cloud-run"
+    outcome = runtime.select(query, tmp_path)
+    assert outcome.invoked_skill == expected_skill
 
 
 def test_keyword_runtime_word_boundary_prevents_partial_word_matches(tmp_path: Path) -> None:
@@ -243,11 +255,14 @@ def test_keyword_runtime_bm25_description_fallback(tmp_path: Path) -> None:
     assert outcome_literal.invoked_skill == "beacon-relay"
 
 
-def test_keyword_generator_strips_urls_from_query_text_while_preserving_verbatim_citation() -> None:
-    """Verify KeywordGenerator strips URLs and script paths while keeping verbatim citation."""
+def test_keyword_generator_strips_urls_and_defers_blockquote_meta_instructions() -> None:
+    """Verify KeywordGenerator strips URLs/paths and defers blockquote meta-instructions."""
     from reach.generate import build_prompt, parse_response, verify_citation
 
     target_body = (
+        "> **Script paths** below are relative to this skill's directory.\n"
+        "> **Freshness check**: If more than 30 days have passed since `last-updated`, warn user.\n"
+        "> **Authentication failures**: If the CLI returns HTTP 401, update API_KEY and stop.\n\n"
         "Draft, schedule, and publish dispatch bulletins via [REDACTED] or when the user "
         "drops a bulletin URL such as https://chronicle.example.com/?w=<ws_id>&d=<draft_id>.\n"
         "Run the CLI via `./scripts/chronicle.js` to manage dispatch queues and schedules.\n"
@@ -259,3 +274,5 @@ def test_keyword_generator_strips_urls_from_query_text_while_preserving_verbatim
         assert verify_citation(draft, target_body)
         assert "chronicle" not in draft.text
         assert "https://" not in draft.text
+        assert "Freshness check" not in draft.text
+        assert "Authentication failures" not in draft.text

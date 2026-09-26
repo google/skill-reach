@@ -1411,8 +1411,13 @@ def test_write_github_step_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "## Test Summary Header" in summary_file.read_text(encoding="utf-8")
 
 
-def test_print_optimization_renders_candidates_and_table(make_console, rendered) -> None:
-    """Verify print_optimization renders baseline summary, candidate table, and deltas."""
+@pytest.mark.parametrize("width", [100, 80])
+def test_print_optimization_renders_candidates_and_table(
+    width: int,
+    make_console,
+    rendered,
+) -> None:
+    """Verify print_optimization renders candidate descriptions even at 80 cols with all columns."""
     from reach.optimize import OptimizationCandidate, OptimizationReport
     from reach.views import print_optimization
 
@@ -1420,6 +1425,7 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
         skill_name="test-skill",
         baseline_description="Old baseline description.",
         baseline_recall=0.50,
+        baseline_trajectory_recall=0.60,
         baseline_accuracy=0.60,
         baseline_misroute=0.10,
         rival_name="rival-skill",
@@ -1430,6 +1436,8 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
                 description="New improved candidate description.",
                 rationale="Reason for change.",
                 recall=0.80,
+                trajectory_recall=0.90,
+                test_recall=0.85,
                 accuracy=0.85,
                 misroute_rate=0.05,
                 delta_recall=0.30,
@@ -1439,7 +1447,7 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
         applied=False,
         has_probes=True,
     )
-    console, buffer = make_console()
+    console, buffer = make_console(width=width)
     print_optimization(console, report)
     output = rendered(buffer)
 
@@ -1448,12 +1456,14 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
     assert "rival-skill" in output
     assert "distinct1" in output
     assert "+30.0%" in output
-    assert "New improved candidate description." in output
+    assert "improved" in output
+    assert "candidate" in output
+    assert "││" not in output
     assert "--auto-apply" in output
 
     # Handle unevaluated optimization report without probe data
     unprobed_report = report.model_copy(update={"has_probes": False})
-    c2, b2 = make_console()
+    c2, b2 = make_console(width=width)
     print_optimization(c2, unprobed_report)
     out2 = rendered(b2)
     assert "Not evaluated" in out2

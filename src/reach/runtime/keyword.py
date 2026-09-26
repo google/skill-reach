@@ -149,8 +149,11 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
 
         if pattern is None:
             return None
-        match = pattern.search(text)
-        return term_map.get(match.group(1).lower()) if match else None
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return None
+        best = max(matches, key=lambda m: len(m.group(1)))
+        return term_map.get(best.group(1).lower())
 
     def _match_bm25(self, text: str) -> str | None:
         """Rank resident skills by BM25 description overlap when no literal name matches."""
@@ -254,6 +257,10 @@ _BOILERPLATE_PREFIXES = (
     "script paths below are relative",
     "all commands output json",
     "you don't remember",
+    "freshness check",
+    "authentication failures",
+    "routing note",
+    "load these only when",
 )
 
 
@@ -279,7 +286,7 @@ def _extract_doc_passages(doc_text: str) -> list[str]:
         if not cleaned_cite or cleaned_cite in passages or cleaned_cite in deferred:
             continue
         plain_lower = _INLINE_MD_RE.sub("", cleaned_cite).strip().lower()
-        if plain_lower.startswith(_BOILERPLATE_PREFIXES):
+        if stripped.startswith(">") or plain_lower.startswith(_BOILERPLATE_PREFIXES):
             deferred.append(cleaned_cite)
         else:
             passages.append(cleaned_cite)

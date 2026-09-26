@@ -261,13 +261,15 @@ def print_optimization(console: Console, report: OptimizationReport) -> None:
 
     table = Table(box=box.ROUNDED, show_header=True, header_style="bold", expand=True)
     table.add_column("Rank", justify="center", style="bold", no_wrap=True)
-    table.add_column("Candidate Description", style="cyan", ratio=4)
+    table.add_column("Candidate Description", style="cyan", ratio=4, min_width=18)
     table.add_column("Δ Recall", justify="right", no_wrap=True)
     table.add_column("Recall", justify="right", no_wrap=True)
     if show_traj:
-        table.add_column("Traj Recall", justify="right", no_wrap=True)
+        traj_header = "Traj" if has_test else "Traj Recall"
+        table.add_column(traj_header, justify="right", no_wrap=True)
     if has_test:
-        table.add_column("Holdout Recall", justify="right", no_wrap=True)
+        holdout_header = "Holdout" if show_traj else "Holdout Recall"
+        table.add_column(holdout_header, justify="right", no_wrap=True)
     table.add_column("Misroutes", justify="right", no_wrap=True)
     table.add_column("Linter", justify="center", no_wrap=True)
 
