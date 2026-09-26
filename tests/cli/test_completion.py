@@ -63,13 +63,55 @@ def test_completion_install_mode(capsys: pytest.CaptureFixture[str]) -> None:
         assert "installed" in out
 
 
-def test_detect_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("shell_env", "expected"),
+    [
+        ("/bin/zsh", "zsh"),
+        ("/bin/bash", "bash"),
+        ("/usr/local/bin/fish", "fish"),
+    ],
+)
+def test_detect_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    shell_env: str,
+    expected: str,
+) -> None:
     """Verify shell detection identifies active SHELL environment variable."""
-    monkeypatch.setenv("SHELL", "/bin/zsh")
-    assert _detect_shell() == "zsh"
+    monkeypatch.setenv("SHELL", shell_env)
+    assert _detect_shell() == expected
 
-    monkeypatch.setenv("SHELL", "/bin/bash")
-    assert _detect_shell() == "bash"
 
-    monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
-    assert _detect_shell() == "fish"
+def test_completion_deduplicates_dual_positional_and_flag_options() -> None:
+    """Verify _cached_extract_completion_data dedupes flags and skips redundant evolve."""
+    from reach.cli.app import app
+    from reach.cli.completion import (
+        _cached_extract_completion_data,
+        _completion_data_cache,
+        _dedupe_argument_collection,
+    )
+
+    _completion_data_cache.clear()
+    data = _cached_extract_completion_data(app)
+    for cmd_path, entry in data.items():
+        seen_names: set[str] = set()
+        for arg in entry.arguments:
+            for name in arg.parameter.name or ():
+                assert name not in seen_names, (
+                    f"Duplicate completion option {name!r} in command {cmd_path}"
+                )
+                seen_names.add(name)
+        second_pass = _dedupe_argument_collection(entry.arguments)
+        for orig_arg, deduped_arg in zip(entry.arguments, second_pass, strict=True):
+            assert orig_arg is deduped_arg
+
+    import attrs
+    from cyclopts.argument import ArgumentCollection
+
+    sample_collection = next(iter(data.values())).arguments
+    unnamed_arg = attrs.evolve(
+        sample_collection[0],
+        parameter=attrs.evolve(sample_collection[0].parameter, name=()),
+    )
+    deduped_with_unnamed = _dedupe_argument_collection(ArgumentCollection([unnamed_arg]))
+    assert len(deduped_with_unnamed) == 1
+    assert deduped_with_unnamed[0] is unnamed_arg

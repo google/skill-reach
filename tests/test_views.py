@@ -1411,8 +1411,13 @@ def test_write_github_step_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "## Test Summary Header" in summary_file.read_text(encoding="utf-8")
 
 
-def test_print_optimization_renders_candidates_and_table(make_console, rendered) -> None:
-    """Verify print_optimization renders baseline summary, candidate table, and deltas."""
+@pytest.mark.parametrize("width", [100, 80])
+def test_print_optimization_renders_candidates_and_table(
+    width: int,
+    make_console,
+    rendered,
+) -> None:
+    """Verify print_optimization renders candidate descriptions even at 80 cols with all columns."""
     from reach.optimize import OptimizationCandidate, OptimizationReport
     from reach.views import print_optimization
 
@@ -1420,6 +1425,7 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
         skill_name="test-skill",
         baseline_description="Old baseline description.",
         baseline_recall=0.50,
+        baseline_trajectory_recall=0.60,
         baseline_accuracy=0.60,
         baseline_misroute=0.10,
         rival_name="rival-skill",
@@ -1430,6 +1436,8 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
                 description="New improved candidate description.",
                 rationale="Reason for change.",
                 recall=0.80,
+                trajectory_recall=0.90,
+                test_recall=0.85,
                 accuracy=0.85,
                 misroute_rate=0.05,
                 delta_recall=0.30,
@@ -1439,7 +1447,7 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
         applied=False,
         has_probes=True,
     )
-    console, buffer = make_console()
+    console, buffer = make_console(width=width)
     print_optimization(console, report)
     output = rendered(buffer)
 
@@ -1448,12 +1456,14 @@ def test_print_optimization_renders_candidates_and_table(make_console, rendered)
     assert "rival-skill" in output
     assert "distinct1" in output
     assert "+30.0%" in output
-    assert "New improved candidate description." in output
+    assert "improved" in output
+    assert "candidate" in output
+    assert "││" not in output
     assert "--auto-apply" in output
 
     # Handle unevaluated optimization report without probe data
     unprobed_report = report.model_copy(update={"has_probes": False})
-    c2, b2 = make_console()
+    c2, b2 = make_console(width=width)
     print_optimization(c2, unprobed_report)
     out2 = rendered(b2)
     assert "Not evaluated" in out2
@@ -1585,3 +1595,172 @@ def test_console_isolates_terminal_rendering_from_ambient_environment(
     console.print("[reach.hit]matched[/reach.hit]")
     assert "\x1b[" in buffer.getvalue()
     assert console.width == 120
+
+
+def test_probe_progress_prints_resident_catalog_header_once(
+    make_console,
+    rendered,
+    make_result,
+    truth,
+) -> None:
+    """Verify live probe_progress prints the resident catalog header once without duplication."""
+    console, buffer = make_console()
+    with probe_progress(
+        console,
+        catalog_id="neighborhood:gcs-lifecycle-rules",
+        total=2,
+        truth=truth,
+    ) as record:
+        record(1, 2, make_result("q-lifecycle", "gcs-lifecycle-rules"))
+        record(2, 2, make_result("q-retention", "gcs-retention-policy"))
+    shown = rendered(buffer)
+    assert shown.count("probing  neighborhood:gcs-lifecycle-rules") == 1
+
+
+def test_print_quick_scope_uses_single_space_after_ground_truth_label(
+    make_console,
+    rendered,
+) -> None:
+    """Verify print_quick_scope separates 'ground truth' and its value with a single space."""
+    console, buffer = make_console(width=200)
+    print_quick_scope(
+        console,
+        catalog_id="neighborhood:widget-rollout",
+        residents=20,
+        corpus=111,
+        attempts=1,
+        rivals=19,
+        authored=0,
+    )
+    shown = rendered(buffer)
+    assert "ground truth drafted here" in shown
+    assert "ground truth  drafted here" not in shown
+
+
+def test_print_query_set_omits_floating_table_header_when_empty(
+    make_console,
+    rendered,
+) -> None:
+    """Verify print_query_set omits the table header row when zero queries were drafted."""
+    empty_set = QuerySet(
+        catalog_id="all",
+        notes="",
+        queries=(),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    console, buffer = make_console(width=200)
+    print_query_set(
+        console,
+        empty_set,
+        path=None,
+        catalog_id="all",
+        residents=3,
+        ranks={},
+        flags={},
+    )
+    shown = rendered(buffer)
+    assert "0 queries drafted" in shown
+    assert "expects" not in shown
+
+
+def test_scorecard_omits_floating_skill_table_header_when_unprobed(
+    card,
+    artifact: Artifact,
+) -> None:
+    """Verify print_scorecard omits the floating skill table header when no skills were probed."""
+    unprobed_skills = tuple(
+        SkillScore(skill=s.skill, probes=0, reached=0, absorbed=0) for s in artifact.skills
+    )
+    empty = artifact.model_copy(
+        update={
+            "skills": unprobed_skills,
+            "confusion": (),
+            "queries": (),
+            "probes": 0,
+            "spread": Spread(),
+        },
+    )
+    shown = card(empty)
+    assert "3 resident skills had no query and took no traffic" in shown
+    assert "95% CI" not in shown
+
+
+def test_scorecard_renders_consistency_dash_when_no_repeated_queries(
+    card,
+    artifact: Artifact,
+) -> None:
+    """Verify print_scorecard renders 'consistency —' when spread.repeated_queries is zero."""
+    single_attempt = artifact.model_copy(
+        update={
+            "spread": artifact.spread.model_copy(
+                update={"replicates": 1, "repeated_queries": 0},
+            ),
+        },
+    )
+    shown = card(single_attempt)
+    assert "consistency —" in shown
+    assert not re.search(r"consistency \d+%", shown)
+
+
+def test_print_query_view_folds_long_leaks_citations_and_text_without_ellipsis(
+    make_console,
+    rendered,
+) -> None:
+    """Verify print_query_view wraps long leak, citation, and text cells instead of truncating."""
+    from reach.views.base import print_query_view
+
+    q_text = (
+        "Configure vault retention locks and governance policies for archival storage canisters "
+        "with compliance auditing enabled."
+    )
+    citation_text = (
+        "## Retention Policies\nUse `vaultctl canisters update --retention-period` "
+        "to lock archival retention windows."
+    )
+    qs = QuerySet(
+        catalog_id="all",
+        notes="",
+        queries=(
+            Query(
+                id="q-long-1",
+                text=q_text,
+                expected_skill="vault-retention-policy",
+            ),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    console, buffer = make_console(width=80)
+    print_query_view(
+        console,
+        qs,
+        ranks={"q-long-1": LexicalRank(position=1, field_size=10)},
+        flags={
+            "q-long-1": Leak(
+                names_target=True,
+                distinctive_tokens=("retention", "canisters", "archival", "governance"),
+            )
+        },
+        citations={("vault-retention-policy", q_text): citation_text},
+    )
+    shown = rendered(buffer)
+    flat = " ".join(shown.split())
+    assert "…" not in shown
+    assert "governance" in flat
+    assert "windows." in flat
+    assert "enabled." in flat
+
+
+@pytest.mark.parametrize(
+    ("severity", "expected_style"),
+    [
+        ("error", "reach.error"),
+        ("info", "reach.label"),
+        ("warn", "reach.misroute"),
+    ],
+)
+def test_severity_style_maps_severity_enum(severity: str, expected_style: str) -> None:
+    """Verify _severity_style maps Severity enum members to their canonical Rich styles."""
+    from reach.lint import Severity
+    from reach.views.lint import _severity_style
+
+    assert _severity_style(Severity(severity)) == expected_style

@@ -25,6 +25,7 @@ Configuration models, settings resolution, and path expansions.
         - OverlapSettings
         - PlanSettings
         - QuerySettings
+        - QUICK_ATTEMPTS
         - RegistrySettings
         - resolve_registry_location
         - resolve_registry_project

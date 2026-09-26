@@ -1799,7 +1799,7 @@ def test_draft_concurrency_flag_reaches_generate_query_set(
         captured.update(kwargs)
         return QuerySet(
             catalog_id="all",
-            queries=(),
+            queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
             provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         )
 
@@ -1828,6 +1828,32 @@ def test_draft_concurrency_flag_reaches_generate_query_set(
         == 0
     )
     assert captured["concurrency"] == 3
+
+
+def test_query_draft_exits_nonzero_when_zero_queries_drafted(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify standalone reach query draft exits 1 when generator produces 0 verified queries."""
+    destination = tmp_path / "empty_draft.json"
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                "--skills",
+                str(skill_repo),
+                "--queries",
+                str(destination),
+                "--agent",
+                "fake",
+            ],
+        )
+        == 1
+    )
+    err = capsys.readouterr().err
+    assert "0 verified queries" in err
 
 
 def test_recording_how_a_set_was_made_does_not_move_its_digest(
@@ -2368,8 +2394,15 @@ def test_query_draft_destination_collision_and_force(
     skill_repo: Path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify query drafting rejects existing destination unless --force is supplied."""
+    drafted = QuerySet(
+        catalog_id="all",
+        queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    monkeypatch.setattr("reach.cli.drafting.generate_query_set", lambda *_, **__: drafted)
     out = tmp_path / "existing_queries.json"
     out.write_text("{}", encoding="utf-8")
 
@@ -2410,6 +2443,12 @@ def test_bare_query_command_auto_discovers_skills(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Verify bare reach query without target auto-discovers skills from workspace."""
+    drafted = QuerySet(
+        catalog_id="all",
+        queries=(Query(id="d-1", text="Run test discovery.", expected_skill="test-skill"),),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    monkeypatch.setattr("reach.cli.drafting.generate_query_set", lambda *_, **__: drafted)
     workspace = tmp_path / "my_project"
     skill_dir = workspace / ".agents" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)

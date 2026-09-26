@@ -59,8 +59,14 @@ def _header_html(artifact: Artifact) -> str:
     scores = artifact.scores
     spread = artifact.spread
     error = f" ± {spread.standard_error * 100:.1f}pp" if spread.standard_error else ""
-    ci = _bounds(scores.consistency_interval)
-    ci_html = f' <span class="dim">({ci})</span>' if ci else ""
+    if spread.repeated_queries == 0:
+        consistency_dd = (
+            '<span class="dim">—</span> <span class="dim">(1 attempt, no repeated queries)</span>'
+        )
+    else:
+        ci = _bounds(scores.consistency_interval)
+        ci_html = f' <span class="dim">({ci})</span>' if ci else ""
+        consistency_dd = f"{_pct(scores.consistency)}{ci_html}"
     mode_str = f"mode: {_esc(artifact.catalog_mode.value)}"
     return f"""
 <div class="workbench-header">
@@ -78,7 +84,7 @@ def _header_html(artifact: Artifact) -> str:
   <dl class="figures">
     <div class="figure-cell">
       <dt>consistency</dt>
-      <dd>{_pct(scores.consistency)}{ci_html}</dd>
+      <dd>{consistency_dd}</dd>
     </div>
     <div class="figure-cell">
       <dt>top-1</dt><dd>{scores.top1_accuracy * 100:.1f}%{error}</dd>

@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict
 
 from reach.artifact import ContestedSkill, artifact_path, write_artifact
 from reach.catalog import resolve_skill_target
-from reach.config import RunConfig
+from reach.config import RunConfig, resolve_path
 from reach.generate import citations_path
 from reach.models import CatalogMode, Query, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
@@ -106,14 +106,11 @@ TYPED_NOTES = (
 #: Maximum number of skill names to preview in cli diagnostic hints.
 PREVIEW_SKILL_COUNT: Final = 3
 
-#: Default probe attempts per query in quick evaluation mode.
-QUICK_ATTEMPTS = 3
-
 
 class QuickEval(BaseModel):
     """Encapsulate resolved parameters for a quick evaluation run."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     target: str
     texts: tuple[str, ...] = ()
@@ -208,11 +205,7 @@ def _quick_defaults(
                 "partial": True if study.partial is None else study.partial,
             },
         ),
-        plan.model_copy(
-            update={
-                "attempts": QUICK_ATTEMPTS if plan.attempts is None else plan.attempts,
-            },
-        ),
+        plan,
     )
 
 
@@ -452,6 +445,7 @@ def _resolve_eval_settings(
     dry_run: bool = False,
 ) -> tuple[RunConfig, GenerateFlags]:
     """Build and refine the run configuration and generation flags for evaluation."""
+    cli_attempts = plan.attempts
     study, plan, record, generate = _apply_execution_mode_defaults(
         quick=quick,
         auto=auto,
@@ -476,6 +470,27 @@ def _resolve_eval_settings(
         registry=registry,
         required=() if (quick is not None or auto) else EVAL_REQUIRED,
     )
+    from reach.config import PlanSettings
+
+    active_config = (
+        config
+        if config is not None
+        else (Path("reach.toml") if Path("reach.toml").is_file() else None)
+    )
+    has_config_attempts = active_config is not None and RunConfig.declared(
+        active_config, "plan", "attempts"
+    )
+    if has_config_attempts and active_config is not None:
+        base_plan = settings.plan if config is not None else RunConfig.from_toml(active_config).plan
+    else:
+        base_plan = PlanSettings()
+    effective_attempts = base_plan.resolve_eval_attempts(
+        agent=settings.runtime.agent,
+        cli_attempts=cli_attempts,
+        quick=quick is not None,
+    )
+    if effective_attempts != settings.plan.attempts:
+        settings = settings.with_overrides(plan={"attempts": effective_attempts})
     adjusted = _adjust_eval_catalog_mode(
         settings,
         config,
@@ -600,6 +615,7 @@ def _probe_and_record(
         verbose=verbose,
         reasoning=reasoning,
         workers=settings.plan.workers,
+        scratch=scratch,
     )
     if (
         quick is not None
@@ -609,6 +625,7 @@ def _probe_and_record(
         and not dry_run
     ):
         _promote_quick_draft(
+            console=console,
             scratch=scratch,
             settings=settings,
             artifact_destination=_artifact_destination(
@@ -909,6 +926,7 @@ def _probe_query_set(
     verbose: bool = False,
     reasoning: bool = False,
     workers: int = 1,
+    scratch: Path | None = None,
 ) -> int:
     """Execute evaluation probes across target queries and format output artifacts."""
     composed = compose(settings, skills)
@@ -952,9 +970,16 @@ def _probe_query_set(
         return 0
 
     print_scorecard(console, measured, verbose=verbose or reasoning)
-    if written is not None:
+    if written is not None and not _is_in_scratch(written, scratch):
         print_wrote(console, written)
     return 0
+
+
+def _is_in_scratch(path: Path, scratch: Path | None) -> bool:
+    """Return True if path resides inside the given temporary scratch directory."""
+    if scratch is None:
+        return False
+    return resolve_path(path).is_relative_to(resolve_path(scratch))
 
 
 def _artifact_destination(
@@ -975,6 +1000,7 @@ def _artifact_destination(
 
 def _promote_quick_draft(
     *,
+    console: Console,
     scratch: Path,
     settings: RunConfig,
     artifact_destination: Path | None,
@@ -990,5 +1016,7 @@ def _promote_quick_draft(
             shutil.copy2(trail, save / trail.name)
     if artifact_destination is None:
         return
-    if artifact_destination.is_relative_to(scratch):
-        shutil.copy2(artifact_destination, save / artifact_destination.name)
+    if _is_in_scratch(artifact_destination, scratch):
+        promoted = save / artifact_destination.name
+        shutil.copy2(artifact_destination, promoted)
+        print_wrote(console, promoted)

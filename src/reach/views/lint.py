@@ -28,7 +28,7 @@ from reach.rendering import format_github_annotation
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from reach.lint import LintReport, RuleDefinition
+    from reach.lint import LintReport, RuleDefinition, Severity
 
 
 def _print_lint_clean(console: Console, report: LintReport) -> None:
@@ -50,6 +50,17 @@ def _print_lint_clean(console: Console, report: LintReport) -> None:
     )
 
 
+def _severity_style(severity: Severity) -> str:
+    """Return canonical Rich style string for a lint diagnostic severity."""
+    from reach.lint import Severity
+
+    if severity == Severity.ERROR:
+        return "reach.error"
+    if severity == Severity.INFO:
+        return "reach.label"
+    return "reach.misroute"
+
+
 def _render_lint_table(report: LintReport) -> Table:
     """Construct Rich Table displaying lint issues with styled messages and remedies."""
     table = Table(
@@ -64,7 +75,7 @@ def _render_lint_table(report: LintReport) -> Table:
     table.add_column("Message", overflow="fold")
 
     for issue in report.issues:
-        sev_style = "reach.error" if issue.severity == "error" else "reach.misroute"
+        sev_style = _severity_style(issue.severity)
         msg_text = Text(issue.message)
         if issue.remedy:
             msg_text.append(f"\nFix: {issue.remedy}", style="dim")
@@ -78,22 +89,34 @@ def _render_lint_table(report: LintReport) -> Table:
 
 
 def _render_lint_summary(report: LintReport) -> Text:
-    """Assemble colored summary counts of errors and warnings."""
+    """Assemble colored summary counts of errors, warnings, and info diagnostics."""
     err_count = len(report.errors)
     warn_count = len(report.warnings)
+    info_count = len(report.infos)
     skill_suffix = "s" if report.skills_checked != 1 else ""
-    return Text.assemble(
+    parts: list[tuple[str, str]] = [
         (
             f"Found {err_count} error{'s' if err_count != 1 else ''}",
             "reach.error" if err_count else "default",
         ),
-        (" and ", "default"),
+        (", " if info_count else " and ", "default"),
         (
             f"{warn_count} warning{'s' if warn_count != 1 else ''}",
             "reach.misroute" if warn_count else "default",
         ),
-        (f" across {report.skills_checked} skill{skill_suffix}.", "default"),
-    )
+    ]
+    if info_count:
+        parts.extend(
+            [
+                (", and ", "default"),
+                (
+                    f"{info_count} info",
+                    "reach.label",
+                ),
+            ]
+        )
+    parts.append((f" across {report.skills_checked} skill{skill_suffix}.", "default"))
+    return Text.assemble(*parts)
 
 
 def print_lint(console: Console, report: LintReport) -> None:
@@ -131,7 +154,7 @@ def render_lint_github(report: LintReport) -> str:
 
 def print_rule_explanation(console: Console, rule: RuleDefinition) -> None:
     """Render detailed documentation and remedy advice for a single lint rule."""
-    sev_style = "reach.error" if rule.default_severity == "error" else "reach.misroute"
+    sev_style = _severity_style(rule.default_severity)
     content = Text.assemble(
         ("Default Severity: ", "reach.label"),
         (rule.default_severity.upper(), sev_style),

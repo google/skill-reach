@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from reach.config import (
+    KEYWORD_AGENT,
     RuntimeSettings,
     agent_default_model,
     agent_profiles,
@@ -63,6 +64,7 @@ FAKE_AGENT = "fake"
 
 __all__ = [
     "FAKE_AGENT",
+    "KEYWORD_AGENT",
     "AgentOptions",
     "AgentRuntime",
     "AntigravityOptions",

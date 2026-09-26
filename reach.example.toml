@@ -87,15 +87,16 @@ mutual_handoff_lexical_threshold = 0.35
 mutual_handoff_similarity_threshold = 0.75
 
 [lint.rules]
-# Customize rule severities: "error", "warn", or "ignore".
+# Customize rule severities: "error", "warn", "info", or "ignore".
 catalog-budget-overflow = "warn"
 description-too-short = "warn"
 duplicate-capability = "warn"
 duplicate-name = "error"
+empty-skill-directory = "info"
 invalid-name-format = "error"
 invalid-yaml = "error"
 listing-overflow = "warn"
-lockfile-drift = "warn"
+lockfile-drift = "info"
 missing-description = "error"
 missing-mutual-handoff = "warn"
 missing-name = "error"

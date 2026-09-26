@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class LexicalRank(BaseModel):
     """Represent the lexical rank of an expected skill among candidate skills."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     position: int
     field_size: int

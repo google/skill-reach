@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,23 +74,24 @@ class Verdict(StrEnum):
 class CededTerm(BaseModel):
     """Represent a description term providing greater BM25 score to a rival skill."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     term: str
-    share: float = Field(ge=0.0)
+    share: Annotated[float, Field(ge=0.0)]
     disclaimed: bool = False
 
 
 class Rewrite(BaseModel):
     """Hold suggested modifications, ceded terms, and replacement vocabulary."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     skill: str
     rival: str = ""
     ceded: tuple[CededTerm, ...] = ()
     unclaimed: tuple[str, ...] = ()
     contenders: tuple[str, ...] = ()
+    band: Annotated[float, Field(ge=0.0, le=1.0)] = CONTENDER_BAND
     rival_disclaims_target: bool = False
     missing_mutual_handoffs: tuple[str, ...] = ()
 
@@ -164,10 +165,12 @@ def _is_unclaimed_candidate(
     elsewhere: frozenset[str],
     own: frozenset[str],
     scorer: Bm25Scorer,
+    *,
+    min_uses: int = MIN_CLAIM_USES,
 ) -> bool:
     """Determine whether a term qualifies as an unclaimed descriptive term."""
     return (
-        uses >= MIN_CLAIM_USES
+        uses >= min_uses
         and term not in elsewhere
         and term not in own
         and term not in FUNCTION_WORDS
@@ -182,10 +185,25 @@ def unclaimed_terms(
     scorer: Bm25Scorer,
     limit: int = CLAIM_LIMIT,
     tokenized_corpus: Mapping[str, frozenset[str]] | None = None,
+    *,
+    min_length: int = MIN_CLAIM_LENGTH,
+    min_uses: int = MIN_CLAIM_USES,
+    settings: OverlapSettings | None = None,
 ) -> tuple[str, ...]:
     """Identify distinctive body terms absent from competitor selection surfaces."""
-    if limit < 0:
-        msg = f"cannot name fewer than 0 terms, got {limit}"
+    effective_limit = (
+        settings.claim_limit if settings is not None and limit == CLAIM_LIMIT else limit
+    )
+    effective_min_len = (
+        settings.min_claim_length
+        if settings is not None and min_length == MIN_CLAIM_LENGTH
+        else min_length
+    )
+    effective_min_uses = (
+        settings.min_claim_uses if settings is not None and min_uses == MIN_CLAIM_USES else min_uses
+    )
+    if effective_limit < 0:
+        msg = f"cannot name fewer than 0 terms, got {effective_limit}"
         raise ValueError(msg)
     tokenized = tokenized_corpus or {
         name: frozenset(tokens) for name, tokens in scorer.documents.items()
@@ -193,15 +211,22 @@ def unclaimed_terms(
     elsewhere = _corpus_terms_excluding(corpus, target.name, tokenized_corpus=tokenized)
     own = tokenized.get(target.name) or frozenset(tokenize(skill_text(target)))
     counted = Counter(
-        term for term in tokenize(_prose(body)) if term.isalpha() and len(term) >= MIN_CLAIM_LENGTH
+        term for term in tokenize(_prose(body)) if term.isalpha() and len(term) >= effective_min_len
     )
     available = [
         term
         for term, uses in counted.items()
-        if _is_unclaimed_candidate(term, uses, elsewhere, own, scorer)
+        if _is_unclaimed_candidate(
+            term,
+            uses,
+            elsewhere,
+            own,
+            scorer,
+            min_uses=effective_min_uses,
+        )
     ]
     available.sort(key=lambda term: (-counted[term], term))
-    return tuple(available[:limit])
+    return tuple(available[:effective_limit])
 
 
 def _disclaims(description: str, rival: str, term: str) -> bool:
@@ -229,6 +254,7 @@ def ceded_terms(
     mine = scorer.contributions(query, target.name)
     theirs = scorer.contributions(query, rival.name)
     described = frozenset(tokenize(target.description))
+    own_name_tokens = frozenset(tokenize(target.name))
     found = [
         CededTerm(
             term=term,
@@ -237,6 +263,7 @@ def ceded_terms(
         )
         for term, value in theirs.items()
         if term in described
+        and term not in own_name_tokens
         and term not in FUNCTION_WORDS
         and scorer.idf(term) > BACKGROUND_IDF
         and (value - mine.get(term, 0.0)) / rival_score >= share
@@ -268,6 +295,8 @@ def _evaluate_unclaimed_terms(
     ceded: tuple[CededTerm, ...],
     limit: int,
     tokenized_corpus: Mapping[str, frozenset[str]] | None = None,
+    *,
+    settings: OverlapSettings | None = None,
 ) -> tuple[str, ...]:
     """Compute unclaimed terms if any ceded terms remain un-disclaimed."""
     if not any(not term.disclaimed for term in ceded):
@@ -280,6 +309,7 @@ def _evaluate_unclaimed_terms(
         ranker,
         limit=limit,
         tokenized_corpus=tokenized_corpus,
+        settings=settings,
     )
 
 
@@ -292,30 +322,44 @@ def suggest_rewrite(
     band: float = CONTENDER_BAND,
     share: float = MATERIAL_SHARE,
     tokenized_corpus: Mapping[str, frozenset[str]] | None = None,
+    *,
+    settings: OverlapSettings | None = None,
 ) -> Rewrite:
     """Generate Rewrite recommendation for a skill based on competitor scores."""
+    effective_limit = (
+        settings.claim_limit if settings is not None and limit == CLAIM_LIMIT else limit
+    )
+    effective_band = (
+        settings.contender_band if settings is not None and band == CONTENDER_BAND else band
+    )
+    effective_share = (
+        settings.material_share if settings is not None and share == MATERIAL_SHARE else share
+    )
     target, rival = _resolve_target_and_rival(competition, skills)
     if rival is None:
-        return Rewrite(skill=target.name)
+        return Rewrite(skill=target.name, band=effective_band)
 
     nearest = competition.nearest_rival
     if nearest is None:
-        return Rewrite(skill=target.name)
+        return Rewrite(skill=target.name, band=effective_band)
     ranker = scorer or Bm25Scorer.from_skills(skills)
     tokenized = tokenized_corpus or {
         name: frozenset(tokens) for name, tokens in ranker.documents.items()
     }
-    ceded = ceded_terms(target, rival, ranker, nearest.score, share=share)
+    ceded = ceded_terms(target, rival, ranker, nearest.score, share=effective_share)
     unclaimed = _evaluate_unclaimed_terms(
         target,
         skills,
         body,
         ranker,
         ceded,
-        limit,
+        effective_limit,
         tokenized_corpus=tokenized,
+        settings=settings,
     )
-    contenders = tuple(r.name for r in competition.ranked_rivals if r.score >= band * nearest.score)
+    contenders = tuple(
+        r.name for r in competition.ranked_rivals if r.score >= effective_band * nearest.score
+    )
     from reach.lint import (
         _claims_neighbor_name_phrase,
         extract_skill_references,
@@ -350,6 +394,7 @@ def suggest_rewrite(
         ceded=ceded,
         unclaimed=unclaimed,
         contenders=contenders,
+        band=effective_band,
         rival_disclaims_target=rival_disclaims,
         missing_mutual_handoffs=tuple(missing_mutual),
     )
@@ -368,6 +413,10 @@ def suggest_all(
     names: Sequence[str] = (),
     *,
     only_actionable: bool = False,
+    limit: int = CLAIM_LIMIT,
+    band: float = CONTENDER_BAND,
+    share: float = MATERIAL_SHARE,
+    settings: OverlapSettings | None = None,
 ) -> tuple[Rewrite, ...]:
     """Generate rewrite proposals for multiple named skills using a shared scorer."""
     target_names = tuple(names) if names else tuple(c.skill for c in overlap.competitions)
@@ -378,7 +427,11 @@ def suggest_all(
             overlap.find(name),
             skills,
             scorer=scorer,
+            limit=limit,
+            band=band,
+            share=share,
             tokenized_corpus=tokenized,
+            settings=settings,
         )
         for name in target_names
     )

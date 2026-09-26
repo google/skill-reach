@@ -1482,3 +1482,16 @@ def test_build_scaling_catalogs_strict_nested_subset(tmp_path: Path) -> None:
         assert set(earlier.skills).issubset(set(later.skills)), (
             f"Catalog {earlier.id} is not a subset of {later.id}"
         )
+
+
+def test_parse_frontmatter_preserves_yaml_block_scalar_trailing_newline(tmp_path: Path) -> None:
+    """Verify parse_frontmatter preserves trailing newline in YAML block scalar descriptions."""
+    from reach.catalog import parse_frontmatter
+
+    content = "---\nname: block-skill\ndescription: |\n  Block scalar description.\n---\n# Body\n"
+    skill = parse_frontmatter(content, tmp_path / "block-skill" / "SKILL.md")
+    assert skill is not None
+    assert skill.description == "Block scalar description.\n"
+
+    blank_content = '---\nname: blank-skill\ndescription: "   \\n\\t  "\n---\n# Body\n'
+    assert parse_frontmatter(blank_content, tmp_path / "blank-skill" / "SKILL.md") is None

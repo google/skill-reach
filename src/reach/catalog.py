@@ -25,7 +25,7 @@ import math
 import re
 from pathlib import Path
 from random import Random
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import yaml
 from pydantic import (
@@ -33,8 +33,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     ValidationError,
-    field_validator,
 )
 
 from reach.config import resolve_path
@@ -204,7 +204,7 @@ class _SkillFrontmatter(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str | None = None
-    description: str
+    description: Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
     metadata: dict[str, Any] = Field(default_factory=dict)
     allowed_tools: Any = Field(
         default=None,
@@ -214,15 +214,6 @@ class _SkillFrontmatter(BaseModel):
         default=None,
         validation_alias=AliasChoices(HIDE_FROM_MODEL_KEY, "disable_model_invocation"),
     )
-
-    @field_validator("description")
-    @classmethod
-    def _reject_blank_description(cls, value: str) -> str:
-        """Validate that frontmatter description is a non-empty, non-whitespace string."""
-        if not value or not value.strip():
-            msg = "skill description must not be empty or whitespace"
-            raise ValueError(msg)
-        return value
 
     def is_model_invocable(self) -> bool:
         """Check whether the skill allows model invocation based on frontmatter flags."""

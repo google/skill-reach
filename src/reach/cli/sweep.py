@@ -242,7 +242,7 @@ def _sweep(
     target: Annotated[
         str | None,
         Parameter(
-            name=["target", "--target"],
+            name="--target",
             help=(
                 "Target skill to evaluate across scaling steps "
                 "(omitted for whole-corpus capacity evaluation)"

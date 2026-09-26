@@ -85,14 +85,14 @@ catalog = "auto"
 
 @app.command(name="init", group=SETUP)
 def _init(
-    *,
     path: Annotated[
         Path | None,
         Parameter(
-            name=["--path", "-p"],
+            name=["path", "--path", "-p"],
             help="Project root directory to initialize (defaults to current working directory)",
         ),
     ] = None,
+    *,
     agent: Annotated[
         AgentName | None,
         Parameter(

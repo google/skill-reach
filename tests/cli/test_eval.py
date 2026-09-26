@@ -1392,15 +1392,27 @@ def test_a_quick_run_states_the_scope_the_depth_and_the_rivals_behind_its_answer
     assert "drafted here and probed unreviewed, against 2 rivals" in shown
 
 
+@pytest.mark.parametrize("source", ["cli", "autodiscovered_config"])
 def test_the_depth_a_quick_run_states_is_the_one_it_was_given(
+    source: str,
     quick_argv: list[str],
     generator: FakeGenerator,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    """Verify attempts flag overrides default depth display in quick mode logs."""
-    assert main([*quick_argv, "--attempts", "1"]) == 0
+    """Verify CLI --attempts and auto-discovered reach.toml override quick mode depth."""
+    if source == "cli":
+        assert main([*quick_argv, "--attempts", "1"]) == 0
+        assert "1 attempt per query" in capsys.readouterr().err
+        return
 
-    assert "1 attempt per query" in capsys.readouterr().err
+    cfg_dir = tmp_path / "cfg_workspace"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "reach.toml").write_text("[plan]\nattempts = 4\n", encoding="utf-8")
+    monkeypatch.chdir(cfg_dir)
+    assert main(quick_argv) == 0
+    assert "4 attempts per query" in capsys.readouterr().err
 
 
 def test_a_quick_run_banks_nothing_where_a_later_run_would_find_it(
@@ -1469,7 +1481,7 @@ def test_a_typed_query_is_probed_as_authored_ground_truth_without_drafting(
     )
 
     assert generator.prompts == [], "a typed query was drafted over"
-    assert "ground truth  the 1 question you typed" in capsys.readouterr().err
+    assert "ground truth the 1 question you typed" in capsys.readouterr().err
 
 
 def test_several_typed_queries_all_take_the_one_label_they_were_given(
@@ -1709,3 +1721,68 @@ def test_eval_filters_existing_queries_file_by_skill_flag(
     artifact = json.loads(out_file.read_text(encoding="utf-8"))
     evaluated_skills = {q["expected"] for q in artifact["queries"]}
     assert evaluated_skills == {"gke-basics"}
+
+
+def test_quick_eval_with_keyword_agent_drafts_and_saves_cleanly(
+    bodied_corpus: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify quick eval with --agent keyword drafts offline, uses 1 attempt, and saves."""
+    saved_dir = tmp_path / "saved_run"
+    rc = main(
+        [
+            "eval",
+            "gke-basics",
+            "--skills",
+            str(bodied_corpus),
+            "--agent",
+            "keyword",
+            "--save",
+            str(saved_dir),
+            "--yes",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "1 attempt per query" in combined
+    assert "keyword/keyword" in combined
+    assert "keyword/gemini-" not in combined
+    assert str(saved_dir / "queries.json.artifact.json") in combined
+    assert combined.count("wrote  ") == 1
+
+    saved_qs = load_query_set(saved_dir / "queries.json")
+    assert len(saved_qs.queries) > 0
+    assert saved_qs.provenance is not None
+    assert saved_qs.provenance.generator_model == "keyword"
+
+
+def test_draft_generation_aborts_with_error_when_zero_queries_produced(
+    bodied_corpus: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify query drafting exits with code 1 when the generator produces 0 verified queries."""
+    from unittest.mock import patch
+
+    from reach.runtime.keyword import KeywordGenerator
+
+    with patch.object(KeywordGenerator, "complete", return_value='{"queries": []}'):
+        rc = main(
+            [
+                "query",
+                "draft",
+                "--skills",
+                str(bodied_corpus),
+                "--skill",
+                "gke-basics",
+                "--out",
+                str(tmp_path / "empty_queries.json"),
+                "--agent",
+                "keyword",
+            ]
+        )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "0 verified queries" in err

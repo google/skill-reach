@@ -20,7 +20,8 @@ import functools
 import os
 from typing import Annotated, Literal
 
-from cyclopts import App, Parameter
+import attrs
+from cyclopts import App, ArgumentCollection, Parameter
 from cyclopts.completion import _base as _cyclopts_completion_base
 from cyclopts.completion._base import CompletionData
 
@@ -33,11 +34,50 @@ _orig_extract_completion_data = _cyclopts_completion_base.extract_completion_dat
 _completion_data_cache: dict[int, dict[tuple[str, ...], CompletionData]] = {}
 
 
+def _dedupe_argument_collection(collection: ArgumentCollection) -> ArgumentCollection:
+    """Deduplicate flag aliases within and across arguments for shell completion generation."""
+    seen_flags: set[str] = set()
+    cleaned = []
+    for arg in collection:
+        names = tuple(arg.parameter.name or ())
+        if not names:
+            cleaned.append(arg)
+            continue
+        unique_names: list[str] = []
+        dropped_any = False
+        for n in names:
+            if n not in seen_flags:
+                seen_flags.add(n)
+                unique_names.append(n)
+            else:
+                dropped_any = True
+        if unique_names:
+            if not dropped_any:
+                cleaned.append(arg)
+            else:
+                cleaned.append(
+                    attrs.evolve(
+                        arg,
+                        parameter=attrs.evolve(arg.parameter, name=tuple(unique_names)),
+                    )
+                )
+    return ArgumentCollection(cleaned)
+
+
 def _cached_extract_completion_data(app: App) -> dict[tuple[str, ...], CompletionData]:
-    """Cache completion data extraction across shell types."""
+    """Cache completion data extraction across shell types with deduplicated flag names."""
     key = id(app)
     if key not in _completion_data_cache:
-        _completion_data_cache[key] = _orig_extract_completion_data(app)
+        raw = _orig_extract_completion_data(app)
+        _completion_data_cache[key] = {
+            cmd: attrs.evolve(
+                data,
+                arguments=_dedupe_argument_collection(data.arguments),
+                launcher_arguments=_dedupe_argument_collection(data.launcher_arguments),
+                own_arguments=_dedupe_argument_collection(data.own_arguments),
+            )
+            for cmd, data in raw.items()
+        }
     return _completion_data_cache[key]
 
 

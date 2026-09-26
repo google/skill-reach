@@ -169,3 +169,10 @@ def test_init_with_path_flag(tmp_path: Path) -> None:
     toml_path = target_dir / "reach.toml"
     content = toml_path.read_text(encoding="utf-8")
     assert 'skills = ".claude/skills"' in content
+
+
+def test_init_positional_path(tmp_path: Path) -> None:
+    """Verify reach init accepts target directory as a positional argument."""
+    target_dir = tmp_path / "positional_subproject"
+    assert main(["init", str(target_dir), "--agent", "keyword"]) == 0
+    assert (target_dir / "reach.toml").is_file()

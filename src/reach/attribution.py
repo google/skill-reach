@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from reach.leak import FUNCTION_WORDS
 from reach.retrieval import tokenize
 
 if TYPE_CHECKING:
@@ -84,7 +85,11 @@ def attribute_query(
     """
     tokens = tokenize(query_text)
     unique_tokens = tuple(dict.fromkeys(tokens))
-    target_contribs = scorer.contributions(tokens, target_skill)
+    target_contribs = {
+        k: v
+        for k, v in scorer.contributions(tokens, target_skill).items()
+        if k not in FUNCTION_WORDS
+    }
 
     is_abstention = rival_skill is None or rival_skill.lower() in (
         "none",
@@ -93,7 +98,15 @@ def attribute_query(
         "",
     )
     rival_name = "(no selection)" if is_abstention or rival_skill is None else rival_skill
-    rival_contribs = {} if is_abstention else scorer.contributions(tokens, rival_name)
+    rival_contribs = (
+        {}
+        if is_abstention
+        else {
+            k: v
+            for k, v in scorer.contributions(tokens, rival_name).items()
+            if k not in FUNCTION_WORDS
+        }
+    )
 
     scoring_keys = set(target_contribs.keys()) | set(rival_contribs.keys())
     drivers: list[TokenAttribution] = []

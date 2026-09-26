@@ -33,8 +33,48 @@ _DEFAULT_QUERY = QuerySettings()
 #: Minimum IDF threshold for distinctive terms against background corpus.
 BACKGROUND_IDF = _DEFAULT_QUERY.distinctive_idf_floor
 
-#: Closed set of common function words/pronouns excluded from distinctiveness checks.
-FUNCTION_WORDS = frozenset(
+#: Canonical 33-word English stopword list from Apache Lucene
+#: (EnglishAnalyzer.ENGLISH_STOP_WORDS_SET) and bm25s.stopwords.STOPWORDS_EN.
+LUCENE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "no",
+        "not",
+        "of",
+        "on",
+        "or",
+        "such",
+        "that",
+        "the",
+        "their",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "to",
+        "was",
+        "will",
+        "with",
+    },
+)
+
+#: Closed class of English personal, possessive, and reflexive pronouns (holding out 'i' and 'us').
+PRONOUNS = frozenset(
     {
         "he",
         "her",
@@ -68,11 +108,14 @@ FUNCTION_WORDS = frozenset(
     },
 )
 
+#: Unified set of canonical Lucene stopwords and conversational pronouns.
+FUNCTION_WORDS = LUCENE_STOPWORDS | PRONOUNS
+
 
 class Leak(BaseModel):
     """Record whether and how a query explicitly references its target skill."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     names_target: bool = False
     distinctive_tokens: tuple[str, ...] = ()

@@ -81,6 +81,7 @@ reach lint ./skills --format json
 | `--strict`             | Flag   | `false`         | Fail with exit code 1 if any warnings are detected.                                                  |
 | `--explain`            | String | -               | Display detailed explanation and remedy for a specific lint rule and exit.                           |
 | `--ignore`             | String | -               | Disable specific lint rule(s) (repeatable).                                                          |
+| `--info`               | String | -               | Treat specific lint rule(s) as info (repeatable).                                                    |
 | `--error`              | String | -               | Treat specific lint rule(s) as an error (repeatable).                                                |
 | `--warn`               | String | -               | Treat specific lint rule(s) as a warning (repeatable).                                               |
 | `--agent`              | Choice | -               | Agent runtime to query for installed skill locations (`claude-code`, `antigravity-cli`, etc.).       |
@@ -92,22 +93,23 @@ reach lint ./skills --format json
 
 ## Built-in Lint Rules
 
-| Rule ID                          | Default Severity | Description                                                                                  |
-| :------------------------------- | :--------------- | :------------------------------------------------------------------------------------------- |
-| `invalid-yaml`                   | Error            | SKILL.md contains missing or unparseable YAML frontmatter.                                   |
-| `missing-name`                   | Error            | Frontmatter does not declare a skill `name`.                                                 |
-| `missing-description`            | Error            | Frontmatter has no `description` or the description is empty.                                |
-| `invalid-name-format`            | Error            | Skill name does not adhere to lowercase kebab-case convention (max 64 chars).                |
-| `name-mismatch`                  | Error            | Frontmatter `name` differs from the parent directory name.                                   |
-| `duplicate-name`                 | Error            | Multiple skills in the corpus declare the same `name`.                                       |
-| `duplicate-capability`           | Warning          | Skill description has high semantic overlap (> 92%) with another resident skill.             |
-| `description-too-short`          | Warning          | Description is under 20 characters and lacks actionable routing criteria.                    |
-| `listing-overflow`               | Warning          | Description exceeds warning threshold (1,024 characters) and risks prompt listing elision.   |
-| `reserved-name-collision`        | Warning          | Skill name collides with a built-in agent tool or command primitive.                         |
-| `unresolved-placeholder`         | Warning          | Description contains unresolved template markers (`TODO`, `FIXME`, `<FILL_IN>`).             |
-| `unresolved-declared-dependency` | Warning          | Declared dependency skill in `metadata` or `allowed-tools` is missing from resident catalog. |
-| `lockfile-drift`                 | Warning          | Local SKILL.md content digest does not match pinned `computedHash` in `skills-lock.json`.    |
-| `unbounded-attractor`            | Warning          | Description contains overly broad phrases that aggressively attract out-of-scope queries.    |
-| `unknown-skill-reference`        | Warning          | Negative routing handoff (`use <other-skill>`) references a skill missing from the catalog.  |
-| `missing-mutual-handoff`         | Warning          | High-similarity or one-way competing neighbor lacks reciprocal `Don't use for...` handoff.   |
-| `catalog-budget-overflow`        | Warning          | Resident skill catalog exceeds runtime listing character budget causing description elision. |
+| Rule ID                          | Default Severity | Description                                                                                                                  |
+| :------------------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------- |
+| `invalid-yaml`                   | Error            | SKILL.md contains missing or unparseable YAML frontmatter.                                                                   |
+| `missing-name`                   | Error            | Frontmatter does not declare a skill `name`.                                                                                 |
+| `missing-description`            | Error            | Frontmatter has no `description` or the description is empty.                                                                |
+| `invalid-name-format`            | Error            | Skill name does not adhere to lowercase kebab-case convention (max 64 chars).                                                |
+| `name-mismatch`                  | Error            | Frontmatter `name` differs from the parent directory name.                                                                   |
+| `duplicate-name`                 | Error            | Multiple skills in the corpus declare the same `name`.                                                                       |
+| `duplicate-capability`           | Warning          | Skill description has high semantic overlap (> 92%) with another resident skill.                                             |
+| `description-too-short`          | Warning          | Description is under 20 characters and lacks actionable routing criteria.                                                    |
+| `listing-overflow`               | Warning          | Description exceeds warning threshold (1,024 characters) and risks prompt listing elision.                                   |
+| `reserved-name-collision`        | Warning          | Skill name collides with a built-in agent tool or command primitive.                                                         |
+| `unresolved-placeholder`         | Warning          | Description contains unresolved template markers (`TODO`, `FIXME`, `<FILL_IN>`).                                             |
+| `unresolved-declared-dependency` | Warning          | Declared dependency skill in `metadata` or `allowed-tools` is missing from resident catalog.                                 |
+| `lockfile-drift`                 | Info             | Local SKILL.md or skill folder digest does not match pinned `computedHash` in `skills-lock.json`.                            |
+| `empty-skill-directory`          | Info             | Direct child directory inside the skills root contains no `SKILL.md` file.                                                   |
+| `unbounded-attractor`            | Warning          | Description contains overly broad phrases that aggressively attract out-of-scope queries.                                    |
+| `unknown-skill-reference`        | Warning          | Negative routing handoff (`use <other-skill>`) references a skill missing from the catalog.                                  |
+| `missing-mutual-handoff`         | Warning / Info   | Emits Warning on one-way handoff or bidirectional name claim; emits Info on unacknowledged high-similarity neighbor overlap. |
+| `catalog-budget-overflow`        | Warning          | Resident skill catalog exceeds runtime listing character budget causing description elision.                                 |

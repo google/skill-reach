@@ -41,7 +41,18 @@ def print_scorecard(
 ) -> None:
     """Print complete evaluation scorecard, skill breakdown, and confusion."""
     console.print(_scorecard_heading(artifact))
-    console.print(_skill_table(artifact))
+    if _worst_first(artifact.skills):
+        console.print(_skill_table(artifact))
+    else:
+        unnamed = sum(1 for s in artifact.skills if not s.probes and not s.absorbed)
+        if unnamed:
+            console.print(
+                Text(
+                    f"  {unnamed} resident skills had no query and took no traffic",
+                    style="reach.digest",
+                ),
+                soft_wrap=True,
+            )
     console.print(_run_figures(artifact), soft_wrap=True)
     collisions = _collisions(artifact)
     if collisions:
@@ -119,10 +130,19 @@ def _run_figures(artifact: Artifact) -> Text:
     scores = artifact.scores
     spread = artifact.spread
     error = f" ± {spread.standard_error * 100:.1f}pp" if spread.standard_error else ""
+    if spread.repeated_queries == 0:
+        consistency_parts: list[str | tuple[str, str]] = [
+            ("consistency ", "reach.label"),
+            ("—", "reach.digest"),
+        ]
+    else:
+        consistency_parts = [
+            ("consistency ", "reach.label"),
+            (_rate(scores.consistency).strip(), "reach.count"),
+            (_beside(scores.consistency_interval), "reach.digest"),
+        ]
     parts: list[str | tuple[str, str]] = [
-        ("consistency ", "reach.label"),
-        (_rate(scores.consistency).strip(), "reach.count"),
-        (_beside(scores.consistency_interval), "reach.digest"),
+        *consistency_parts,
         ("   top-1 ", "reach.label"),
         f"{scores.top1_accuracy * 100:.1f}%{error}",
     ]

@@ -34,8 +34,7 @@ from cyclopts.help.specs import (
     PanelSpec,
 )
 from rich import box
-from rich.console import Console, Group
-from rich.live import Live
+from rich.console import Console
 from rich.measure import Measurement
 from rich.panel import Panel
 from rich.progress import (
@@ -382,7 +381,8 @@ def probe_progress(
             clock=TOOK if index >= of else ETA,
         )
 
-    with Live(Group(resident, progress), console=console):
+    console.print(resident, soft_wrap=True)
+    with progress:
         yield record
 
 
@@ -516,7 +516,7 @@ def print_quick_scope(
         )
     )
     console.print(
-        Text.assemble(("       ground truth  ", "reach.label"), ground),
+        Text.assemble(("       ground truth ", "reach.label"), ground),
         soft_wrap=True,
     )
     console.print(
@@ -745,13 +745,22 @@ class _TruncatedName:
         return Measurement(min(1, len(self.value)), len(self.value))
 
 
-def _leak(leak: Leak | None) -> Text:
+def _leak(leak: Leak | None, *, fold: bool = False) -> Text:
     """Format leak check results into a styled Text cell."""
     if leak is None:
-        return _cell("")
+        return Text("", overflow="fold") if fold else _cell("")
     if not leak.leaked:
-        return _cell("clean", style="reach.hit")
-    return _cell("; ".join(leak.routes), style="reach.misroute")
+        return (
+            Text("clean", style="reach.hit", overflow="fold")
+            if fold
+            else _cell("clean", style="reach.hit")
+        )
+    routes = "; ".join(leak.routes)
+    return (
+        Text(routes, style="reach.misroute", overflow="fold")
+        if fold
+        else _cell(routes, style="reach.misroute")
+    )
 
 
 def print_query_set(
@@ -775,22 +784,23 @@ def print_query_set(
         ),
         soft_wrap=True,
     )
-    table = Table(box=box.SIMPLE, pad_edge=False, header_style="reach.label")
-    table.add_column("query")
-    table.add_column("expects")
-    table.add_column("rank", justify="right")
-    table.add_column("leak")
-    table.add_column("text")
-    for query in query_set.queries:
-        rank = ranks.get(query.id)
-        table.add_row(
-            _cell(query.id),
-            _cell(query.truth_label),
-            _cell(str(rank) if rank is not None else ""),
-            _leak(flags.get(query.id)),
-            _cell(query.text, style="reach.digest"),
-        )
-    console.print(table)
+    if query_set.queries:
+        table = Table(box=box.SIMPLE, pad_edge=False, header_style="reach.label")
+        table.add_column("query")
+        table.add_column("expects")
+        table.add_column("rank", justify="right")
+        table.add_column("leak")
+        table.add_column("text")
+        for query in query_set.queries:
+            rank = ranks.get(query.id)
+            table.add_row(
+                _cell(query.id),
+                _cell(query.truth_label),
+                _cell(str(rank) if rank is not None else ""),
+                _leak(flags.get(query.id)),
+                _cell(query.text, style="reach.digest"),
+            )
+        console.print(table)
     if path is not None:
         print_wrote(console, path, then=then)
     elif then:
@@ -807,14 +817,14 @@ def print_query_view(
 ) -> None:
     """Render query set details as an inspection table."""
     table = Table(box=box.SIMPLE, pad_edge=False, header_style="reach.label")
-    table.add_column("query")
-    table.add_column("expects")
-    table.add_column("rank", justify="right")
+    table.add_column("query", no_wrap=True)
+    table.add_column("expects", no_wrap=True)
+    table.add_column("rank", justify="right", no_wrap=True)
     if flags is not None:
-        table.add_column("leak")
+        table.add_column("leak", overflow="fold")
     if citations is not None:
-        table.add_column("citation")
-    table.add_column("text")
+        table.add_column("citation", overflow="fold")
+    table.add_column("text", overflow="fold")
     for query in query_set.queries:
         rank = ranks.get(query.id)
         row = [
@@ -823,10 +833,10 @@ def print_query_view(
             _cell(str(rank) if rank is not None else ""),
         ]
         if flags is not None:
-            row.append(_leak(flags.get(query.id)))
+            row.append(_leak(flags.get(query.id), fold=True))
         if citations is not None:
             key = (query.expected_skill or "", query.text)
-            row.append(_cell(citations.get(key, ""), style="reach.digest"))
-        row.append(_cell(query.text, style="reach.digest"))
+            row.append(Text(citations.get(key, ""), style="reach.digest", overflow="fold"))
+        row.append(Text(query.text, style="reach.digest", overflow="fold"))
         table.add_row(*row)
     console.print(table)

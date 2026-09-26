@@ -25,7 +25,13 @@ from cyclopts import App, Parameter
 from pydantic import ValidationError
 
 from reach.attribution import attribute_query
-from reach.config import RegistrySettings, RunConfig, RuntimeSettings, resolve_sub_settings
+from reach.config import (
+    OverlapSettings,
+    RegistrySettings,
+    RunConfig,
+    RuntimeSettings,
+    resolve_sub_settings,
+)
 from reach.discovery import resolve_corpus
 from reach.overlap import CorpusOverlap, did_you_mean_hint, rank_corpus
 from reach.retrieval import Bm25Scorer
@@ -105,15 +111,22 @@ def _render_text_overlap(
     suggest: bool,
     semantic_sims: dict[tuple[str, str], float] | None,
     overlap_filter: OverlapFilter | None = None,
+    overlap_settings: OverlapSettings | None = None,
     truncate: bool = True,
 ) -> None:
     """Render human-readable overlap tables, rewrites, or competitor scorecards."""
     filt = overlap_filter or OverlapFilter()
+    cfg = overlap_settings or OverlapSettings()
     all_names = tuple(c.skill for c in overlap.competitions)
 
     if suggest:
         if skill:
-            for rewrite in suggest_all(overlap, found, skill):
+            for rewrite in suggest_all(
+                overlap,
+                found,
+                skill,
+                settings=cfg,
+            ):
                 print_rewrite(console, rewrite, caveat=False)
             print_overlap_caveat(console)
             return
@@ -125,6 +138,7 @@ def _render_text_overlap(
             overlap_filter=filt,
             semantic_similarities=semantic_sims,
             default_top=DEFAULT_OVERLAP_TOP,
+            overlap_settings=cfg,
         )
         if not shown_rewrites:
             print_no_actionable_rewrites(console, len(found))
@@ -184,6 +198,7 @@ def _render_overlap_output(
     semantic: bool = False,
     format: Format,
     overlap_filter: OverlapFilter | None = None,
+    overlap_settings: OverlapSettings | None = None,
     truncate: bool = True,
 ) -> None:
     effective_semantic = semantic or bool(overlap_filter and overlap_filter.quadrants)
@@ -198,6 +213,7 @@ def _render_overlap_output(
                     skill,
                     overlap_filter=overlap_filter,
                     semantic_similarities=semantic_sims,
+                    overlap_settings=overlap_settings,
                 ),
                 format,
             )
@@ -223,6 +239,7 @@ def _render_overlap_output(
         suggest=suggest,
         semantic_sims=semantic_sims,
         overlap_filter=overlap_filter,
+        overlap_settings=overlap_settings,
         truncate=truncate,
     )
 
@@ -469,6 +486,7 @@ def _overlap(
         semantic=semantic,
         format=format,
         overlap_filter=overlap_filter,
+        overlap_settings=run_config.overlap,
         truncate=not no_truncate,
     )
     return 0

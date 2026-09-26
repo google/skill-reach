@@ -832,11 +832,11 @@ def test_sweep_passes_loaded_skills_once_and_checkpoints_each_scale(
     checkpoints_seen: list[int] = []
     orig_run_scaling_sweep = cli_sweep_mod.run_scaling_sweep
 
-    def spy_run_scaling_sweep(*args, **kwargs):
+    def spy_run_scaling_sweep(*args, **kwargs) -> ScalingStudy:
         captured_kwargs.update(kwargs)
         orig_cb = kwargs.get("on_scale_complete")
 
-        def wrapped_cb(step, total, point, partial):
+        def wrapped_cb(step, total, point, partial) -> None:
             if orig_cb is not None:
                 orig_cb(step, total, point, partial)
             if out_file.exists():
@@ -976,7 +976,7 @@ def test_sweep_cli_allow_truncation_flag(
 
     passed_kwargs: dict[str, object] = {}
 
-    def _mock_run_scaling_sweep(*args, **kwargs):
+    def _mock_run_scaling_sweep(*args, **kwargs) -> ScalingStudy:
         passed_kwargs.update(kwargs)
         from reach.sweep import ScalingPoint, ScalingStudy
 
@@ -1021,6 +1021,7 @@ def test_sweep_cli_allow_truncation_flag(
     assert passed_kwargs.get("allow_truncation") is True
 
     # When --no-allow-truncation is passed, allow_truncation is False
+    passed_kwargs.clear()
     code = main(
         [
             "sweep",
@@ -1035,7 +1036,7 @@ def test_sweep_cli_allow_truncation_flag(
         ]
     )
     assert code == 0
-    assert passed_kwargs.get("allow_truncation") is False
+    assert not passed_kwargs.get("allow_truncation")
 
 
 def test_sweep_auto_queries_cold_start_colocated_with_corpus(

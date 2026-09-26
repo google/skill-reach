@@ -35,6 +35,7 @@ from reach.optimize import (
     OptimizationReport,
     ReciprocalHandoff,
     _evaluate_all_candidates,
+    _extract_lexical_rewrite_info,
     _run_candidate_probes,
     _synthesize_via_heuristics,
     apply_optimization_candidate,
@@ -48,7 +49,7 @@ from reach.optimize import (
 )
 from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set
 from reach.retrieval import DenseScorer
-from reach.rewrite import synthesize_directional_disclaimer
+from reach.rewrite import _disclaims, synthesize_directional_disclaimer
 from reach.runtime.fake import FakeGenerator, FakeRuntime
 
 # ===========================================================================
@@ -305,21 +306,32 @@ def test_synthesize_directional_disclaimer_formatting(
 
 @pytest.mark.parametrize("mode", ["heuristic", "llm"])
 @pytest.mark.parametrize(
-    ("ceded_terms", "expect_disclaimer"),
+    ("ceded_terms", "already_disclaimed", "expect_new_disclaimer"),
     [
-        (("docker", "build"), True),
-        ((), False),
+        (("docker", "build"), False, True),
+        ((), False, False),
+        (("docker", "build"), True, False),
     ],
 )
 def test_synthesize_candidates_directional_disclaimer_inclusion(
     mode: str,
     ceded_terms: tuple[str, ...],
-    expect_disclaimer: bool,
+    already_disclaimed: bool,
+    expect_new_disclaimer: bool,
     target_and_rival: tuple[Skill, Skill],
     mock_llm_driver: MagicMock,
 ) -> None:
-    """Verify heuristic and LLM synthesis conditionally include directional disclaimer."""
+    """Verify synthesis skips duplicate disclaimers when rival is already disclaimed."""
     target, rival = target_and_rival
+    if already_disclaimed:
+        target = target.model_copy(
+            update={
+                "description": (
+                    f"{target.description.rstrip('.')} "
+                    f"Don't use for image builds (use {rival.name})."
+                )
+            }
+        )
     if mode == "heuristic":
         candidates = _synthesize_via_heuristics(
             target=target,
@@ -335,8 +347,91 @@ def test_synthesize_candidates_directional_disclaimer_inclusion(
         )
         assert candidates[0].description == "LLM description for cloud deployments."
 
-    has_disclaimer = any("use container-builder instead" in c.description for c in candidates)
-    assert has_disclaimer is expect_disclaimer
+    has_new_disclaimer = any("use container-builder instead" in c.description for c in candidates)
+    assert has_new_disclaimer is expect_new_disclaimer
+    for cand in candidates:
+        assert cand.description.count(rival.name) <= 1
+
+
+@pytest.mark.parametrize(
+    ("target_desc", "expected_ceded"),
+    [
+        (
+            "manage node credentials, and run rolling upgrades.",
+            ("upgrades", "node", "rolling"),
+        ),
+        (
+            "manage node credentials. Don't use for rolling upgrades (use fleet-upgrades).",
+            ("node",),
+        ),
+        (
+            "manage cluster credentials. Don't use for rolling upgrades (use fleet-upgrades).",
+            (),
+        ),
+    ],
+)
+def test_extract_lexical_rewrite_info_excludes_already_disclaimed_terms(
+    target_desc: str,
+    expected_ceded: tuple[str, ...],
+    write_skill_model: Callable[..., Skill],
+) -> None:
+    """Verify _extract_lexical_rewrite_info returns only undisclaimed reword terms."""
+    target = write_skill_model(
+        name="fleet-basics",
+        description=(
+            "Provision managed cluster topology, bootstrap worker credentials, "
+            f"configure workload identity policies, and {target_desc}"
+        ),
+    )
+    rival = write_skill_model(
+        name="fleet-upgrades",
+        description="Execute fleet rolling upgrades and node version upgrades.",
+    )
+    filler_a = write_skill_model(
+        name="invoice-archiver",
+        description="Archive quarterly ledger invoices and tax receipts.",
+    )
+    filler_b = write_skill_model(
+        name="calendar-scheduler",
+        description="Schedule recurring calendar invites and meeting reminders.",
+    )
+    _rival_name, ceded_terms, _unclaimed = _extract_lexical_rewrite_info(
+        [target, rival, filler_a, filler_b],
+        target,
+    )
+    assert ceded_terms == expected_ceded
+
+
+def test_synthesize_via_heuristics_places_unclaimed_terms_before_trailing_handoff(
+    write_skill_model: Callable[..., Skill],
+) -> None:
+    """Verify unclaimed terms attach to positive prose rather than trailing negative handoffs."""
+    target = write_skill_model(
+        name="fleet-basics",
+        description=(
+            "Provision fleet clusters and configure node credentials. "
+            "Don't use for network routing (use fleet-networking) "
+            "or node upgrades (use fleet-upgrades)."
+        ),
+    )
+    rival = write_skill_model(
+        name="fleet-upgrades",
+        description="Manage node pool version upgrades and surge drain policies.",
+    )
+    candidates = _synthesize_via_heuristics(
+        target=target,
+        rivals=[rival],
+        unclaimed_terms=("autoscaling", "taints"),
+        ceded_terms=(),
+        known_skills={"fleet-basics", "fleet-networking", "fleet-upgrades"},
+    )
+    featuring_cand = candidates[0].description
+    assert "featuring autoscaling, taints." in featuring_cand
+    assert featuring_cand.index("featuring autoscaling, taints.") < featuring_cand.index(
+        "Don't use for network routing"
+    )
+    assert not _disclaims(featuring_cand, "fleet-upgrades", "autoscaling")
+    assert not _disclaims(featuring_cand, "fleet-upgrades", "taints")
 
 
 def test_synthesize_candidates_returns_requested_count_even_without_rivals(
@@ -368,7 +463,9 @@ def test_synthesize_candidates_returns_requested_count_even_without_rivals(
     [
         (
             OptimizationCandidate(
-                description="A perfectly valid description that satisfies all static constraints.",
+                description=(
+                    "Validate parcel routing manifests and schema definitions against constraints."
+                ),
                 rationale="Adds distinctive terms.",
             ),
             True,
@@ -384,6 +481,13 @@ def test_synthesize_candidates_returns_requested_count_even_without_rivals(
             OptimizationCandidate(
                 description="A" * 1200,
                 rationale="Exceeds maximum allowable description length.",
+            ),
+            False,
+        ),
+        (
+            OptimizationCandidate(
+                description="Use when handling every workflow setup and standard configuration.",
+                rationale="Short broad attractor without domain anchors.",
             ),
             False,
         ),
@@ -2364,3 +2468,123 @@ def test_compute_paired_delta_clamps_extreme_bounds() -> None:
         target_name="test",
     )
     assert clamped_low == -1.0
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_reason_fragment"),
+    [
+        (
+            "Assist with any task and help with everything in the repository.",
+            "unbounded attractor",
+        ),
+        (
+            "Route inbound parcels across regional sorting hubs. TODO: add weight limits.",
+            "unresolved template placeholder",
+        ),
+        (
+            "Route inbound parcels across hubs. For customs forms, use customs-broker instead.",
+            "unknown skill",
+        ),
+    ],
+)
+def test_filter_candidates_rejects_semantic_and_placeholder_lint_violations(
+    description: str,
+    expected_reason_fragment: str,
+) -> None:
+    """Verify filter_candidates marks candidates with attractors, placeholders, or unknown refs."""
+    cand = OptimizationCandidate(description=description, rationale="test")
+    filtered = filter_candidates(
+        [cand],
+        skill_name="parcel-router",
+        known_skills={"parcel-router", "parcel-packer", "freight-auditor"},
+    )
+    assert len(filtered) == 1
+    assert filtered[0].lint_clean is False
+    assert expected_reason_fragment in filtered[0].filter_reason.lower()
+
+
+def test_filter_candidates_rejects_missing_reciprocal_handoff_when_rival_hands_off(
+    tmp_path: Path,
+) -> None:
+    """Verify filter_candidates requires reciprocal handoff when a rival hands off to target."""
+    rival = Skill(
+        name="widget-deployer",
+        description=(
+            "Deploy compiled widget services to production fleets. "
+            "Do NOT use for project scaffolding (use widget-scaffolder)."
+        ),
+        path=tmp_path / "widget-deployer",
+    )
+    bad_cand = OptimizationCandidate(
+        description="Scaffold new widget service projects with templates and build pipelines.",
+        rationale="Drops reciprocal handoff to deploy.",
+    )
+    good_cand = OptimizationCandidate(
+        description=(
+            "Scaffold new widget service projects with templates and build pipelines. "
+            "Do not use for deployment operations (use widget-deployer)."
+        ),
+        rationale="Preserves reciprocal handoff to deploy.",
+    )
+    filtered = filter_candidates(
+        [bad_cand, good_cand],
+        skill_name="widget-scaffolder",
+        known_skills={"widget-scaffolder", "widget-deployer"},
+        rivals=[rival],
+    )
+    assert filtered[0].lint_clean is False
+    assert "widget-deployer" in filtered[0].filter_reason
+    assert filtered[1].lint_clean is True
+
+
+def test_synthesize_via_heuristics_trims_oversized_and_strips_unknown_refs_and_keeps_handoff(
+    tmp_path: Path,
+) -> None:
+    """Verify _synthesize_via_heuristics produces lint-clean candidates for faulty base."""
+    long_sentences = " ".join(
+        f"Sentence {i} describes telemetry packet buffering, metric aggregation, and trace spans."
+        for i in range(18)
+    )
+    base_desc = (
+        f"{long_sentences} "
+        "For incident alerting, see incident-pager. "
+        "For long-term capacity forecasting, see capacity-forecaster."
+    )
+    assert len(base_desc) > 1024
+
+    target = Skill(
+        name="telemetry-collector",
+        description=base_desc,
+        path=tmp_path / "telemetry-collector",
+    )
+    rival = Skill(
+        name="telemetry-exporter",
+        description=(
+            "Manage outbound telemetry export queues and batch forwarding. "
+            "For local metric collection and sampling, use telemetry-collector instead."
+        ),
+        path=tmp_path / "telemetry-exporter",
+    )
+    candidates = _synthesize_via_heuristics(
+        target=target,
+        rivals=[rival],
+        unclaimed_terms=("histogram", "ringbuffer", "downsampling"),
+        count=3,
+        ceded_terms=("forwarding", "queue"),
+        known_skills={"telemetry-collector", "telemetry-exporter"},
+    )
+    assert len(candidates) == 3
+    linted = filter_candidates(
+        candidates,
+        skill_name="telemetry-collector",
+        known_skills={"telemetry-collector", "telemetry-exporter"},
+        rivals=[rival],
+    )
+    for cand in linted:
+        assert cand.lint_clean is True, (
+            f"Expected clean candidate, got: {cand.filter_reason} ({cand.description!r})"
+        )
+        assert len(cand.description) <= 1024
+        assert "incident-pager" not in cand.description
+        assert "capacity-forecaster" not in cand.description
+        assert "telemetry-exporter" in cand.description

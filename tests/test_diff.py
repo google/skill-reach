@@ -397,6 +397,94 @@ def test_only_the_three_factors_are_accepted(arm) -> None:
         diff_runs(arm("one", HALF), arm("two", HITS), "attempts")
 
 
+@pytest.mark.parametrize(
+    ("factor", "control_rt", "treatment_rt", "treatment_catalog", "expected_corroborated"),
+    [
+        (
+            VaryFactor.AGENT,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "keyword", "options": {"model": "scripted"}},
+            WIDE,
+            True,
+        ),
+        (
+            VaryFactor.AGENT,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "fake", "options": {"model": "other-model"}},
+            WIDE,
+            False,
+        ),
+        (
+            VaryFactor.AGENT,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "keyword", "options": {"model": "scripted"}},
+            NARROW,
+            False,
+        ),
+        (
+            VaryFactor.MODEL,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "fake", "options": {"model": "other-model"}},
+            WIDE,
+            True,
+        ),
+        (
+            VaryFactor.MODEL,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "keyword", "options": {"model": "scripted"}},
+            WIDE,
+            False,
+        ),
+        (
+            VaryFactor.MODEL,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "fake", "options": {"model": "other-model"}},
+            NARROW,
+            False,
+        ),
+        (
+            VaryFactor.MODEL,
+            {"agent": "fake", "options": {"model": "scripted"}},
+            {"agent": "keyword", "options": {"model": "other-model"}},
+            WIDE,
+            False,
+        ),
+    ],
+)
+def test_agent_and_model_vary_factors_corroborate_when_arm_moves_and_corpus_holds(
+    make_config,
+    record_arm,
+    factor: VaryFactor,
+    control_rt: dict[str, object],
+    treatment_rt: dict[str, object],
+    treatment_catalog: dict[str, object],
+    expected_corroborated: bool,
+) -> None:
+    """Verify agent/model factors corroborate only when their dimension moves and residents hold."""
+    control = record_arm(
+        "control-agent",
+        make_config(
+            catalog=WIDE,
+            plan={"attempts": 5},
+            runtime=control_rt,
+        ),
+        HALF,
+    )
+    treatment = record_arm(
+        "treatment-agent",
+        make_config(
+            catalog=treatment_catalog,
+            plan={"attempts": 5},
+            runtime=treatment_rt,
+        ),
+        HITS,
+    )
+    comparison = diff_runs(control, treatment, factor)
+    assert comparison.corroboration.corroborated is expected_corroborated
+    assert comparison.corroboration.arm_moved
+    assert not comparison.corroboration.corpus_moved
+
+
 @pytest.mark.parametrize("factor", list(VaryFactor))
 def test_vary_factor_accepts_enum_and_string_identically(arm, factor: VaryFactor) -> None:
     """Verify diff_runs produces identical comparisons for enum and string factor inputs."""
