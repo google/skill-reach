@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from pydantic import ValidationError
 
@@ -23,9 +25,12 @@ from reach.catalog import build_catalogs, build_neighborhood_catalogs
 from reach.models import Catalog, CatalogMode, Skill
 from reach.retrieval import Bm25Scorer
 
+if TYPE_CHECKING:
+    from conftest import SyntheticCorpusBuilder
+
 
 @pytest.fixture
-def small_corpus(corpus_builder) -> list[Skill]:
+def small_corpus(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide a corpus with two distinct clusters and one outlier skill."""
     return (
         corpus_builder()

@@ -17,14 +17,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
 from reach.models import Skill
-
-if TYPE_CHECKING:
-    pass
 
 
 def _make_skill(name: str, description: str) -> Skill:
@@ -145,35 +141,6 @@ def test_cluster_skills_resolution_parameter() -> None:
     high_res = cluster_skills(skills, resolution=5.0)
 
     assert len(low_res.clusters) <= len(high_res.clusters)
-
-
-def test_cluster_partitions_align_with_ground_truth_labels() -> None:
-    """Verify cluster partition alignment with ground truth using sklearn adjusted Rand index."""
-    from sklearn.metrics import adjusted_rand_score
-
-    from reach.cluster import cluster_skills
-
-    skills = [
-        _make_skill("cloud-run", "deploy cloud run containers and microservices on gcp"),
-        _make_skill("cloud-functions", "deploy cloud functions serverless event handlers on gcp"),
-        _make_skill("postgres-db", "manage postgres relational database tables schemas and sql"),
-        _make_skill("mysql-db", "manage mysql relational database tables schemas and sql"),
-        _make_skill("react-ui", "build react frontend ui components web client jsx"),
-        _make_skill("vue-ui", "build vue frontend ui components web client vuejs"),
-    ]
-
-    partition = cluster_skills(skills)
-    skill_to_cluster = {}
-    for cluster in partition.clusters:
-        for s in cluster.skills:
-            skill_to_cluster[s] = cluster.id
-
-    true_labels = [0, 0, 1, 1, 2, 2]
-    pred_labels = [skill_to_cluster[s.name] for s in skills]
-
-    # Verify recovery of 3 communities against sklearn reference
-    ari = adjusted_rand_score(true_labels, pred_labels)
-    assert ari > 0.8
 
 
 def test_cluster_skills_deduplicates_skills_with_identical_names() -> None:

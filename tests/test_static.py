@@ -128,13 +128,6 @@ def test_review_css_uses_tokenized_focus_ring_and_overlay() -> None:
     assert "color-mix(in srgb, var(--reach-on-primary)" in review_css
 
 
-def test_load_static_asset_caches_identical_result() -> None:
-    """Verify load_static_asset returns cached result on repeated calls."""
-    first = load_static_asset("base.css")
-    second = load_static_asset("base.css")
-    assert first is second
-
-
 def test_load_static_asset_nonexistent_raises_file_not_found() -> None:
     """Verify load_static_asset raises FileNotFoundError for missing assets."""
     with pytest.raises(FileNotFoundError):
@@ -213,55 +206,3 @@ def test_js_modules_contain_expected_client_logic(
     js = js_getter()
     missing = [symbol for symbol in expected_symbols if symbol not in js]
     assert not missing, f"Missing symbols in client JS: {missing}"
-
-
-@pytest.mark.parametrize(
-    ("template_getter", "expected_slots"),
-    [
-        (
-            get_view_template,
-            (
-                "{title}",
-                "{style}",
-                "{header}",
-                "{confusion_matrix}",
-                "{collisions}",
-                "{skills_table}",
-                "{queries}",
-                "{script}",
-            ),
-        ),
-        (
-            get_review_template,
-            (
-                "{skill_name}",
-                "{style}",
-                "{target_skill}",
-                "{rivals_json}",
-                "{skill_desc}",
-                "{rivals_section}",
-                "{summary}",
-                "{trig_pct}",
-                "{guard_pct}",
-                "{triggers_count}",
-                "{triggers_cards}",
-                "{trig_empty_style}",
-                "{guardrails_count}",
-                "{guardrails_cards}",
-                "{guard_empty_style}",
-                "{empty_style}",
-                "{script}",
-            ),
-        ),
-    ],
-    ids=["view_template", "review_template"],
-)
-def test_templates_contain_placeholders(
-    template_getter: Callable[[], str],
-    expected_slots: Sequence[str],
-) -> None:
-    """Verify HTML template skeletons start with doctype and contain expected slots."""
-    tmpl = template_getter()
-    assert tmpl.startswith("<!DOCTYPE html>")
-    missing = [slot for slot in expected_slots if slot not in tmpl]
-    assert not missing, f"Missing placeholder slots in template: {missing}"

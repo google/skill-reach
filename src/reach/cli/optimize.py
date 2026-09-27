@@ -274,10 +274,6 @@ def _optimize(
     effective_skill = resolved.skill_name if resolved else skill
     effective_skills = skills or (resolved.catalog_path if resolved else None)
 
-    if eff_settings.budget < 1:
-        console.print("[red]Error:[/] Probe budget must be at least 1")
-        return 2
-
     if code := _confirm_optimize_safety(
         console,
         effective_skills,

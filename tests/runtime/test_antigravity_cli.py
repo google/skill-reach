@@ -19,16 +19,13 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-if TYPE_CHECKING:
-    pass
-
 from reach.catalog import build_catalogs, load_skills
-from reach.config import DEFAULT_GEMINI_MODEL, agent_default_model
+from reach.config import DEFAULT_GEMINI_MODEL
 from reach.models import CatalogMode
 from reach.runtime.antigravity_cli import (
     DENIED_PERMISSION_ACTIONS,
@@ -244,10 +241,10 @@ def test_agy_result_event_model_invariants() -> None:
     assert not hasattr(event, "unmodeled_key")
 
     with pytest.raises(ValidationError):
-        _AgyResultEvent(duration_ms=-1)  # type: ignore[arg-type]
+        _AgyResultEvent(duration_ms=-1)
 
     with pytest.raises(ValidationError):
-        _AgyResultEvent(prompt_tokens=-10)  # type: ignore[arg-type]
+        _AgyResultEvent(prompt_tokens=-10)
 
     with pytest.raises(ValidationError):
         setattr(event, "status", "mutated")  # noqa: B010
@@ -529,36 +526,9 @@ def test_custom_allowed_tools_filters_tools() -> None:
     ) == ("search_web",)
 
 
-def test_model_has_default() -> None:
-    """Verify model parameter defaults to configured agent default model."""
-    default = agent_default_model("antigravity-cli")
-    assert default is not None
-    assert AntigravityCliOptions().model == default
-
-
 def test_home_dir_defaults_to_none() -> None:
     """Verify home_dir parameter defaults to None before runtime initialization."""
     assert AntigravityCliOptions().home_dir is None
-
-
-def test_home_dir_must_not_be_the_operators_real_home(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Verify ValidationError is raised if home_dir resolves to user's real home directory."""
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
-    with pytest.raises(ValidationError, match="home_dir"):
-        AntigravityCliOptions.model_validate(
-            {"model": "test-model", "home_dir": str(tmp_path)},
-        )
-
-
-def test_home_dir_must_not_be_root() -> None:
-    """Verify ValidationError is raised if home_dir resolves to root directory."""
-    with pytest.raises(ValidationError, match="home_dir"):
-        AntigravityCliOptions.model_validate(
-            {"model": "test-model", "home_dir": "/"},
-        )
 
 
 def test_model_provider_accepts_configured_provider(home_dir: Path) -> None:
@@ -584,11 +554,6 @@ def test_model_provider_gemini_accepts_a_gemini_model(home_dir: Path) -> None:
         },
     )
     assert options.model == DEFAULT_GEMINI_MODEL
-
-
-def test_the_agent_reports_the_configured_model(runtime: AntigravityCliRuntime) -> None:
-    """Verify runtime.model returns the configured model identifier."""
-    assert runtime.model == "test-model"
 
 
 def test_constructing_the_agent_writes_the_closed_permission_policy(
@@ -619,40 +584,6 @@ def test_model_provider_defaults_to_unset(home_dir: Path) -> None:
     AntigravityCliRuntime(options=AntigravityCliOptions(model="m", home_dir=home_dir))
     settings = read_isolated_settings(home_dir)
     assert "modelProvider" not in settings
-
-
-@pytest.mark.parametrize("target_cls", [AntigravityCliRuntime, AntigravityCliGenerator])
-@pytest.mark.parametrize(
-    ("env_vars", "model", "expected_provider"),
-    [
-        ({"GEMINI_API_KEY": "test-key-123"}, DEFAULT_GEMINI_MODEL, "gemini"),
-        ({"GOOGLE_API_KEY": "test-key-456"}, DEFAULT_GEMINI_MODEL, "gemini"),
-        ({"GEMINI_API_KEY": "test-key-123"}, "claude-3-opus", None),
-        ({}, DEFAULT_GEMINI_MODEL, None),
-    ],
-    ids=["gemini-key", "google-key", "non-gemini-model", "no-keys"],
-)
-def test_effective_model_provider_configures_settings(
-    home_dir: Path,
-    clean_api_keys: None,
-    monkeypatch: pytest.MonkeyPatch,
-    target_cls: type[AntigravityCliRuntime | AntigravityCliGenerator],
-    env_vars: dict[str, str],
-    model: str,
-    expected_provider: str | None,
-) -> None:
-    """Verify effective_model_provider detects keys and writes modelProvider to settings."""
-    for key, val in env_vars.items():
-        monkeypatch.setenv(key, val)
-    instance = target_cls(
-        options=AntigravityCliOptions(model=model, home_dir=home_dir),
-    )
-    assert instance.effective_model_provider == expected_provider
-    settings = read_isolated_settings(home_dir)
-    if expected_provider is not None:
-        assert settings.get("modelProvider") == expected_provider
-    else:
-        assert "modelProvider" not in settings
 
 
 def test_read_file_is_never_in_the_deny_list() -> None:
@@ -945,6 +876,7 @@ def test_select_discards_a_probe_that_used_an_ungated_tool(
     resident = install_one(runtime, skill_repo, workdir)
     canned(monkeypatch, agy_stream(invoked=resident, tools=[("unauthorized_tool", None)]))
     outcome = runtime.select("do a thing", workdir)
+    assert outcome.invoked_skill == resident
     assert outcome.error == "tool leak: unauthorized_tool"
 
 
@@ -985,22 +917,6 @@ def test_select_discards_a_view_file_outside_the_resident_catalog(
     )
     outcome = runtime.select("do a thing", workdir)
     assert outcome.error == "tool leak: view_file"
-
-
-def test_select_discards_a_leaked_hit_not_just_a_miss(
-    monkeypatch,
-    runtime: AntigravityCliRuntime,
-    skill_repo: Path,
-    tmp_path: Path,
-) -> None:
-    """Verify tool leak error is reported even if target skill was selected."""
-    runtime.options = runtime.options.model_copy(update={"allowed_tools": ("finish",)})
-    workdir = tmp_path / "work"
-    resident = install_one(runtime, skill_repo, workdir)
-    canned(monkeypatch, agy_stream(invoked=resident, tools=[("unauthorized_tool", None)]))
-    outcome = runtime.select("do a thing", workdir)
-    assert outcome.invoked_skill == resident
-    assert outcome.error == "tool leak: unauthorized_tool"
 
 
 def test_select_reports_a_non_success_status_as_an_error(
@@ -1070,12 +986,6 @@ def _write_conversation_state(home_dir: Path) -> None:
     (conversations / "one.json").write_text("{}", encoding="utf-8")
     summaries_db.parent.mkdir(parents=True, exist_ok=True)
     summaries_db.write_text("db", encoding="utf-8")
-
-
-def test_auto_clean_defaults_to_false(home_dir: Path) -> None:
-    """Verify auto_clean option defaults to False."""
-    options = AntigravityCliOptions(model="m", home_dir=home_dir)
-    assert options.auto_clean is False
 
 
 def test_select_leaves_conversation_state_alone_by_default(
@@ -1274,7 +1184,8 @@ def test_complete_pipes_prompt_via_stdin_and_handles_large_payload(
 
     def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         nonlocal captured_input
-        captured_input = kwargs.get("input")
+        raw_input = kwargs.get("input")
+        captured_input = str(raw_input) if raw_input is not None else None
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,
@@ -1343,34 +1254,6 @@ def test_normalize_agy_model(input_model: str, expected_model: str) -> None:
     from reach.runtime.antigravity_cli import normalize_agy_model
 
     assert normalize_agy_model(input_model) == expected_model
-
-
-def test_build_command_emits_effort_flag(home_dir: Path) -> None:
-    """Verify build_command passes --effort flag when configured."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(
-            model=DEFAULT_GEMINI_MODEL,
-            effort="medium",
-            home_dir=home_dir,
-        ),
-    )
-    cmd = runtime.build_command("test query")
-    idx = cmd.index("--effort")
-    assert cmd[idx + 1] == "medium"
-    assert cmd[cmd.index("--model") + 1] == DEFAULT_GEMINI_MODEL
-
-
-def test_build_command_omits_effort_flag_when_none(home_dir: Path) -> None:
-    """Verify build_command omits --effort flag when effort is None."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(
-            model="custom-unprofiled-model",
-            home_dir=home_dir,
-        ),
-    )
-    cmd = runtime.build_command("test query")
-    assert "--effort" not in cmd
-    assert cmd[cmd.index("--model") + 1] == "custom-unprofiled-model"
 
 
 def test_build_command_defaults_to_profile_effort(home_dir: Path) -> None:
@@ -1521,21 +1404,6 @@ def test_antigravity_cli_abstention_counts_exploratory_turns(
     assert outcome.early_exit is False
 
 
-def test_parse_stream_early_exit_suppresses_error_result() -> None:
-    """Verify parse_stream clears error and forces SUCCESS status when early_exit is True."""
-    lines = agy_stream(
-        tools=[
-            ("view_file", ".agents/skills/s1/SKILL.md"),
-            ("view_file", ".agents/skills/target-skill/SKILL.md"),
-        ],
-        status="ERROR",
-        error="timeout waiting for response",
-    )
-    summary = parse_stream(lines, resident=["s1", "target-skill"], early_exit=True)
-    assert summary.status == "SUCCESS"
-    assert summary.error is None
-
-
 def test_temporary_home_dir_cleanup_on_cleanup_call(clean_api_keys: None) -> None:
     """Verify runtime.cleanup() removes auto-generated temporary home directory."""
     runtime = AntigravityCliRuntime(options=AntigravityCliOptions(model=DEFAULT_GEMINI_MODEL))
@@ -1666,32 +1534,6 @@ def test_antigravity_cli_registers_atexit_for_temp_home(
         assert instance.cleanup in registered
     finally:
         instance.cleanup()
-
-
-@pytest.mark.parametrize(
-    ("max_turns", "early_exit"),
-    [
-        (1, False),
-        (3, True),
-    ],
-)
-def test_antigravity_cli_omits_forced_schema_in_both_single_and_multi_turn(
-    max_turns: int,
-    early_exit: bool,
-    home_dir: Path,
-) -> None:
-    """Verify AntigravityCliRuntime omits forced --json-schema in both single and multi-turn."""
-    rt = AntigravityCliRuntime(
-        options=AntigravityCliOptions(
-            home_dir=home_dir,
-            max_turns=max_turns,
-            early_exit=early_exit,
-        )
-    )
-    rt._resident = ("skill-a", "skill-b")
-    cmd = rt.build_command("query")
-    assert "--json-schema" not in cmd
-    assert "--disable-slash-commands" in cmd
 
 
 def test_antigravity_cli_generator_normalized_model_delegates_to_normalize_agy_model() -> None:

@@ -36,15 +36,24 @@ __all__ = [
 ]
 
 
-def _format_path(path: Path) -> str:
+def _format_path(
+    path: Path,
+    *,
+    resolved_path: Path | None = None,
+    resolved_cwd: Path | None = None,
+    resolved_home: Path | None = None,
+) -> str:
     """Format filesystem path relative to working directory or user home."""
+    target = resolved_path or path.resolve()
+    cwd = resolved_cwd or Path.cwd().resolve()
     try:
-        rel_cwd = path.resolve().relative_to(Path.cwd().resolve())
+        rel_cwd = target.relative_to(cwd)
         return f"./{rel_cwd}"
     except ValueError:
         pass
+    home = resolved_home or Path.home().resolve()
     try:
-        rel_home = path.resolve().relative_to(Path.home().resolve())
+        rel_home = target.relative_to(home)
         return f"~/{rel_home}"
     except ValueError:
         return str(path)
@@ -67,8 +76,15 @@ def catalog_summary(
         label = "skill" if total == 1 else "skills"
         return f"{total} {label}", []
 
+    resolved_cwd = Path.cwd().resolve()
+    resolved_home = Path.home().resolve()
+
     if len(resolved_roots) == 1:
-        fmt = _format_path(resolved_roots[0])
+        fmt = _format_path(
+            resolved_roots[0],
+            resolved_cwd=resolved_cwd,
+            resolved_home=resolved_home,
+        )
         label = "skill" if total == 1 else "skills"
         return f"{total} {label} in {fmt}", []
 
@@ -77,12 +93,19 @@ def catalog_summary(
         label = "skill" if total == 1 else "skills"
         loc_label = "location" if len(resolved_roots) == 1 else "locations"
         headline = f"{total} {label} resolved from {len(resolved_roots)} {loc_label}:"
+        resolved_skill_parents = [set(p.resolve().parents) for p in skill_paths]
         for root in resolved_roots:
             resolved_root = root.resolve()
-            matching = [p for p in skill_paths if resolved_root in p.resolve().parents]
-            count = len(matching) if skill_paths else max(1, total // len(resolved_roots))
+            matching = sum(1 for parents in resolved_skill_parents if resolved_root in parents)
+            count = matching if skill_paths else max(1, total // len(resolved_roots))
             count_label = "skill" if count == 1 else "skills"
-            bullets.append(f"{_format_path(root)} ({count} {count_label})")
+            fmt_root = _format_path(
+                root,
+                resolved_path=resolved_root,
+                resolved_cwd=resolved_cwd,
+                resolved_home=resolved_home,
+            )
+            bullets.append(f"{fmt_root} ({count} {count_label})")
         return headline, bullets
 
     label = "skill" if total == 1 else "skills"

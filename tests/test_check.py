@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 from unittest.mock import patch
 
 import pytest
@@ -31,7 +31,7 @@ from reach.check import (
     changed_skills,
     run_check,
 )
-from reach.config import CheckSettings, RunConfig
+from reach.config import CheckSettings
 from reach.models import Query
 from reach.runtime import SelectionOutcome
 
@@ -529,15 +529,6 @@ def test_run_check_with_trajectory_thresholds_pass_and_fail(
     assert fail_outcome.exit_code == 2
 
 
-def test_run_config_resolve_check_settings() -> None:
-    """Verify RunConfig.resolve overrides baseline config cleanly with Pydantic."""
-    base = CheckSettings(min_recall=0.75, min_accuracy=0.80, budget=10)
-    resolved = RunConfig.resolve(CheckSettings, explicit_settings=base, min_recall=0.90, budget=25)
-    assert resolved.min_recall == 0.90
-    assert resolved.min_accuracy == 0.80
-    assert resolved.budget == 25
-
-
 def test_load_catalog_skills_deduplicates_overlapping_paths(
     write_skill: Callable[..., Path],
 ) -> None:
@@ -567,7 +558,6 @@ def test_load_catalog_skills_deduplicates_overlapping_paths(
     "target_is_file", [False, True], ids=["directory-path", "skill-md-file-path"]
 )
 def test_check_empirical_probes_cache_and_invalidation(
-    tmp_path: Path,
     write_skill: Callable[..., Path],
     target_is_file: bool,
 ) -> None:
@@ -601,6 +591,7 @@ def test_check_empirical_probes_cache_and_invalidation(
     select_calls = 0
 
     class CountingKeywordRuntime(KeywordRuntime):
+        @override
         def select(
             self, query_text: str, workdir: Path, target_skill: str | None = None
         ) -> SelectionOutcome:

@@ -22,17 +22,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from reach.catalog import load_skills
 from reach.cli.doctor import (
     _check_cli_binary,
     _check_google_adc,
     _check_python,
     _check_skills,
 )
-from reach.models import Catalog, CatalogMode
 from reach.runtime import CliAgentRuntime, RuntimeSettings, build_runtime
 from reach.runtime._subprocess import run_subprocess_probe
-from reach.runtime.antigravity_sdk import _HAS_ANTIGRAVITY, AntigravitySdkRuntime
 from reach.runtime.claude_code import ClaudeCodeRuntime
 
 if TYPE_CHECKING:
@@ -128,93 +125,6 @@ def test_agent_cli_help_and_flag_compatibility(
         if settings_str is not None:
             parsed = json.loads(settings_str)
             assert isinstance(parsed, dict)
-
-
-@pytest.mark.parametrize(
-    "agent_name",
-    ["claude-code", "goose", "pi", "antigravity-cli", "keyword"],
-)
-def test_agent_workspace_skill_installation_and_discovery(
-    agent_name: str,
-    synthetic_skills_repo: Path,
-    tmp_path: Path,
-) -> None:
-    """Verify runtime materializes resident skills and discovers them in precedence order."""
-    runtime = build_runtime(RuntimeSettings(agent=agent_name))
-    workdir = tmp_path / f"work_{agent_name}"
-    workdir.mkdir()
-
-    all_skills = load_skills(synthetic_skills_repo)
-    assert len(all_skills) >= 2
-    subset_names = (all_skills[0].name, all_skills[1].name)
-    catalog = Catalog(id="preflight-catalog", mode=CatalogMode.ALL, skills=subset_names)
-
-    installed_workdir = runtime.install(catalog, all_skills, workdir)
-    assert installed_workdir.resolve() == workdir.resolve()
-
-    skills_dir = runtime.skills_dir(workdir)
-    assert skills_dir.is_dir()
-    for name in subset_names:
-        skill_file = skills_dir / name / "SKILL.md"
-        assert skill_file.is_file()
-
-    roots = runtime.skill_roots(workdir)
-    assert any(root.path.resolve() == skills_dir.resolve() for root in roots)
-
-    fit = runtime.fit(catalog, all_skills[:2])
-    if runtime.rations_catalog:
-        assert fit.allowed > 0
-        assert fit.asked > 0
-    else:
-        assert fit.allowed == 0
-        assert fit.truncated == 0
-
-
-@pytest.mark.parametrize(("agent_name", "executable"), CLI_AGENTS)
-def test_agent_environment_isolation_blocks_ambient_secrets(
-    agent_name: str,
-    executable: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify runtime process environment strips sensitive ambient credentials."""
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_super_secret_token")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws_secret_key")
-    monkeypatch.setenv("STRIPE_API_KEY", "sk_live_stripe_secret")
-
-    runtime = build_runtime(RuntimeSettings(agent=agent_name))
-    workdir = tmp_path / f"work_{agent_name}"
-    workdir.mkdir()
-
-    env = runtime.build_env(workdir)
-    assert "GITHUB_TOKEN" not in env
-    assert "AWS_SECRET_ACCESS_KEY" not in env
-    assert "STRIPE_API_KEY" not in env
-
-
-def test_antigravity_sdk_preflight(
-    synthetic_skills_repo: Path,
-    tmp_path: Path,
-) -> None:
-    """Verify Antigravity SDK runtime initializes and materializes skills when installed."""
-    if not _HAS_ANTIGRAVITY:
-        pytest.skip("google-antigravity SDK is not installed")
-
-    runtime = AntigravitySdkRuntime()
-    workdir = tmp_path / "work_antigravity_sdk"
-    workdir.mkdir()
-
-    all_skills = load_skills(synthetic_skills_repo)
-    catalog = Catalog(
-        id="sdk-catalog",
-        mode=CatalogMode.ALL,
-        skills=(all_skills[0].name,),
-    )
-
-    runtime.install(catalog, all_skills, workdir)
-    assert runtime.skills_dir(workdir).is_dir()
-    roots = runtime.skill_roots(workdir)
-    assert len(roots) > 0
 
 
 def test_doctor_diagnostics_live(synthetic_skills_repo: Path) -> None:

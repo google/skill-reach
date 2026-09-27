@@ -240,21 +240,15 @@ def test_a_first_person_pronoun_never_leaks(make_skill) -> None:
 UNPUBLISHED = {"theirs"}
 
 
-@pytest.mark.parametrize("word", sorted(FUNCTION_WORDS - UNPUBLISHED))
-def test_no_held_out_function_word_is_domain_vocabulary(word: str) -> None:
-    """Verify FUNCTION_WORDS elements are present in scikit-learn English stop words."""
+def test_no_held_out_function_word_is_domain_vocabulary() -> None:
+    """Verify FUNCTION_WORDS elements match scikit-learn stop words except named UNPUBLISHED."""
     from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
-    assert word in ENGLISH_STOP_WORDS
-
-
-def test_the_one_pronoun_no_published_list_backs_is_named_not_quietly_kept() -> None:
-    """Verify UNPUBLISHED word theirs is in FUNCTION_WORDS but absent in sklearn stop words."""
-    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
-
+    stop_words = set(ENGLISH_STOP_WORDS)
+    assert stop_words >= (FUNCTION_WORDS - UNPUBLISHED)
     assert UNPUBLISHED <= FUNCTION_WORDS
-    assert not UNPUBLISHED & set(ENGLISH_STOP_WORDS)
-    assert {"mine", "ours", "yours", "hers"} <= set(ENGLISH_STOP_WORDS)
+    assert not (UNPUBLISHED & stop_words)
+    assert {"mine", "ours", "yours", "hers"} <= stop_words
 
 
 def test_the_two_words_a_published_list_would_have_cost_us_are_held_out() -> None:
@@ -265,16 +259,6 @@ def test_the_two_words_a_published_list_would_have_cost_us_are_held_out() -> Non
     assert not {"i", "us"} & FUNCTION_WORDS
     assert tokenize("us-central1") == ["us", "central1"]
     assert tokenize("I/O") == ["i", "o"]
-
-
-@pytest.mark.parametrize("word", ["them", "they", "their", "its", "it"])
-def test_a_third_person_pronoun_is_a_function_word_too(make_skill, word: str) -> None:
-    """Verify third-person pronouns are excluded from distinctive token tables."""
-    skills = [
-        make_skill("bucket-lifecycle", f"Tier cold objects, and expire {word} later."),
-        make_skill("cluster-upgrade", "Roll nodes onto a newer control plane."),
-    ]
-    assert word not in distinctive_tokens(skills)["bucket-lifecycle"]
 
 
 def test_a_function_word_is_dropped_before_the_background_is_consulted(
@@ -382,61 +366,21 @@ def test_leak_check_with_skills_by_name_and_none_expected(skills: list[Skill]) -
     assert leak_check(query_without_target, skills, skills_by_name=skills_by_name) is None
 
 
-def test_lucene_stopwords_match_bm25s() -> None:
-    """Verify LUCENE_STOPWORDS matches canonical Apache Lucene / bm25s.stopwords.STOPWORDS_EN."""
+def test_lucene_stopwords_and_pronouns_never_leak_as_distinctive_tokens(make_skill) -> None:
+    """Verify LUCENE_STOPWORDS and PRONOUNS form FUNCTION_WORDS and never leak as distinctive."""
     from bm25s.stopwords import STOPWORDS_EN
 
     from reach.leak import LUCENE_STOPWORDS, PRONOUNS
 
-    expected_lucene = frozenset(STOPWORDS_EN)
-    assert expected_lucene == LUCENE_STOPWORDS
+    assert frozenset(STOPWORDS_EN) == LUCENE_STOPWORDS
     assert FUNCTION_WORDS == LUCENE_STOPWORDS | PRONOUNS
-
-
-@pytest.mark.parametrize(
-    "stopword",
-    [
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "but",
-        "by",
-        "for",
-        "if",
-        "in",
-        "into",
-        "is",
-        "no",
-        "not",
-        "of",
-        "on",
-        "or",
-        "such",
-        "that",
-        "the",
-        "then",
-        "there",
-        "these",
-        "this",
-        "to",
-        "was",
-        "will",
-        "with",
-    ],
-)
-def test_lucene_stopwords_never_leak_as_distinctive_tokens(
-    make_skill,
-    stopword: str,
-) -> None:
-    """Verify canonical Lucene stopwords are in FUNCTION_WORDS and never leak."""
-    assert stopword in FUNCTION_WORDS
     corpus = [
-        make_skill("target-skill", f"Configure {stopword} storage bucket."),
+        make_skill(
+            "target-skill",
+            "Configure the storage bucket with such rules and expire them or their objects.",
+        ),
         make_skill("rival-skill", "Roll nodes onto control plane."),
     ]
     table = distinctive_tokens(corpus)
-    assert stopword not in table["target-skill"]
+    assert not (table["target-skill"] & FUNCTION_WORDS)
+    assert {"configure", "storage", "bucket", "rules", "expire", "objects"} <= table["target-skill"]

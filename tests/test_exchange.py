@@ -22,7 +22,6 @@ import json
 
 import pytest
 
-from reach.exchange import BOM as STRIPPED_BOM
 from reach.exchange import Exchange, FieldMap, export_query_set, import_query_set
 from reach.models import QueryKind
 from reach.queries import Origin, QuerySet, query_set_digest
@@ -88,12 +87,6 @@ def test_a_spreadsheet_saving_a_set_does_not_fork_the_evidence(
         catalog_id=exchange_set.catalog_id,
     )
     assert query_set_digest(returned) == query_set_digest(exchange_set)
-
-
-def test_the_mark_the_reader_strips_is_the_one_a_spreadsheet_writes() -> None:
-    """Verify BOM constant matches stripped BOM and UTF-8 encoded bytes."""
-    assert BOM == STRIPPED_BOM
-    assert BOM.encode("utf-8") == b"\xef\xbb\xbf"
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
@@ -327,10 +320,11 @@ def test_a_refusal_lists_the_columns_the_file_does_have() -> None:
 
 
 @pytest.mark.parametrize(
-    ("cell", "reason"),
-    [("", "blank text"), ("   ", "whitespace-only text")],
+    "cell",
+    ["", "   "],
+    ids=["blank-text", "whitespace-only-text"],
 )
-def test_a_row_with_no_query_in_it_is_refused(cell: str, reason: str) -> None:
+def test_a_row_with_no_query_in_it_is_refused(cell: str) -> None:
     """Verify import raises ValueError when query text is blank or whitespace."""
     document = f"text,expected_skill\n{cell},kms\n"
     with pytest.raises(ValueError, match="row 1"):
@@ -360,24 +354,14 @@ SPOILED = (
 )
 
 
-@pytest.mark.parametrize("row", ["row 2", "row 3", "row 4"])
-def test_every_unusable_row_is_named_and_not_just_the_first(row: str) -> None:
-    """Verify multi-row import errors report all failing row numbers."""
-    with pytest.raises(ValueError, match=row):
+def test_import_query_set_reports_all_unusable_rows() -> None:
+    """Verify multi-row import errors report all failing rows, count them, and omit valid rows."""
+    with pytest.raises(ValueError, match="3 unusable rows") as refusal:
         import_query_set(SPOILED, Exchange.CSV, catalog_id="c")
-
-
-def test_a_usable_row_is_not_named_among_the_refusals() -> None:
-    """Verify valid rows are omitted from unusable row error reports."""
-    with pytest.raises(ValueError, match="unusable rows") as refusal:
-        import_query_set(SPOILED, Exchange.CSV, catalog_id="c")
-    assert "row 1" not in str(refusal.value)
-
-
-def test_a_refusal_counts_the_rows_it_is_about() -> None:
-    """Verify import error summary counts total number of unusable rows."""
-    with pytest.raises(ValueError, match="3 unusable rows"):
-        import_query_set(SPOILED, Exchange.CSV, catalog_id="c")
+    msg = str(refusal.value)
+    assert "row 1" not in msg
+    for row in ("row 2", "row 3", "row 4"):
+        assert row in msg
 
 
 @pytest.mark.parametrize(

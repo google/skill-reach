@@ -232,7 +232,7 @@ def test_select_successful_probe(
     rt = PiRuntime()
     rt._resident = ("test-skill",)
 
-    def mock_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def mock_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Emulate pi creating session file in session_dir
         idx = cmd.index("--session-dir")
         s_dir = Path(cmd[idx + 1])
@@ -285,7 +285,7 @@ def test_select_no_session_file_returns_error(
     rt = PiRuntime()
     rt._resident = ("test-skill",)
 
-    def mock_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def mock_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Emulate pi running without creating any session file
         idx = cmd.index("--session-dir")
         s_dir = Path(cmd[idx + 1])
@@ -299,16 +299,6 @@ def test_select_no_session_file_returns_error(
     assert outcome.invoked_skills == ()
     assert outcome.error == "pi produced no session transcript file"
     assert outcome.observed_catalog == ("test-skill",)
-
-
-def test_pi_build_completion_command() -> None:
-    """Verify build_completion_command constructs arguments correctly without CLI prompt."""
-    gen = PiGenerator()
-    cmd = gen.build_completion_command("test prompt")
-    assert cmd[:3] == ["pi", "-p", "--no-session"]
-    assert "test prompt" not in cmd
-    assert "--no-skills" in cmd
-    assert "--no-themes" in cmd
 
 
 def test_pi_build_command_profile_effort_fallback(tmp_path: Path) -> None:
@@ -582,12 +572,15 @@ def test_auto_clean_spares_transcripts_of_other_workers(
 
 def test_pi_generator_command_and_env() -> None:
     """Verify PiGenerator includes provider and api-key args in command and syncs env."""
-    from reach.runtime.pi import PiGenerator, PiOptions
-
+    assert PiGenerator().build_completion_command("x")[:3] == ["pi", "-p", "--no-session"]
+    assert "--model" in PiGenerator(model="gemini-3.8-flash").build_completion_command("x")
     opts = PiOptions(model="gemini-3.8-flash", provider="google", api_key="secret-key")
     gen = PiGenerator(options=opts)
     cmd = gen.build_completion_command("test prompt")
     assert cmd[:3] == ["pi", "-p", "--no-session"]
+    assert "test prompt" not in cmd
+    assert "--no-skills" in cmd
+    assert "--no-themes" in cmd
     assert "--provider" in cmd
     assert cmd[cmd.index("--provider") + 1] == "google"
     assert "--api-key" in cmd

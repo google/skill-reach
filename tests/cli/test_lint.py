@@ -28,13 +28,6 @@ if TYPE_CHECKING:
     import pytest
 
 
-def test_lint_help(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify that reach lint --help outputs command documentation and exits 0."""
-    assert main(["lint", "--help"]) == 0
-    captured = capsys.readouterr()
-    assert "Validate skill manifests" in captured.out or "Validate skill manifests" in captured.err
-
-
 def test_lint_explain_known_rule(capsys: pytest.CaptureFixture[str]) -> None:
     """Verify that --explain outputs rule details and exits 0."""
     assert main(["lint", "--explain", "description-too-short"]) == 0
@@ -180,7 +173,6 @@ def test_lint_ignore_flag(write_skill: Callable[..., Path], tmp_path: Path) -> N
 def test_lint_skill_filter(
     write_skill: Callable[..., Path],
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Verify that --skill filters output to the named skill."""
     write_skill(

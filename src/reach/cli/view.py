@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from cyclopts import Parameter
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.artifact import ARTIFACT_SUFFIX, Artifact
@@ -39,6 +40,8 @@ from reach.views import (
 
 from .app import LOOP, app
 from .flags import SWITCH, SliceFlags, Verbose
+
+_VIEW_PAYLOAD_ADAPTER: TypeAdapter[Artifact | ScalingStudy] = TypeAdapter(Artifact | ScalingStudy)
 
 
 def _handle_browser_view(
@@ -61,6 +64,25 @@ def _handle_browser_view(
     return 0
 
 
+def _serialize_eval_format(recorded: Artifact, format_opt: str) -> str | None:
+    """Serialize an evaluation artifact for non-text formats, or return None for text."""
+    match format_opt:
+        case "html":
+            return render_view(recorded, "html")
+        case "json":
+            return recorded.model_dump_json(indent=2)
+        case "jsonl":
+            return "".join(query.model_dump_json() + "\n" for query in recorded.queries)
+        case "csv":
+            msg = (
+                "CSV format is only supported for sweep artifacts; "
+                "choose 'text', 'html', 'json', or 'jsonl' for evaluation artifacts."
+            )
+            raise ValueError(msg)
+        case _:
+            return None
+
+
 def _handle_file_view(
     console: Console,
     recorded: Artifact,
@@ -72,25 +94,13 @@ def _handle_file_view(
 ) -> int:
     """Render and write artifact output to a file."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    match format_opt:
-        case "html":
-            content = render_view(recorded, "html")
-        case "json":
-            content = recorded.model_dump_json(indent=2)
-        case "jsonl":
-            content = "".join(query.model_dump_json() + "\n" for query in recorded.queries)
-        case "csv":
-            msg = (
-                "CSV format is only supported for sweep artifacts; "
-                "choose 'text', 'html', 'json', or 'jsonl' for evaluation artifacts."
-            )
-            raise ValueError(msg)
-        case _:
-            file_console = build_console(record=True)
-            print_scorecard(file_console, recorded, verbose=verbose)
-            if show_queries:
-                print_query_records(file_console, recorded)
-            content = file_console.export_text()
+    content = _serialize_eval_format(recorded, format_opt)
+    if content is None:
+        file_console = build_console(record=True)
+        print_scorecard(file_console, recorded, verbose=verbose)
+        if show_queries:
+            print_query_records(file_console, recorded)
+        content = file_console.export_text()
     out.write_text(content, encoding="utf-8")
     print_wrote(console, out)
     return 0
@@ -105,24 +115,13 @@ def _handle_stdout_view(
     show_queries: bool,
 ) -> int:
     """Render artifact output directly to stdout."""
-    match format_opt:
-        case "html":
-            print(render_view(recorded, "html"))
-        case "json":
-            print(recorded.model_dump_json(indent=2))
-        case "jsonl":
-            for query in recorded.queries:
-                print(query.model_dump_json())
-        case "csv":
-            msg = (
-                "CSV format is only supported for sweep artifacts; "
-                "choose 'text', 'html', 'json', or 'jsonl' for evaluation artifacts."
-            )
-            raise ValueError(msg)
-        case _:
-            print_scorecard(console, recorded, verbose=verbose)
-            if show_queries:
-                print_query_records(console, recorded)
+    content = _serialize_eval_format(recorded, format_opt)
+    if content is not None:
+        print(content, end="" if format_opt == "jsonl" else "\n")
+        return 0
+    print_scorecard(console, recorded, verbose=verbose)
+    if show_queries:
+        print_query_records(console, recorded)
     return 0
 
 
@@ -241,41 +240,44 @@ def _view(
         msg = f"Cannot read artifact file at {target_artifact}: {err}"
         raise ValueError(msg) from err
 
+    has_sidecar = sidecar_path(target_artifact).exists()
     try:
-        if sidecar_path(target_artifact).exists():
-            recorded = load_arm(
+        if has_sidecar:
+            parsed: Artifact | ScalingStudy = load_arm(
                 target_artifact,
                 queries=eff_slice.queries,
                 filter_skill=eff_slice.filter_skill,
                 filter_id=eff_slice.filter_id,
             ).artifact
         else:
-            recorded = Artifact.model_validate_json(raw_text)
-            if eff_slice.active:
-                recorded = load_arm(
-                    target_artifact,
-                    queries=eff_slice.queries,
-                    filter_skill=eff_slice.filter_skill,
-                    filter_id=eff_slice.filter_id,
-                ).artifact
-    except PydanticValidationError:
-        try:
-            study = ScalingStudy.model_validate_json(raw_text)
-        except (PydanticValidationError, ValueError) as sweep_error:
-            msg = (
-                f"Cannot read artifact at {target_artifact}: file is neither a valid "
-                f"evaluation artifact (written by `reach eval` as <results>{ARTIFACT_SUFFIX}) "
-                f"nor a valid scaling sweep study (written by `reach sweep`)."
-            )
-            raise ValueError(msg) from sweep_error
+            parsed = _VIEW_PAYLOAD_ADAPTER.validate_json(raw_text)
+    except PydanticValidationError as sweep_error:
+        msg = (
+            f"Cannot read artifact at {target_artifact}: file is neither a valid "
+            f"evaluation artifact (written by `reach eval` as <results>{ARTIFACT_SUFFIX}) "
+            f"nor a valid scaling sweep study (written by `reach sweep`)."
+        )
+        raise ValueError(msg) from sweep_error
 
+    if isinstance(parsed, ScalingStudy):
         if eff_slice.active:
             msg = (
                 "Slicing flags (--filter-skill, --filter-id, --queries) "
                 "are not supported for sweep artifacts."
             )
-            raise ValueError(msg) from None
-        return _handle_sweep_view(console, study, out, format, open_browser=open_browser)
+            raise ValueError(msg)
+        return _handle_sweep_view(console, parsed, out, format, open_browser=open_browser)
+
+    recorded = (
+        load_arm(
+            target_artifact,
+            queries=eff_slice.queries,
+            filter_skill=eff_slice.filter_skill,
+            filter_id=eff_slice.filter_id,
+        ).artifact
+        if eff_slice.active and not has_sidecar
+        else parsed
+    )
 
     if open_browser:
         return _handle_browser_view(console, recorded, out)

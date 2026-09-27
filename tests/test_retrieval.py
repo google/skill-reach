@@ -435,3 +435,130 @@ def test_dense_scorer_memoizes_query_text_vectors(monkeypatch: pytest.MonkeyPatc
     scorer.score_query("parse my invoice pdf", cand)
 
     assert len(encode_calls) == 1
+
+
+def test_load_model2vec_model_offline_and_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    orig_load_model2vec: Any,
+) -> None:
+    """Verify _load_model2vec_model handles fake model2vec/hf modules and missing model2vec."""
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "model2vec", None)
+    with pytest.raises(RuntimeError, match="model2vec is required"):
+        orig_load_model2vec("missing-model")
+    orig_load_model2vec.cache_clear()
+
+    fake_m2v: Any = types.ModuleType("model2vec")
+    fake_static: Any = types.SimpleNamespace(from_pretrained=lambda name: {"loaded": name})
+    fake_m2v.StaticModel = fake_static
+    monkeypatch.setitem(sys.modules, "model2vec", fake_m2v)
+
+    # Case 1: huggingface_hub.utils missing (ImportError suppressed)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.utils", None)
+    assert orig_load_model2vec("m1") == {"loaded": "m1"}
+
+    # Case 2: huggingface_hub.utils present with disable_progress_bars
+    orig_load_model2vec.cache_clear()
+    disabled: list[bool] = []
+    fake_hf: Any = types.ModuleType("huggingface_hub")
+    fake_hf_utils: Any = types.ModuleType("huggingface_hub.utils")
+    fake_hf_utils.disable_progress_bars = lambda: disabled.append(True)
+    fake_hf.utils = fake_hf_utils
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.utils", fake_hf_utils)
+    assert orig_load_model2vec("m2") == {"loaded": "m2"}
+    assert disabled == [True]
+
+
+def test_dense_and_hybrid_scorer_directional_and_fallback_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify directional projection, on-demand vector fallback, and empty-input guards."""
+    import reach.retrieval as retrieval_mod
+
+    assert directional_projection([0.0, 0.0], [1.0, 2.0]) == 0.0
+
+    s1 = _make_skill("s1", "First skill")
+    s2 = _make_skill("s2", "Second skill")
+
+    # On-demand vector computation via _load_model2vec_model
+    class _ArrayLike:
+        def __init__(self, vals: list[float]) -> None:
+            self._vals = vals
+
+        def tolist(self) -> list[float]:
+            return list(self._vals)
+
+    class _FakeModel:
+        def encode(self, texts: list[str]) -> list[_ArrayLike]:
+            return [_ArrayLike([1.0, 0.5]) for _ in texts]
+
+    monkeypatch.setattr(retrieval_mod, "_load_model2vec_model", lambda _m: _FakeModel())
+    from_skills_scorer = DenseScorer.from_skills([s1, s2], mode="directional")
+    assert from_skills_scorer.rank(s1, [s1, s2]) == [("s2", 1.0)]
+    assert from_skills_scorer.rank_text("query text", [s1, s2])[0][1] > 0.0
+    assert from_skills_scorer.rank_text("", [s1, s2]) == [("s1", 0.0), ("s2", 0.0)]
+
+    # Successful on-demand embedding when vectors={} is initially empty
+    ondemand_dir = DenseScorer(vectors={}, mode="directional")
+    assert ondemand_dir.rank(s1, [s1, s2]) == [("s2", 1.0)]
+    ondemand_cos = DenseScorer(vectors={}, mode="cosine")
+    assert ondemand_cos.rank(s1, [s1, s2])[0][0] == "s2"
+
+    # On-demand fallback when _load_model2vec_model raises RuntimeError
+    def _fail_load(_m: str) -> Any:
+        msg = "offline"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(retrieval_mod, "_load_model2vec_model", _fail_load)
+    empty_dir_scorer = DenseScorer(vectors={}, mode="directional")
+    assert empty_dir_scorer.rank(s1, [s2]) == [("s2", 0.0)]
+    assert empty_dir_scorer.rank_text("unseen", [s2]) == [("s2", 0.0)]
+    assert empty_dir_scorer.score_query("unseen", s2) == 0.0
+
+    empty_cos_scorer = DenseScorer(vectors={})
+    assert empty_cos_scorer.rank(s1, [s2]) == [("s2", 0.0)]
+    assert empty_cos_scorer.pairwise_similarity([s1, s2]) == []
+
+    hybrid = HybridScorer.from_skills_and_vectors([s1], {"s1": [1.0, 0.0]})
+    assert hybrid.rank_text("q", []) == []
+    assert hybrid.rank(s1, [s1]) == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (123, None),
+        ("---", None),
+        ("near_duplicate", "Near-Duplicate"),
+        ("near", "Near-Duplicate"),
+        ("lat", "Latent Collision"),
+        ("zzz", None),
+    ],
+)
+def test_overlap_quadrant_missing(
+    raw: Any,
+    expected: str | None,
+) -> None:
+    """Verify OverlapQuadrant._missing_ normalizes aliases and rejects unknown inputs."""
+    from reach.retrieval import OverlapQuadrant
+
+    if expected is None:
+        assert OverlapQuadrant._missing_(raw) is None
+    else:
+        assert OverlapQuadrant(raw) == expected
+
+
+def test_scorer_pydantic_field_constraints() -> None:
+    """Verify Bm25Scorer and DenseScorer enforce Pydantic Field and Literal constraints."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Bm25Scorer(documents={}, k1=0.0)
+    with pytest.raises(ValidationError):
+        Bm25Scorer(documents={}, b=1.5)
+    with pytest.raises(ValidationError):
+        DenseScorer.model_validate({"mode": "invalid-mode"})

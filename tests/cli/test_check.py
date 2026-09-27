@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from reach.cli import main
 from reach.models import Query
 
@@ -25,35 +27,25 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    import pytest
-
     from reach.check import CheckOutcome
-
-
-def test_check_help(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach check --help prints command options and exits 0."""
-    assert main(["check", "--help"]) == 0
-    captured = capsys.readouterr()
-    out = captured.out.lower()
-    assert any(term in out for term in ("quality gate", "regression", "check"))
 
 
 def test_check_stage1_clean_exits_0(
     write_skill: Callable[..., Path],
     tmp_path: Path,
 ) -> None:
-    """Verify reach check passes on clean skill manifests when queries omitted."""
+    """Verify reach check passes on clean skill manifests via --skills, positional, and -q."""
     write_skill(
         name="valid-tool",
         description="A completely valid skill description providing sufficient context.",
     )
     assert main(["check", "--skills", str(tmp_path / "valid-tool")]) == 0
+    assert main(["check", "-q", str(tmp_path)]) == 0
 
 
 def test_check_stage1_static_error_exits_1(
     write_skill: Callable[..., Path],
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Verify reach check exits 1 on static lint errors."""
     write_skill(
@@ -204,22 +196,9 @@ def test_check_ignore_rule_flag(
     assert main(["check", "--skills", str(tmp_path), "--ignore", "name-mismatch"]) == 0
 
 
-def test_check_positional_path(
-    write_skill: Callable[..., Path],
-    tmp_path: Path,
-) -> None:
-    """Verify reach check accepts skills directory as positional argument."""
-    write_skill(
-        name="valid-skill",
-        description="A sufficiently detailed description that satisfies standard rules.",
-    )
-    assert main(["check", str(tmp_path)]) == 0
-
-
 def test_check_cli_since_flag_overrides_config(
     write_skill: Callable[..., Path],
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify explicit --since HEAD~1 overrides config since = origin/main."""
     from unittest.mock import patch
@@ -251,7 +230,6 @@ def test_check_cli_since_flag_overrides_config(
 
 def test_check_cli_trajectory_flags_passed_to_run_check(
     write_skill: Callable[..., Path],
-    tmp_path: Path,
 ) -> None:
     """Verify trajectory threshold CLI flags are passed correctly to run_check."""
     from unittest.mock import patch
@@ -305,18 +283,6 @@ def test_check_cli_range_validators_reject_invalid_values(capsys) -> None:
     assert "Must be >= 0.0" in capsys.readouterr().err
 
 
-def test_check_quiet_short_flag(
-    write_skill: Callable[..., Path],
-    tmp_path: Path,
-) -> None:
-    """Verify -q maps to quiet mode and executes cleanly without flag collisions."""
-    write_skill(
-        name="valid-tool",
-        description="A completely valid skill description providing sufficient context.",
-    )
-    assert main(["check", "-q", "--skills", str(tmp_path / "valid-tool")]) == 0
-
-
 def test_render_check_concise_reports_failed_on_strict_warnings(capsys) -> None:
     """Verify render_check_concise prints FAILED when strict mode fails on warnings."""
     from pathlib import Path
@@ -346,15 +312,14 @@ def test_render_check_concise_reports_failed_on_strict_warnings(capsys) -> None:
 def test_check_cli_filter_flags(
     write_skill: Callable[..., Path],
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify reach check passes filter_skill and filter_id to run_check."""
+    """Verify reach check passes exact and glob filter_skill and filter_id to run_check."""
     import reach.cli.check as cli_check
 
     passed_kwargs = {}
 
-    def _mock_run_check(*args, **kwargs) -> CheckOutcome:
+    def _mock_run_check(*_args: object, **kwargs: object) -> CheckOutcome:
         passed_kwargs.update(kwargs)
         from reach.check import CheckOutcome
         from reach.lint import LintReport
@@ -379,54 +344,82 @@ def test_check_cli_filter_flags(
             str(tmp_path / "queries.json"),
             "--filter-skill",
             "tool-a",
-            "--filter-id",
-            "q-1",
-        ]
-    )
-    assert code == 0
-    assert passed_kwargs.get("filter_skill") == ("tool-a",)
-    assert passed_kwargs.get("filter_id") == ("q-1",)
-
-
-def test_check_cli_filter_glob_flags(
-    write_skill: Callable[..., Path],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify that reach check passes glob filter patterns to run_check."""
-    import reach.cli.check as cli_check
-
-    passed_kwargs = {}
-
-    def _mock_run_check(*args, **kwargs) -> CheckOutcome:
-        passed_kwargs.update(kwargs)
-        from reach.check import CheckOutcome
-        from reach.lint import LintReport
-
-        return CheckOutcome(
-            lint_report=LintReport(skills_checked=1),
-            exit_code=0,
-            queries_probed=1,
-            probes_executed=1,
-            budget=50,
-        )
-
-    monkeypatch.setattr(cli_check, "run_check", _mock_run_check)
-
-    skill_path = write_skill(name="tool-a", description="Valid description.")
-    code = main(
-        [
-            "check",
-            "--skills",
-            str(skill_path),
-            "--queries",
-            str(tmp_path / "queries.json"),
             "--filter-skill",
             "tool-*",
+            "--filter-id",
+            "q-1",
             "--filter-id",
             "q-*",
         ]
     )
     assert code == 0
-    assert passed_kwargs.get("filter_skill") == ("tool-*",)
-    assert passed_kwargs.get("filter_id") == ("q-*",)
+    assert passed_kwargs.get("filter_skill") == ("tool-a", "tool-*")
+    assert passed_kwargs.get("filter_id") == ("q-1", "q-*")
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "stage_failed", "has_warn", "observed", "passed", "expected_snippets"),
+    [
+        (
+            0,
+            None,
+            True,
+            0.9,
+            True,
+            ("PASSED with 1 warnings", "Empirical assertions: PASSED"),
+        ),
+        (
+            1,
+            "empirical",
+            False,
+            0.5,
+            False,
+            ("FAILED (min_recall (0.5))",),
+        ),
+    ],
+)
+def test_render_check_output_and_concise_branches(
+    capsys: pytest.CaptureFixture[str],
+    exit_code: int,
+    stage_failed: str | None,
+    has_warn: bool,
+    observed: float,
+    passed: bool,
+    expected_snippets: tuple[str, ...],
+) -> None:
+    """Verify _render_check_output and render_check_concise handle warnings and assertions."""
+    from reach.check import CheckAssertion, CheckOutcome, CheckStage
+    from reach.cli.check import _render_check_output
+    from reach.lint import LintIssue, LintReport, Severity
+    from reach.views import build_console
+
+    console = build_console()
+    issues = (
+        (LintIssue(skill="s1", rule="r1", severity=Severity.WARN, message="warn msg"),)
+        if has_warn
+        else ()
+    )
+    outcome = CheckOutcome(
+        exit_code=exit_code,
+        stage_failed=CheckStage(stage_failed) if stage_failed else None,
+        lint_report=LintReport(issues=issues, skills_checked=1),
+        assertions=(
+            CheckAssertion(
+                name="min_recall",
+                comparison=">=",
+                message="check",
+                threshold=0.8,
+                observed=observed,
+                passed=passed,
+            ),
+        ),
+    )
+    _render_check_output(console, outcome, "concise", step_summary=False)
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    for snippet in expected_snippets:
+        assert snippet in combined
+
+    if not passed:
+        _render_check_output(console, outcome, "json", step_summary=False)
+        assert '"stage_failed": "empirical"' in capsys.readouterr().out

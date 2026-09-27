@@ -126,7 +126,6 @@ def test_batched_ranks_match_the_one_at_a_time_computation(
 
 def test_a_rank_carries_the_field_it_was_taken_in(
     skills: list[Skill],
-    make_skill,
 ) -> None:
     """Verify LexicalRank includes total field size and formatting."""
     narrow = lexical_rank("Tier my cold objects.", "bucket-lifecycle", skills[:2])

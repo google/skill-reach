@@ -23,9 +23,9 @@ import math
 import random
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
-from _pytest.capture import CaptureFixture
 
 from reach.catalog import load_skills
 from reach.cli import main
@@ -47,9 +47,15 @@ from reach.views import (
     render_overlap,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from _pytest.capture import CaptureFixture
+    from conftest import SyntheticCorpusBuilder
+
 
 @pytest.fixture
-def rivals(corpus_builder) -> list[Skill]:
+def rivals(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide a corpus with one isolated skill and one pair that competes."""
     return (
         corpus_builder()
@@ -63,42 +69,6 @@ def rivals(corpus_builder) -> list[Skill]:
 def ordering(skills: list[Skill]) -> list[str]:
     """Return the corpus listing's skill names, in the order it puts them."""
     return [c.skill for c in rank_corpus(skills).competitions]
-
-
-@pytest.mark.parametrize(
-    ("rival_score", "outranked"),
-    [
-        (2.0, 1),
-        (1.0, 0),
-        (0.5, 0),
-    ],
-)
-def test_outranked_by_counts_only_rivals_that_score_strictly_higher(
-    rival_score: float,
-    outranked: int,
-) -> None:
-    """Verify outranked_by increments only when rival score strictly exceeds self score."""
-    contest = Competition(
-        skill="target",
-        self_score=1.0,
-        rivals=(Rival(name="rival", score=rival_score),),
-    )
-    assert contest.outranked_by == outranked
-
-
-def test_the_nearest_rival_is_the_strongest_one_and_ties_break_on_name() -> None:
-    """Verify nearest_rival returns highest scoring rival and breaks ties by name."""
-    contest = Competition(
-        skill="target",
-        self_score=1.0,
-        rivals=(
-            Rival(name="zulu", score=0.9),
-            Rival(name="alpha", score=0.9),
-            Rival(name="mike", score=0.1),
-        ),
-    )
-    assert contest.nearest_rival is not None
-    assert contest.nearest_rival.name == "alpha"
 
 
 def test_the_target_holds_its_own_rank_position_in_its_field() -> None:
@@ -184,12 +154,6 @@ def test_a_description_with_no_scoreable_term_still_takes_a_place(
     assert contest.nearest_rival.score == 0.0
 
 
-def test_an_empty_description_is_refused_at_the_boundary() -> None:
-    """Verify Skill raises ValueError when instantiated with whitespace-only description."""
-    with pytest.raises(ValueError, match="description must be non-empty"):
-        Skill(name="blank", description="   ", path=Path("blank"))
-
-
 def test_the_ratio_orders_a_corpus_the_count_says_nothing_about(rivals) -> None:
     """Verify rival_ratio sorts competing skills when outranked_by count is identical."""
     overlap = rank_corpus(rivals)
@@ -223,7 +187,7 @@ def test_a_target_that_scores_nothing_on_its_own_words_sorts_by_who_beat_it(
 
 
 @pytest.fixture
-def beaten(corpus_builder) -> list[Skill]:
+def beaten(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide a corpus where a rival skill outranks the target skill."""
     return (
         corpus_builder()
@@ -286,7 +250,7 @@ def test_the_whole_ordering_is_determined_by_the_corpus_alone(
 ) -> None:
     """Verify rank_corpus competition ordering is invariant under input skill shuffling."""
     corpus = [*rivals, *corpus_builder().add("zzz-beaten", "rules").build_skills()]
-    shuffled = random.Random(seed).sample(corpus, len(corpus))
+    shuffled = random.Random(seed).sample(corpus, len(corpus))  # noqa: S311
 
     assert ordering(shuffled) == ordering(corpus)
     assert ordering(corpus) == ordering(corpus)
@@ -312,10 +276,10 @@ def test_asking_the_runtime_where_skills_live_is_not_a_probe(
 
 
 @pytest.fixture
-def listed(make_console, rendered, rivals):
+def listed(make_console, rendered: Callable[..., str], rivals) -> Callable[..., str]:
     """Render one of the two listings into a buffer at a fixed width."""
 
-    def _listed(skill: str | None = None, **kwargs) -> str:
+    def _listed(skill: str | None = None, **kwargs: object) -> str:
         """Print the corpus listing, or one skill's field, and return the text."""
         console, buffer = make_console(**kwargs)
         overlap = rank_corpus(rivals)
@@ -329,7 +293,7 @@ def listed(make_console, rendered, rivals):
 
 
 @pytest.fixture
-def name_family(corpus_builder) -> list[Skill]:
+def name_family(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide skills whose names agree on everything but their tails."""
     return (
         corpus_builder()
@@ -446,8 +410,11 @@ def test_a_one_skill_corpus_is_not_reported_as_plural(
     assert "1 skill, ranked" in rendered(buffer)
 
 
-def test_the_corpus_listing_carries_a_row_per_skill_and_names_its_rival(listed) -> None:
-    """Verify corpus overview table renders rows for each skill with nearest rivals."""
+def test_the_corpus_listing_carries_a_row_per_skill_and_names_its_rival(
+    listed,
+    rivals,
+) -> None:
+    """Verify corpus overview table renders sorted rows, ratios, and nearest rivals."""
     shown = listed()
     header = next(line for line in shown.splitlines() if "overlap" in line)
 
@@ -457,29 +424,15 @@ def test_the_corpus_listing_carries_a_row_per_skill_and_names_its_rival(listed) 
     row = next(line for line in shown.splitlines() if line.strip().startswith("beta-pair"))
     assert "zeta-pair" in row
 
-
-def test_the_corpus_listing_shows_the_ratio_and_no_raw_score(listed, rivals) -> None:
-    """Verify overview table displays formatted overlap ratio values."""
     expected = [f"{c.rival_ratio:.2f}" for c in rank_corpus(rivals).competitions]
+    assert re.findall(r"\d+\.\d+", shown) == expected
 
-    assert re.findall(r"\d+\.\d+", listed()) == expected
+    solo_row = next(line for line in shown.splitlines() if line.strip().startswith("alpha-solo"))
+    assert "0.00" in solo_row
+    assert "beta-pair" not in solo_row
+    assert "zeta-pair" not in solo_row
 
-
-def test_the_corpus_listing_names_no_rival_for_a_skill_nothing_competes_with(
-    listed,
-) -> None:
-    """Verify non-competing skills omit rival names in overview table."""
-    row = next(line for line in listed().splitlines() if line.strip().startswith("alpha-solo"))
-
-    assert "0.00" in row
-    assert "beta-pair" not in row
-    assert "zeta-pair" not in row
-
-
-def test_the_corpus_ordering_matches_the_column_it_displays(listed, rivals) -> None:
-    """Verify overview table rows sort in descending order by displayed ratio."""
-    ratios = [float(value) for value in re.findall(r"\d+\.\d+", listed())]
-
+    ratios = [float(value) for value in re.findall(r"\d+\.\d+", shown)]
     assert ratios == sorted(ratios, reverse=True)
     assert len(set(ratios)) > 1, "a constant column orders nothing"
     assert ratios == [
@@ -488,7 +441,7 @@ def test_the_corpus_ordering_matches_the_column_it_displays(listed, rivals) -> N
 
 
 def test_the_skill_listing_seats_the_target_in_its_own_rank_position(listed) -> None:
-    """Verify detailed skill view renders target row in its computed rank position."""
+    """Verify detailed skill view renders target row in its computed rank position and count."""
     shown = listed("beta-pair")
     rows = [line for line in shown.splitlines() if "pair" in line or "solo" in line]
     target = next(line for line in rows if line.lstrip().startswith("1"))
@@ -497,11 +450,7 @@ def test_the_skill_listing_seats_the_target_in_its_own_rank_position(listed) -> 
     assert "this skill" in target
     assert "zeta-pair" in shown
     assert "alpha-solo" in shown
-
-
-def test_the_skill_listing_states_the_count_it_is_showing_the_field_for(listed) -> None:
-    """Verify detailed view text displays outranked count summary."""
-    assert "outranked by 0 of 2 rivals" in listed("beta-pair")
+    assert "outranked by 0 of 2 rivals" in shown
 
 
 @pytest.mark.parametrize("skill", [None, "beta-pair"])
@@ -509,18 +458,13 @@ def test_every_listing_says_overlap_does_not_predict_a_misroute(
     skill: str | None,
     listed,
 ) -> None:
-    """Verify overlap report includes disclaimer noting overlap does not predict misroutes."""
+    """Verify overlap report includes disclaimer and notes no probes were executed."""
     shown = listed(skill)
 
     assert "does not predict" in shown
     assert "misroute" in shown
     assert "reach eval" in shown
-
-
-@pytest.mark.parametrize("skill", [None, "beta-pair"])
-def test_a_listing_says_outright_that_it_probed_nothing(skill: str | None, listed) -> None:
-    """Verify overlap report explicitly states no probes were executed."""
-    assert "no probe was issued" in listed(skill)
+    assert "no probe was issued" in shown
 
 
 @pytest.mark.parametrize("width", [60, 100])
@@ -537,9 +481,15 @@ def test_a_listing_holds_together_at_the_width_a_terminal_has(
     assert "reach eval" in shown
 
 
-def test_the_verb_ranks_the_corpus_it_was_pointed_at(skill_repo: Path, capsys) -> None:
-    """Verify overlap CLI command runs and prints table from specified --skills directory."""
+def test_the_verb_ranks_the_corpus_it_was_pointed_at(
+    skill_repo: Path,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Verify overlap CLI runs on --skills directory without writing filesystem artifacts."""
+    before = sorted(p for p in tmp_path.rglob("*"))
     assert main(["overlap", "--skills", str(skill_repo)]) == 0
+    assert sorted(p for p in tmp_path.rglob("*")) == before
     shown = capsys.readouterr().err
 
     assert "gcs-lifecycle-rules" in shown
@@ -578,6 +528,7 @@ def test_the_verb_answers_for_every_skill_it_was_asked_about(skill_repo: Path, c
     assert "gke-basics: outranked by" in shown
     assert "gcs-lifecycle-rules: outranked by" in shown
     assert shown.count("this skill") == 2
+    assert shown.count("no probe was issued") == 1
 
 
 def test_the_verb_says_where_it_found_the_corpus_nobody_named(
@@ -596,12 +547,6 @@ def test_the_verb_says_where_it_found_the_corpus_nobody_named(
 
     assert str(skill_repo) in shown
     assert "gcs-lifecycle-rules" in shown
-
-
-def test_the_verb_refuses_a_skill_the_corpus_does_not_carry(skill_repo: Path, capsys) -> None:
-    """Verify overlap CLI exits with code 2 when requested skill is not in corpus."""
-    assert main(["overlap", "--skills", str(skill_repo), "--skill", "absent"]) == 2
-    assert "absent" in capsys.readouterr().err
 
 
 def test_one_unknown_name_among_several_still_refuses(skill_repo: Path, capsys) -> None:
@@ -647,13 +592,6 @@ def test_an_empty_named_corpus_is_refused_by_the_path_that_was_named(
     assert "pass --skills" not in reported
 
 
-def test_the_verb_writes_nothing_at_all(skill_repo: Path, tmp_path: Path) -> None:
-    """Verify overlap command is read-only and creates no filesystem artifacts."""
-    before = sorted(p for p in tmp_path.rglob("*"))
-    assert main(["overlap", "--skills", str(skill_repo)]) == 0
-    assert sorted(p for p in tmp_path.rglob("*")) == before
-
-
 @pytest.fixture
 def ranked(skill_repo: Path) -> CorpusOverlap:
     """Provide a CorpusOverlap instance calculated from sample skill repository."""
@@ -674,32 +612,14 @@ def test_the_corpus_listing_renders_as_json(skill_repo: Path, ranked, capsys) ->
     row = next(r for r in payload["skills"] if r["skill"] == "gcs-lifecycle-rules")
     expected = ranked.find("gcs-lifecycle-rules")
 
-    assert payload["corpus_size"] == 3
+    assert payload["corpus_size"] == len(payload["skills"]) == 3
+    assert payload["caveat"] == list(OVERLAP_CAVEAT)
     assert [r["skill"] for r in payload["skills"]] == [c.skill for c in ranked.competitions]
     assert row["nearest_rival"] == "gcs-retention-policy"
     assert row["rival_ratio"] == pytest.approx(expected.rival_ratio)
     assert row["self_score"] == pytest.approx(expected.self_score)
     assert row["outranked_by"] == 0
     assert all(r["standings"] == [] for r in payload["skills"])
-
-
-def test_the_corpus_size_says_what_the_ratios_are_relative_to(skill_repo: Path, capsys) -> None:
-    """Verify rendered JSON includes total corpus_size integer."""
-    payload = json.loads(
-        emitted(["overlap", "--skills", str(skill_repo), "--format", "json"], capsys),
-    )
-    assert payload["corpus_size"] == len(payload["skills"]) == 3
-
-
-def test_the_rendered_listing_carries_the_caveat_the_terminal_argues(
-    skill_repo: Path,
-    capsys,
-) -> None:
-    """Verify rendered JSON includes full OVERLAP_CAVEAT disclaimer text."""
-    payload = json.loads(
-        emitted(["overlap", "--skills", str(skill_repo), "--format", "json"], capsys),
-    )
-    assert payload["caveat"] == list(OVERLAP_CAVEAT)
 
 
 def test_the_json_listing_of_one_skill_seats_it_among_its_rivals(
@@ -860,56 +780,22 @@ def test_a_rival_that_scored_nothing_is_named_in_no_rendering() -> None:
     assert row["rival_ratio"] == 0.0
 
 
-def test_overlap_cli_with_semantic_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach overlap --semantic renders semantic sim and diagnostic quadrant."""
-    from unittest.mock import patch
-
-    from reach.cli import app
-    from reach.retrieval import DenseScorer
-
-    (tmp_path / "skill-a").mkdir()
-    (tmp_path / "skill-a" / "SKILL.md").write_text(
-        "---\nname: skill-a\ndescription: Manage git repositories.\n---\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "skill-b").mkdir()
-    (tmp_path / "skill-b" / "SKILL.md").write_text(
-        "---\nname: skill-b\ndescription: Handle git branches.\n---\n",
-        encoding="utf-8",
-    )
-
-    mock_vectors = {
-        "skill-a": [1.0, 0.0],
-        "skill-b": [0.99, 0.0],
-    }
-    with patch.object(DenseScorer, "from_skills", return_value=DenseScorer(vectors=mock_vectors)):
-        code = app(["overlap", "--skills", str(tmp_path), "--semantic"])
-        assert code == 0
-        captured = capsys.readouterr()
-        output = captured.out + captured.err
-        assert "semantic sim" in output
-        assert "quadrant" in output
-
-
-def test_overlap_cli_semantic_json_and_csv_formats(
+def test_overlap_cli_semantic_and_positional_path_formats(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Verify reach overlap --semantic enriches both JSON and CSV output formats."""
+    """Verify reach overlap accepts positional path and --semantic across text, JSON, and CSV."""
     from unittest.mock import patch
 
     from reach.cli import app
     from reach.retrieval import DenseScorer
 
-    (tmp_path / "skill-a").mkdir()
-    (tmp_path / "skill-a" / "SKILL.md").write_text(
-        "---\nname: skill-a\ndescription: Manage git repositories.\n---\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "skill-b").mkdir()
-    (tmp_path / "skill-b" / "SKILL.md").write_text(
-        "---\nname: skill-b\ndescription: Handle git branches.\n---\n",
-        encoding="utf-8",
+    _write_skills(
+        tmp_path,
+        [
+            ("skill-a", "Manage git repositories."),
+            ("skill-b", "Handle git branches."),
+        ],
     )
 
     mock_vectors = {
@@ -917,39 +803,27 @@ def test_overlap_cli_semantic_json_and_csv_formats(
         "skill-b": [0.8, 0.6],
     }
     with patch.object(DenseScorer, "from_skills", return_value=DenseScorer(vectors=mock_vectors)):
+        # Test text format with positional path
+        assert app(["overlap", str(tmp_path), "--semantic"]) == 0
+        captured_text = capsys.readouterr()
+        output = captured_text.out + captured_text.err
+        assert "semantic sim" in output
+        assert "quadrant" in output
+
         # Test JSON format
-        code = app(["overlap", "--skills", str(tmp_path), "--semantic", "--format", "json"])
-        assert code == 0
-        captured = capsys.readouterr()
-        payload = json.loads(captured.out)
+        assert app(["overlap", "--skills", str(tmp_path), "--semantic", "--format", "json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
         row = payload["skills"][0]
         assert "semantic_similarity" in row
         assert row["semantic_similarity"] == pytest.approx(0.80, abs=0.01)
         assert row["quadrant"] is not None
 
         # Test CSV format
-        code_csv = app(["overlap", "--skills", str(tmp_path), "--semantic", "--format", "csv"])
-        assert code_csv == 0
-        captured_csv = capsys.readouterr()
-        csv_lines = captured_csv.out.strip().splitlines()
+        assert app(["overlap", "--skills", str(tmp_path), "--semantic", "--format", "csv"]) == 0
+        csv_lines = capsys.readouterr().out.strip().splitlines()
         header = csv_lines[0].split(",")
         assert "semantic_sim" in header
         assert "quadrant" in header
-
-
-def test_overlap_positional_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach overlap accepts skills directory as positional argument."""
-    (tmp_path / "skill-a").mkdir()
-    (tmp_path / "skill-a" / "SKILL.md").write_text(
-        "---\nname: skill-a\ndescription: Manage git repositories.\n---\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "skill-b").mkdir()
-    (tmp_path / "skill-b" / "SKILL.md").write_text(
-        "---\nname: skill-b\ndescription: Handle git branches.\n---\n",
-        encoding="utf-8",
-    )
-    assert main(["overlap", str(tmp_path)]) == 0
 
 
 def test_overlap_explain_with_skill_path_infers_catalog(
@@ -1007,7 +881,7 @@ def test_overlap_multiple_skills_preserves_independent_catalogs(
 
 
 @pytest.fixture
-def prefix_suffix_family(corpus_builder) -> list[Skill]:
+def prefix_suffix_family(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide skills sharing both prefix and suffix where only the middle token differs."""
     return (
         corpus_builder()
@@ -1256,28 +1130,11 @@ def test_unknown_skill_in_overlap_and_explain_suggests_fuzzy_matches(
     assert "agent-platform-tuning" in err_explain
 
 
-def test_multi_skill_overlap_and_suggest_print_caveat_once(
+def test_multi_skill_overlap_suggest_prints_caveat_once(
     skill_repo: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Verify OVERLAP_CAVEAT is printed only once at the end of multi-skill output."""
-    assert (
-        main(
-            [
-                "overlap",
-                "--skills",
-                str(skill_repo),
-                "--skill",
-                "gke-basics",
-                "--skill",
-                "gcs-lifecycle-rules",
-            ]
-        )
-        == 0
-    )
-    err_standings = capsys.readouterr().err
-    assert err_standings.count("no probe was issued") == 1
-
+    """Verify OVERLAP_CAVEAT is printed only once at the end of multi-skill --suggest output."""
     assert (
         main(
             [

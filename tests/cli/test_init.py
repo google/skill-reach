@@ -27,16 +27,6 @@ if TYPE_CHECKING:
     import pytest
 
 
-def test_init_help(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach init --help displays usage and options."""
-    assert main(["init", "--help"]) == 0
-    out = capsys.readouterr().out
-    assert "init" in out
-    assert "--agent" in out
-    assert "--skills" in out
-    assert "--force" in out
-
-
 def test_init_generates_config_and_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

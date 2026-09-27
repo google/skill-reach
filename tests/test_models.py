@@ -30,8 +30,8 @@ from reach.models import (
 from reach.runtime import SelectionOutcome
 
 
-def test_query_attributes() -> None:
-    """Verify Query stores expected_skill and computes properties."""
+def test_query_attributes_and_out_of_scope() -> None:
+    """Verify Query stores expected_skill, computes properties, and handles out-of-scope."""
     q = Query(
         id="q1",
         text="Deploy the app",
@@ -43,12 +43,9 @@ def test_query_attributes() -> None:
     assert q.truth_label == "cloud-run-deploy"
     assert not q.is_out_of_scope
 
-
-def test_query_out_of_scope() -> None:
-    """Verify out-of-scope query returns NO_SKILL."""
-    q = Query(id="q3", text="What is the weather?", kind=QueryKind.OUT_OF_SCOPE)
-    assert q.is_out_of_scope
-    assert q.truth_label == NO_SKILL
+    q_oos = Query(id="q3", text="What is the weather?", kind=QueryKind.OUT_OF_SCOPE)
+    assert q_oos.is_out_of_scope
+    assert q_oos.truth_label == NO_SKILL
 
 
 def test_probe_result_invoked_skill_property() -> None:
@@ -212,6 +209,10 @@ def test_probe_result_turns_taken_validation() -> None:
 
 def test_probe_result_requires_runtime() -> None:
     """Verify ProbeResult requires an explicit runtime parameter."""
+    from pathlib import Path
+
+    from reach.models import Skill
+
     with pytest.raises(ValidationError, match="runtime"):
         ProbeResult.model_validate(
             {
@@ -222,3 +223,5 @@ def test_probe_result_requires_runtime() -> None:
                 "model": "test-model",
             }
         )
+    with pytest.raises(ValidationError, match="description must be non-empty"):
+        Skill(name="s", description="   ", path=Path("SKILL.md"))

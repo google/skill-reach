@@ -23,7 +23,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
 from math import log
-from typing import TYPE_CHECKING, Any, Protocol, override, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, override, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -369,7 +369,7 @@ class DenseScorer(BaseModel):
 
     vectors: dict[str, EmbeddingVector] = Field(default_factory=dict)
     model_name: str = DEFAULT_RETRIEVAL_MODEL
-    mode: str = "cosine"
+    mode: Literal["cosine", "directional"] = "cosine"
 
     _unit_vectors: dict[str, EmbeddingVector] = PrivateAttr(default_factory=dict)
     _text_vectors: dict[str, list[float]] = PrivateAttr(default_factory=dict)
@@ -389,7 +389,7 @@ class DenseScorer(BaseModel):
         cls,
         skills: Sequence[Skill],
         model_name: str | None = None,
-        mode: str = "cosine",
+        mode: Literal["cosine", "directional"] = "cosine",
     ) -> DenseScorer:
         """Embed skill texts and instantiate a DenseScorer."""
         chosen_model = model_name or DEFAULT_RETRIEVAL_MODEL
@@ -429,14 +429,6 @@ class DenseScorer(BaseModel):
         unit_vec = _unit_vector(vec)
         self._unit_vectors[skill.name] = unit_vec
         return unit_vec
-
-    def _score_vector_pair(self, target_vec: EmbeddingVector, cand_vec: EmbeddingVector) -> float:
-        """Calculate pairwise semantic score depending on configured projection mode."""
-        if not cand_vec:
-            return 0.0
-        if self.mode == "directional":
-            return directional_projection(target_vec, cand_vec)
-        return cosine_similarity(target_vec, cand_vec)
 
     def rank(
         self,
@@ -569,7 +561,7 @@ class HybridScorer(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     lexical: Bm25Scorer
-    semantic: Any
+    semantic: DenseScorer | Scorer
     rrf_k: int = Field(default=DEFAULT_RRF_K, gt=0)
 
     @classmethod
@@ -618,9 +610,14 @@ class HybridScorer(BaseModel):
         """Rank candidate skills against query text using Reciprocal Rank Fusion."""
         if not candidates:
             return []
+        sem_ranked = (
+            self.semantic.rank_text(text, candidates)
+            if isinstance(self.semantic, DenseScorer | TextScorer)
+            else []
+        )
         return self._fuse_rankings(
             self.lexical.rank_text(text, candidates),
-            self.semantic.rank_text(text, candidates),
+            sem_ranked,
         )
 
     def rank(

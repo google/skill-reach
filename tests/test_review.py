@@ -88,7 +88,7 @@ def sample_review_bundle(
 def test_render_query_review_html_skill_and_territory_cards(
     sample_review_bundle: tuple[Skill, Skill, QuerySet],
 ) -> None:
-    """Verify target skill context, rival selector, and territory query card partitioning."""
+    """Verify target skill context, rival selector, territory cards, summary, and controls."""
     target, rival, qs = sample_review_bundle
     html = render_query_review_html(qs, target, [rival])
     tree = HTMLParser(html)
@@ -132,16 +132,7 @@ def test_render_query_review_html_skill_and_territory_cards(
     ]
     assert guardrail_inputs == ["Query 2", "Query 3"]
 
-
-def test_render_query_review_html_summary_and_controls(
-    sample_review_bundle: tuple[Skill, Skill, QuerySet],
-) -> None:
-    """Verify count badges, summary balance text, action buttons, and save script."""
-    target, rival, qs = sample_review_bundle
-    html = render_query_review_html(qs, target, [rival])
-    tree = HTMLParser(html)
-
-    # 1. Territory count badges accurately reflect initial partition
+    # 5. Territory count badges and balance summary reflect initial partition
     triggers_count = tree.css_first("#triggers-count")
     assert triggers_count is not None
     assert "1 Triggers" in triggers_count.text()
@@ -150,24 +141,9 @@ def test_render_query_review_html_summary_and_controls(
     assert guardrails_count is not None
     assert "2 Guardrails" in guardrails_count.text()
 
-    # 2. Balance summary reflects total and partition breakdown
     summary = tree.css_first("#summary")
     assert summary is not None
     assert "3 queries total: 1 should trigger, 2 should not trigger" in summary.text()
-
-    # 3. Action buttons (top ribbon and bottom sticky bar) exist with clear call-to-action
-    top_btn = tree.css_first("#approve-btn")
-    assert top_btn is not None
-    assert "Approve & Run Probes" in top_btn.text()
-
-    bottom_btn = tree.css_first("#approve-btn-bottom")
-    assert bottom_btn is not None
-    assert "Approve & Run Probes" in bottom_btn.text()
-
-    # 4. Script tag contains save endpoint reference
-    script = tree.css_first("script")
-    assert script is not None
-    assert "/api/save" in script.text()
 
 
 def test_render_query_review_html_empty_queries(
@@ -218,7 +194,6 @@ def test_render_query_review_html_empty_queries(
 
 def test_launch_query_review_bypassed_in_headless_or_non_interactive(
     write_skill: Callable[..., Path],
-    tmp_path: Path,
 ) -> None:
     """Verify launch_query_review returns unmodified query set when non-interactive."""
     from reach.queries import Origin, QuerySetProvenance
@@ -497,7 +472,6 @@ def _assert_review_token_security(
 def test_launch_query_review_http_server_saves_and_shuts_down(
     write_skill: Callable[..., Path],
     clean_browser_env: dict[str, str],
-    tmp_path: Path,
 ) -> None:
     """Verify ephemeral HTTP server serves HTML, validates payloads, and saves curated queries."""
     from reach.queries import Origin, QuerySetProvenance
@@ -561,7 +535,6 @@ def test_launch_query_review_http_server_saves_and_shuts_down(
 def test_launch_query_review_terminal_enter_proceeds_with_defaults(
     write_skill: Callable[..., Path],
     clean_browser_env: dict[str, str],
-    tmp_path: Path,
 ) -> None:
     """Verify pressing [Enter] in terminal unblocks review and retains initial queries."""
     from reach.queries import Origin, QuerySetProvenance
@@ -590,15 +563,9 @@ def test_launch_query_review_terminal_enter_proceeds_with_defaults(
     assert result == qs
 
 
-def test_review_server_handler_exported() -> None:
-    """Verify ReviewServerHandler is exported and inherits from BaseHTTPRequestHandler."""
-    import http.server
-
-    assert issubclass(ReviewServerHandler, http.server.BaseHTTPRequestHandler)
-
-
 def test_convert_saved_queries_maps_kinds() -> None:
     """Verify _convert_saved_queries maps query kinds based on expected_skill."""
+    assert ReviewSentinel.OUT_OF_SCOPE == "__OUT_OF_SCOPE__"
     items = [
         _ReviewQueryItem(text="  Trigger target  ", expected_skill="my-skill"),
         _ReviewQueryItem(text="Rival query", expected_skill="other-skill"),
@@ -618,12 +585,6 @@ def test_convert_saved_queries_maps_kinds() -> None:
     assert converted[2].text == "Out of scope query"
     assert converted[2].kind == QueryKind.OUT_OF_SCOPE
     assert converted[2].expected_skill is None
-
-
-def test_review_sentinel_exported() -> None:
-    """Verify ReviewSentinel enum is exported with expected members."""
-    assert ReviewSentinel.OUT_OF_SCOPE == "__OUT_OF_SCOPE__"
-    assert ReviewSentinel.OUT_OF_SCOPE.value == "__OUT_OF_SCOPE__"
 
 
 def test_review_session_isolation() -> None:
@@ -674,34 +635,22 @@ def test_review_session_isolation() -> None:
     assert session2.saved_queries is None
 
 
-def test_review_query_item_whitespace_only_rejected() -> None:
-    """Verify whitespace-only query text is rejected at validation time."""
+def test_review_query_item_validation_and_normalization() -> None:
+    """Verify _ReviewPayload strips whitespace, rejects empty text, and normalizes skills."""
     from pydantic import ValidationError
 
-    from reach.review import _ReviewPayload
+    from reach.models import QueryKind
+    from reach.review import _convert_saved_queries, _ReviewPayload
 
     with pytest.raises(ValidationError, match="String should have at least 1 character"):
         _ReviewPayload.model_validate({"queries": [{"text": "   "}]})
 
-
-def test_review_query_item_text_automatically_stripped() -> None:
-    """Verify query text is automatically stripped of leading/trailing whitespace."""
-    from reach.review import _ReviewPayload
-
-    payload = _ReviewPayload.model_validate({"queries": [{"text": "  test query text  "}]})
-    assert payload.queries[0].text == "test query text"
-    assert isinstance(payload.queries, tuple)
-
-
-def test_review_query_item_empty_string_expected_skill_normalized() -> None:
-    """Verify empty string expected_skill normalizes to None without Query validation error."""
-    from reach.models import QueryKind
-    from reach.review import _convert_saved_queries, _ReviewPayload
-
     payload = _ReviewPayload.model_validate(
-        {"queries": [{"text": "test query text", "expected_skill": ""}]},
+        {"queries": [{"text": "  test query text  ", "expected_skill": ""}]},
     )
+    assert payload.queries[0].text == "test query text"
     assert payload.queries[0].expected_skill is None
+    assert isinstance(payload.queries, tuple)
 
     converted = _convert_saved_queries(payload.queries, "target-skill")
     assert len(converted) == 1

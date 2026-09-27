@@ -17,23 +17,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from reach.cli import main
-
-if TYPE_CHECKING:
-    import pytest
-
-
-def test_clean_help(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach clean --help displays usage, flags, and examples."""
-    assert main(["clean", "--help"]) == 0
-    out = capsys.readouterr().out
-    assert "clean" in out
-    assert "--dry-run" in out
-    assert "--project" in out
-    assert "--all" in out
-    assert "queries" in out.lower()
 
 
 def test_clean_empty_cache(
@@ -165,3 +152,32 @@ def test_clean_rejects_malicious_project_path(
     output = captured.out + captured.err
     assert "Error:" in output
     assert "escapes cache directory" in output
+
+
+@pytest.mark.parametrize(
+    ("num_bytes", "expected"),
+    [
+        (512, "512 B"),
+        (2048, "2.0 KB"),
+        (5 * 1024 * 1024, "5.0 MB"),
+        (3 * 1024 * 1024 * 1024, "3.0 GB"),
+    ],
+)
+def test_format_size_tiers(num_bytes: int, expected: str) -> None:
+    """Verify _format_size formats byte counts across B, KB, MB, and GB tiers."""
+    from reach.cli.clean import _format_size
+
+    assert _format_size(num_bytes) == expected
+
+
+def test_clean_quiet_empty_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach clean --quiet exits 0 silently when cache is already empty."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["clean", "--quiet"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

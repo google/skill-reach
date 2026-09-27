@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pytest
 
@@ -27,9 +27,6 @@ from reach.models import Query, QueryKind
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
 from reach.runtime.fake import FakeGenerator
 from reach.sweep import ScalingStudy
-
-if TYPE_CHECKING:
-    pass
 
 
 @pytest.fixture
@@ -164,7 +161,7 @@ def test_sweep_text_output_single_target(sweep_corpus: tuple[Path, Path], capsys
 
 
 def test_sweep_json_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
-    """Verify reach sweep --format json outputs valid ScalingStudy JSON."""
+    """Verify reach sweep --format json outputs ScalingStudy JSON and accepts bootstrap flags."""
     corpus_dir, queries_file = sweep_corpus
     exit_code = main(
         [
@@ -176,6 +173,10 @@ def test_sweep_json_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
             "1,3",
             "--agent",
             "fake",
+            "--bootstrap-iterations",
+            "50",
+            "--seed",
+            "123",
             "--format",
             "json",
         ]
@@ -191,6 +192,7 @@ def test_sweep_json_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
     assert data["points"][-1]["scale"] == 3
     assert data["points"][0]["abstention_rate"] is None
     assert data["points"][0]["prompt_tokens_mean"] is None
+    assert data["points"][0]["negative_probes"] == 0
 
 
 def test_sweep_csv_output(sweep_corpus: tuple[Path, Path], capsys) -> None:
@@ -242,23 +244,33 @@ def test_sweep_missing_queries_fails_descriptively(
     assert "--queries" in err or ".reach/queries.json" in err
 
 
-def test_sweep_discovers_default_queries(
+def test_sweep_discovers_default_queries_and_writes_default_out(
     sweep_corpus: tuple[Path, Path],
+    tmp_path: Path,
     monkeypatch,
     capsys,
 ) -> None:
-    """Verify reach sweep automatically discovers .reach/queries.json when --queries is omitted."""
+    """Verify reach sweep discovers .reach/queries.json and defaults --out to .reach/sweep.json."""
     corpus_dir, queries_file = sweep_corpus
-    workspace = corpus_dir.parent
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
     reach_dir = workspace / ".reach"
-    reach_dir.mkdir(exist_ok=True)
+    reach_dir.mkdir()
     (reach_dir / "queries.json").write_text(queries_file.read_text())
     monkeypatch.chdir(workspace)
+
     exit_code = main(["sweep", str(corpus_dir), "--scales", "1,3", "--agent", "fake"])
     assert exit_code == 0
+    expected_out = reach_dir / "sweep.json"
+    assert expected_out.exists()
+    saved = json.loads(expected_out.read_text(encoding="utf-8"))
+    assert "points" in saved
+
     captured = capsys.readouterr()
     combined = captured.out + captured.err
     assert "Corpus Capacity Scaling:" in combined or "Corpus Scaling" in combined
+    assert "wrote" in combined
+    assert ".reach/sweep.json" in combined
 
 
 def test_sweep_discovers_queries_beside_skills_dir(
@@ -334,109 +346,6 @@ def test_sweep_custom_attempts_executes_expected_probe_count(
     assert len(data["points"]) == 1  # scale 1 (exact requested scale)
     # Target skill has 1 query, with attempts=3, 3 probes should be executed
     assert data["points"][0]["probes_executed"] == 3
-
-
-def test_sweep_bootstrap_flags(
-    sweep_corpus: tuple[Path, Path],
-    capsys,
-) -> None:
-    """Verify --bootstrap-iterations and --seed flag parsing in CLI."""
-    corpus_dir, queries_file = sweep_corpus
-    exit_code = main(
-        [
-            "sweep",
-            str(corpus_dir),
-            "--queries",
-            str(queries_file),
-            "--scales",
-            "1,3",
-            "--agent",
-            "fake",
-            "--bootstrap-iterations",
-            "50",
-            "--seed",
-            "123",
-            "--format",
-            "json",
-        ]
-    )
-    assert exit_code == 0
-    out = capsys.readouterr().out
-    data = json.loads(out)
-    assert data["points"][0]["negative_probes"] == 0
-
-
-def test_sweep_out_flag_writes_file(
-    sweep_corpus: tuple[Path, Path],
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """Verify --out flag writes formatted sweep results to disk and prints notification."""
-    corpus_dir, queries_file = sweep_corpus
-    out_json = tmp_path / "results" / "sweep_out.json"
-
-    exit_code = main(
-        [
-            "sweep",
-            str(corpus_dir),
-            "--queries",
-            str(queries_file),
-            "--scales",
-            "1,3",
-            "--agent",
-            "fake",
-            "--out",
-            str(out_json),
-        ]
-    )
-    assert exit_code == 0
-    assert out_json.exists()
-    saved = json.loads(out_json.read_text(encoding="utf-8"))
-    assert "points" in saved
-    assert len(saved["points"]) == 2
-
-    # Verify console notification
-    captured = capsys.readouterr()
-    combined = captured.out + captured.err
-    assert "wrote" in combined
-    assert str(out_json) in combined
-
-
-def test_sweep_default_out_writes_to_reach_dir(
-    sweep_corpus: tuple[Path, Path],
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    """Verify omitting --out flag defaults to writing sweep.json beside discovered queries."""
-    corpus_dir, queries_file = sweep_corpus
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    reach_dir = workspace / ".reach"
-    reach_dir.mkdir()
-    (reach_dir / "queries.json").write_text(queries_file.read_text())
-    monkeypatch.chdir(workspace)
-
-    exit_code = main(
-        [
-            "sweep",
-            str(corpus_dir),
-            "--scales",
-            "1,3",
-            "--agent",
-            "fake",
-        ]
-    )
-    assert exit_code == 0
-    expected_out = reach_dir / "sweep.json"
-    assert expected_out.exists()
-    saved = json.loads(expected_out.read_text(encoding="utf-8"))
-    assert "points" in saved
-
-    captured = capsys.readouterr()
-    combined = captured.out + captured.err
-    assert "wrote" in combined
-    assert ".reach/sweep.json" in combined
 
 
 def test_sweep_anchor_cli_modes(
@@ -530,47 +439,12 @@ def test_sweep_anchor_cli_modes(
     assert data_all["anchor_skills"] is None
 
 
-def test_sweep_accepts_model_flag(
-    sweep_corpus: tuple[Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify reach sweep accepts --model option and applies it to scaling study."""
-    corpus_dir, queries_file = sweep_corpus
-    captured_settings = None
-    from reach.runtime import build_runtime as orig_build
-
-    def spy_build_runtime(settings):
-        nonlocal captured_settings
-        captured_settings = settings
-        return orig_build(settings)
-
-    monkeypatch.setattr("reach.cli.sweep.build_runtime", spy_build_runtime)
-
-    code = main(
-        [
-            "sweep",
-            str(corpus_dir),
-            "--queries",
-            str(queries_file),
-            "--scales",
-            "2,4",
-            "--agent",
-            "fake",
-            "--model",
-            "custom-sweep-model",
-        ]
-    )
-    assert code == 0
-    assert captured_settings is not None
-    assert captured_settings.options.get("model") == "custom-sweep-model"
-
-
 def test_sweep_cli_flags_override_config_file(
     sweep_corpus: tuple[Path, Path],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify CLI runtime flags override settings defined in reach.toml."""
+    """Verify CLI runtime and registry flags override settings defined in reach.toml."""
     corpus_dir, queries_file = sweep_corpus
     config_file = tmp_path / "reach.toml"
     config_file.write_text(
@@ -578,19 +452,52 @@ def test_sweep_cli_flags_override_config_file(
 [runtime]
 agent = "keyword"
 options = { model = "base-model" }
+
+[registry]
+location = "us-central1"
+publisher = "base-publisher"
 """,
         encoding="utf-8",
     )
 
     captured_settings = None
+    captured_config = None
     from reach.runtime import build_runtime as orig_build
 
-    def spy_build_runtime(settings):
+    def spy_build_runtime(settings) -> Any:
         nonlocal captured_settings
         captured_settings = settings
         return orig_build(settings)
 
+    def fake_sweep(config=None, **_kwargs: object) -> ScalingStudy:
+        nonlocal captured_config
+        captured_config = config
+        from reach.sweep import ScalingPoint, ScalingStudy
+
+        return ScalingStudy(
+            scales=(2,),
+            points=(
+                ScalingPoint(
+                    scale=2,
+                    catalog_id="test",
+                    pass_rate=1.0,
+                    pass_rate_interval=(1.0, 1.0),
+                    delta_vs_baseline=0.0,
+                    delta_context=0.0,
+                    delta_shadowing=0.0,
+                    probes_executed=1,
+                ),
+            ),
+            baseline_pass_rate=1.0,
+            final_pass_rate=1.0,
+            total_delta=0.0,
+            total_context_loss=0.0,
+            total_shadowing_loss=0.0,
+            is_corpus_sweep=True,
+        )
+
     monkeypatch.setattr("reach.cli.sweep.build_runtime", spy_build_runtime)
+    monkeypatch.setattr("reach.cli.sweep.run_scaling_sweep", fake_sweep)
 
     code = main(
         [
@@ -601,17 +508,24 @@ options = { model = "base-model" }
             "--queries",
             str(queries_file),
             "--scales",
-            "2,4",
+            "2",
             "--agent",
             "fake",
             "--model",
             "override-model",
+            "--location",
+            "europe-west1",
+            "--publisher",
+            "cli-publisher",
         ]
     )
     assert code == 0
     assert captured_settings is not None
     assert captured_settings.agent == "fake"
     assert captured_settings.options.get("model") == "override-model"
+    assert captured_config is not None
+    assert captured_config.registry.location == "europe-west1"
+    assert captured_config.registry.publisher == "cli-publisher"
 
 
 def test_sweep_cli_inherits_agent_from_config_file(
@@ -636,7 +550,7 @@ trusted = true
     captured_config = None
     captured_runtime = None
 
-    def fake_sweep(config=None, runtime=None, **kwargs) -> ScalingStudy:
+    def fake_sweep(config=None, runtime=None, **_kwargs: object) -> ScalingStudy:
         nonlocal captured_config, captured_runtime
         captured_config = config
         captured_runtime = runtime
@@ -684,78 +598,6 @@ trusted = true
     assert captured_config.runtime.agent == "keyword"
     assert captured_runtime is not None
     assert captured_runtime.name == "keyword"
-
-
-def test_sweep_cli_registry_flags_override_config_file(
-    sweep_corpus: tuple[Path, Path],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify CLI registry flags override settings defined in reach.toml."""
-    corpus_dir, queries_file = sweep_corpus
-    config_file = tmp_path / "reach.toml"
-    config_file.write_text(
-        """
-[registry]
-location = "us-central1"
-publisher = "base-publisher"
-""",
-        encoding="utf-8",
-    )
-
-    captured_config = None
-
-    def fake_sweep(config=None, **kwargs) -> ScalingStudy:
-        nonlocal captured_config
-        captured_config = config
-        from reach.sweep import ScalingPoint, ScalingStudy
-
-        return ScalingStudy(
-            scales=(2,),
-            points=(
-                ScalingPoint(
-                    scale=2,
-                    catalog_id="test",
-                    pass_rate=1.0,
-                    pass_rate_interval=(1.0, 1.0),
-                    delta_vs_baseline=0.0,
-                    delta_context=0.0,
-                    delta_shadowing=0.0,
-                    probes_executed=1,
-                ),
-            ),
-            baseline_pass_rate=1.0,
-            final_pass_rate=1.0,
-            total_delta=0.0,
-            total_context_loss=0.0,
-            total_shadowing_loss=0.0,
-            is_corpus_sweep=True,
-        )
-
-    monkeypatch.setattr("reach.cli.sweep.run_scaling_sweep", fake_sweep)
-
-    code = main(
-        [
-            "sweep",
-            str(corpus_dir),
-            "--config",
-            str(config_file),
-            "--queries",
-            str(queries_file),
-            "--scales",
-            "2",
-            "--agent",
-            "fake",
-            "--location",
-            "europe-west1",
-            "--publisher",
-            "cli-publisher",
-        ]
-    )
-    assert code == 0
-    assert captured_config is not None
-    assert captured_config.registry.location == "europe-west1"
-    assert captured_config.registry.publisher == "cli-publisher"
 
 
 def test_sweep_with_target_skill_path(
@@ -832,7 +674,7 @@ def test_sweep_passes_loaded_skills_once_and_checkpoints_each_scale(
     checkpoints_seen: list[int] = []
     orig_run_scaling_sweep = cli_sweep_mod.run_scaling_sweep
 
-    def spy_run_scaling_sweep(*args, **kwargs) -> ScalingStudy:
+    def spy_run_scaling_sweep(*args: Any, **kwargs: Any) -> ScalingStudy:
         captured_kwargs.update(kwargs)
         orig_cb = kwargs.get("on_scale_complete")
 
@@ -968,7 +810,6 @@ def test_sweep_warns_when_anchor_has_zero_matching_queries(
 
 def test_sweep_cli_allow_truncation_flag(
     sweep_corpus: tuple[Path, Path],
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify reach sweep accepts --allow-truncation and passes it to run_scaling_sweep."""
@@ -976,7 +817,7 @@ def test_sweep_cli_allow_truncation_flag(
 
     passed_kwargs: dict[str, object] = {}
 
-    def _mock_run_scaling_sweep(*args, **kwargs) -> ScalingStudy:
+    def _mock_run_scaling_sweep(*_args: object, **kwargs: object) -> ScalingStudy:
         passed_kwargs.update(kwargs)
         from reach.sweep import ScalingPoint, ScalingStudy
 
@@ -1348,3 +1189,284 @@ def test_print_sweep_displays_errored_probes_and_warning_banner(
     rendered = buf.getvalue()
     assert expected_cell in rendered
     assert "Warning: 10 of 10 probe(s) failed due to runtime or agent errors" in rendered
+
+
+@pytest.mark.parametrize(
+    ("explicit_out", "configured_out", "queries_rel", "expected_suffix"),
+    [
+        ("custom.json", None, None, "custom.json"),
+        (None, "configured.json", None, "configured.json"),
+        (None, None, ".reach/queries.json", ".reach/sweep.json"),
+        (None, None, "queries.json", ".reach/sweep.json"),
+    ],
+)
+def test_resolve_sweep_out_and_queries_paths(
+    tmp_path: Path,
+    explicit_out: str | None,
+    configured_out: str | None,
+    queries_rel: str | None,
+    expected_suffix: str,
+) -> None:
+    """Verify _resolve_sweep_out_path, _resolve_sweep_queries, and _write_sweep_file."""
+    from reach.cli.sweep import (
+        _resolve_sweep_out_path,
+        _resolve_sweep_queries,
+        _write_sweep_file,
+    )
+    from reach.sweep import ScalingStudy
+
+    out_arg = tmp_path / explicit_out if explicit_out else None
+    cfg_arg = tmp_path / configured_out if configured_out else None
+    q_arg = tmp_path / queries_rel if queries_rel else None
+    resolved = _resolve_sweep_out_path(out_arg, cfg_arg, q_arg)
+    assert str(resolved).endswith(expected_suffix)
+
+    assert _resolve_sweep_queries(
+        None,
+        None,
+        skills_path=None,
+        auto_queries=True,
+        global_scope=True,
+    ) == Path(".reach/queries.json")
+
+    if explicit_out == "custom.json":
+        study = ScalingStudy(
+            target_skill=None,
+            is_corpus_sweep=True,
+            scales=(),
+            points=(),
+            baseline_pass_rate=1.0,
+            final_pass_rate=1.0,
+            total_delta=0.0,
+            total_context_loss=0.0,
+            total_shadowing_loss=0.0,
+            noise_floor=0.05,
+            total_corpus_skills=2,
+        )
+        csv_out = tmp_path / "out.csv"
+        _write_sweep_file(study, format="text", out=csv_out)
+        assert csv_out.is_file()
+
+
+def test_print_anchor_coverage_guards_and_truncation_notice(
+    sweep_corpus: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _print_anchor_coverage guard clauses and CatalogFit truncation preflight notice."""
+    import io
+
+    from rich.console import Console
+
+    from reach.cli.sweep import _prepare_and_confirm_sweep, _print_anchor_coverage
+    from reach.config import RunConfig
+    from reach.models import Catalog, Skill
+    from reach.runtime import CatalogFit
+    from reach.runtime.fake import FakeRuntime
+
+    buf = io.StringIO()
+    console = Console(file=buf, width=120, force_terminal=False)
+    corpus_dir, queries_file = sweep_corpus
+    skills = [Skill(name="skill-00", description="Desc 0", path=corpus_dir / "skill-00")]
+
+    # Guard 1: missing queries file
+    _print_anchor_coverage(
+        console=console,
+        queries_path=tmp_path / "missing.json",
+        anchor=None,
+        configured_anchor=None,
+        skills=skills,
+        scales=(1,),
+        target=None,
+    )
+    # Guard 2: corrupt JSON queries file
+    bad_q = tmp_path / "bad.json"
+    bad_q.write_text("{not-json", encoding="utf-8")
+    _print_anchor_coverage(
+        console=console,
+        queries_path=bad_q,
+        anchor=None,
+        configured_anchor=None,
+        skills=skills,
+        scales=(1,),
+        target=None,
+    )
+    # Guard 3: empty resolved anchors (line 216)
+    monkeypatch.setattr("reach.cli.sweep._resolve_anchor_skills", lambda *_a, **_kw: ())
+    _print_anchor_coverage(
+        console=console,
+        queries_path=queries_file,
+        anchor=None,
+        configured_anchor=None,
+        skills=skills,
+        scales=(1,),
+        target=None,
+    )
+
+    from typing import override
+
+    # Typed FakeRuntime subclass returning a truncated CatalogFit
+    class _RationedFakeRuntime(FakeRuntime):
+        @property
+        @override
+        def rations_catalog(self) -> bool:
+            return True
+
+        @override
+        def fit(self, catalog: Catalog, skills: object) -> CatalogFit:
+            _ = (catalog, skills)
+            return CatalogFit(asked=20000, allowed=15000, truncated=2)
+
+    assert (
+        _prepare_and_confirm_sweep(
+            console=console,
+            driver=_RationedFakeRuntime(),
+            effective_config=RunConfig(),
+            found=skills,
+            resolved_queries=queries_file,
+            anchor=None,
+            scales=(1,),
+            target=None,
+            allow_truncation=True,
+            format="text",
+            yes=True,
+        )
+        == 0
+    )
+    assert "descriptions will be truncated to bare names" in " ".join(buf.getvalue().split())
+
+
+def test_draft_missing_sweep_queries_error_unlinks_checkpoint_and_abort_notice(
+    sweep_corpus: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify _draft_missing_sweep_queries unlinks checkpoint on failure and sweep abort notice."""
+    import io
+
+    from rich.console import Console
+
+    from reach.cli.sweep import _draft_missing_sweep_queries
+    from reach.config import RunConfig
+    from reach.generate import checkpoint_path
+    from reach.models import Skill
+    from reach.sweep import ScalingPoint, ScalingStudy
+
+    console = Console(file=io.StringIO(), width=120, force_terminal=False)
+    corpus_dir, queries_file = sweep_corpus
+    skills = [Skill(name="skill-00", description="Desc 0", path=corpus_dir / "skill-00")]
+
+    q_target = tmp_path / "draft_q.json"
+    ckpt = checkpoint_path(q_target)
+    ckpt.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("reach.cli.sweep._draft_query_set", lambda *_a, **_kw: 2)
+    assert (
+        _draft_missing_sweep_queries(
+            console=console,
+            effective_config=RunConfig(),
+            found=skills,
+            resolved_queries=q_target,
+            missing_targets=("skill-00",),
+            stale_targets=("skill-01",),
+            format="text",
+        )
+        == 2
+    )
+    assert not ckpt.exists()
+
+    ckpt.write_text("{}", encoding="utf-8")
+
+    def _raise_draft(*_a: object, **_kw: object) -> int:
+        msg = "draft failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("reach.cli.sweep._draft_query_set", _raise_draft)
+    assert (
+        _draft_missing_sweep_queries(
+            console=console,
+            effective_config=RunConfig(),
+            found=skills,
+            resolved_queries=q_target,
+            missing_targets=("skill-00",),
+            format="text",
+        )
+        == 2
+    )
+    assert not ckpt.exists()
+
+    # Exercise _on_scale_complete abort message when all probes fail at step 1 of multi-scale sweep
+    def _fake_sweep_abort(**kwargs: object) -> ScalingStudy:
+        cb = kwargs.get("on_scale_complete")
+        point = ScalingPoint(
+            scale=1,
+            catalog_id="sweep:corpus:1",
+            pass_rate=0.0,
+            pass_rate_interval=(0.0, 0.27),
+            recall=0.0,
+            precision=0.0,
+            f1_score=0.0,
+            delta_vs_baseline=0.0,
+            delta_context=0.0,
+            delta_shadowing=0.0,
+            probes_executed=2,
+            probes_errored=2,
+        )
+        study = ScalingStudy(
+            target_skill=None,
+            is_corpus_sweep=True,
+            scales=(1, 2),
+            points=(point,),
+            baseline_pass_rate=0.0,
+            final_pass_rate=0.0,
+            total_delta=0.0,
+            total_context_loss=0.0,
+            total_shadowing_loss=0.0,
+            noise_floor=0.05,
+            total_corpus_skills=2,
+        )
+        if callable(cb):
+            cb(1, 2, point, study)
+        return study
+
+    monkeypatch.setattr("reach.cli.sweep.run_scaling_sweep", _fake_sweep_abort)
+    assert (
+        main(
+            [
+                "sweep",
+                str(corpus_dir),
+                "--queries",
+                str(queries_file),
+                "--scales",
+                "1,2",
+                "--out",
+                str(tmp_path / "abort_sweep.json"),
+                "--agent",
+                "fake",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr()
+    assert "Aborting sweep:" in (out.out + out.err)
+
+    monkeypatch.setattr(
+        "reach.cli.sweep.run_scaling_sweep",
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError("sweep runtime failure")),
+    )
+    assert (
+        main(
+            [
+                "sweep",
+                str(corpus_dir),
+                "--queries",
+                str(queries_file),
+                "--agent",
+                "fake",
+                "--yes",
+            ]
+        )
+        == 3
+    )
+    capsys.readouterr()

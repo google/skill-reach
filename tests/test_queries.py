@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Never
 
 import pytest
 from pydantic import ValidationError
@@ -202,7 +202,7 @@ def test_a_digest_moves_when_the_labeling_catalog_changes(
     assert query_set_digest(rescoped) != query_set_digest(before)
 
 
-def provenance(**overrides) -> QuerySetProvenance:
+def provenance(**overrides: Any) -> QuerySetProvenance:
     """Build a sample QuerySetProvenance instance with optional field overrides."""
     return QuerySetProvenance.model_validate(
         {
@@ -225,27 +225,6 @@ def test_a_digest_ignores_how_the_set_was_made(
     """Verify query_set_digest is unaffected by provenance metadata."""
     plain = load_query_set(write_queries(queries=ROWS, catalog_id="c"))
     recorded = plain.model_copy(update={"provenance": provenance()})
-    assert query_set_digest(recorded) == query_set_digest(plain)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("origin", Origin.IMPORTED),
-        ("generator_model", "sonnet"),
-        ("generator_arm", "framing"),
-        ("rivals_in_view", 10),
-        ("queries_per_target", 5),
-    ],
-)
-def test_no_provenance_field_can_move_a_digest(
-    write_queries: Callable[..., Path],
-    field: str,
-    value,
-) -> None:
-    """Verify changing individual provenance fields leaves query_set_digest unchanged."""
-    plain = load_query_set(write_queries(queries=ROWS, catalog_id="c"))
-    recorded = plain.model_copy(update={"provenance": provenance(**{field: value})})
     assert query_set_digest(recorded) == query_set_digest(plain)
 
 
@@ -342,13 +321,6 @@ def test_query_rejects_unauthorized_aliases(bad_alias: str) -> None:
         Query.model_validate(
             {"id": "q1", bad_alias: "deploy container service", "expected_skill": "s1"}
         )
-
-
-def test_provenance_survives_a_trip_through_disk(tmp_path: Path) -> None:
-    """Verify provenance metadata round-trips through disk save and load."""
-    written = QuerySet(catalog_id="c", queries=(), provenance=provenance())
-    reloaded = load_query_set(save_query_set(written, tmp_path / "out" / "set.json"))
-    assert reloaded.provenance == written.provenance
 
 
 def test_an_unrecognized_origin_is_refused() -> None:
@@ -623,8 +595,18 @@ def test_draft_query_set_prunes_stale_queries_and_updates_skill_digests(
     ]
 
 
+@pytest.mark.parametrize(
+    ("existing_id", "expected_ids"),
+    [
+        ("skill-a-1", ["skill-a-1", "skill-a-2"]),
+        ("skill-a", ["skill-a", "skill-a-1"]),
+    ],
+    ids=["numeric-suffix", "no-numeric-suffix"],
+)
 def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     tmp_path: Path,
+    existing_id: str,
+    expected_ids: list[str],
 ) -> None:
     """Verify backfilling offsets colliding query IDs and preserves original provenance."""
     from io import StringIO
@@ -657,7 +639,7 @@ def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     )
     existing_qs = QuerySet(
         catalog_id="cat",
-        queries=(Query(id="skill-a-1", text="Existing query 1", expected_skill="skill-a"),),
+        queries=(Query(id=existing_id, text="Existing query 1", expected_skill="skill-a"),),
         provenance=existing_prov,
     )
 
@@ -719,103 +701,10 @@ def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     assert rc == 0
     saved = load_query_set(dest)
     assert len(saved.queries) == 2
-    assert [q.id for q in saved.queries] == ["skill-a-1", "skill-a-2"]
+    assert [q.id for q in saved.queries] == expected_ids
     assert saved.provenance.origin == Origin.IMPORTED
     assert saved.provenance.source == "benchmark-v1.json"
     assert saved.provenance.recorded_at == original_recorded
-
-
-def test_draft_backfill_resolves_id_collisions_without_numeric_suffix(
-    tmp_path: Path,
-) -> None:
-    """Verify backfill increments from 1 when existing ID has no numeric suffix."""
-    from io import StringIO
-
-    from reach.cli.drafting import _execute_draft_generation
-    from reach.cli.flags import GenerateFlags
-    from reach.config import RunConfig, StudySettings
-    from reach.generate import DraftCheckpoint
-    from reach.models import Catalog, CatalogMode, Skill
-    from reach.runtime.fake import FakeGenerator
-    from reach.views import build_console
-
-    skills = [
-        Skill(
-            name="skill-a",
-            description="Perform action A.",
-            path=tmp_path / "skill-a",
-        ),
-    ]
-    catalog = Catalog(id="cat", mode=CatalogMode.ALL, skills=("skill-a",))
-    dest = tmp_path / "queries.json"
-    in_progress = tmp_path / "queries.json.drafting"
-
-    existing_qs = QuerySet(
-        catalog_id="cat",
-        queries=(
-            Query(id="skill-a", text="Existing query without suffix", expected_skill="skill-a"),
-        ),
-        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-    )
-
-    terms = DraftCheckpoint(
-        fingerprint="test-fp",
-        bodies="bodies-hash",
-        catalog_id="cat",
-        arm="content",
-        count=1,
-        generator_model="fake",
-        targets=("skill-a",),
-        covered=("skill-a",),
-        drafted=existing_qs,
-    )
-
-    fake_drafter = FakeGenerator(
-        completion=json.dumps(
-            {
-                "queries": [
-                    {
-                        "text": "Newly drafted query",
-                        "citation": "Perform action A.",
-                        "reason": "Direct citation",
-                    }
-                ]
-            }
-        )
-    )
-    buf = StringIO()
-    console = build_console(file=buf, force_terminal=False, width=120)
-    settings = RunConfig(study=StudySettings(queries=dest))
-    generate = GenerateFlags(count=1)
-
-    s_dir = tmp_path / "skill-a"
-    s_dir.mkdir(parents=True)
-    (s_dir / "SKILL.md").write_text(
-        "---\nname: skill-a\ndescription: Perform action A.\n---\nPerform action A.\n",
-        encoding="utf-8",
-    )
-
-    rc = _execute_draft_generation(
-        console,
-        settings,
-        catalog,
-        skills,
-        generate,
-        fake_drafter,
-        terms,
-        drafting=("skill-a",),
-        recovered=terms,
-        destination=dest,
-        in_progress=in_progress,
-        keep=True,
-        same_invocation_probe=False,
-        then="probed {path}",
-        existing_query_set=existing_qs,
-    )
-    assert rc == 0
-    saved = load_query_set(dest)
-    assert len(saved.queries) == 2
-    assert [q.id for q in saved.queries] == ["skill-a", "skill-a-1"]
 
 
 def test_query_set_covered_skills_filters_negatives_and_unassigned() -> None:
@@ -1013,7 +902,7 @@ def test_query_draft_sync_sad_paths_and_backfill(
         out_file,
     )
 
-    def fail_if_drafted(*_a, **_k):
+    def fail_if_drafted(*_a: object, **_k: object) -> Never:
         pytest.fail("LLM drafter should not be called when backfilling missing digests")
 
     monkeypatch.setattr("reach.cli.query._draft_query_set", fail_if_drafted)

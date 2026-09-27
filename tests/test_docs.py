@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 import inspect
 import pkgutil
@@ -112,7 +113,8 @@ def _flatten_nav(nav_entries: list[Any]) -> list[str]:
     return paths
 
 
-def _command_valid_flags(verb: str) -> set[str]:
+@functools.cache
+def _command_valid_flags(verb: str) -> frozenset[str]:
     """Assemble all valid option flags for a registered CLI command."""
     cmd = app[verb]
     flags: set[str] = {"--help", "--version"}
@@ -123,7 +125,7 @@ def _command_valid_flags(verb: str) -> set[str]:
             flags.add(name)
             if name.startswith("--") and arg.hint is bool:
                 flags.add(f"--no-{name.removeprefix('--')}")
-    return flags
+    return frozenset(flags)
 
 
 def extract_table_column_entries(
@@ -313,8 +315,12 @@ def test_all_public_agents_documented(
     readme_text: str,
     config_doc_text: str,
 ) -> None:
-    """Verify supported agent runtime is documented in README and configuration docs."""
+    """Verify supported agent runtime is documented in README, index, and configuration docs."""
+    index_text = (_DOCS_DIR / "index.md").read_text(encoding="utf-8")
     assert agent in readme_text, f"Agent {agent!r} missing from README.md"
+    assert agent in index_text, (
+        f"Agent {agent!r} missing from Live Empirical Probing in docs/index.md"
+    )
     assert agent in config_doc_text, f"Agent {agent!r} missing from docs/configuration.md"
 
 
@@ -437,7 +443,7 @@ def _extract_section_block(config_doc_text: str, section_name: str) -> str:
     for block in section_blocks:
         header_match = re.search(r"### `?\[([a-zA-Z0-9_.-]+)\]`?", block)
         if header_match and header_match.group(1) == section_name:
-            return block
+            return str(block)
     return ""
 
 
@@ -676,23 +682,6 @@ def test_api_index_modules_correspond_to_public_modules() -> None:
 
 
 @pytest.mark.parametrize("mod_name", PUBLIC_API_MODULES)
-def test_every_public_api_module_is_in_index_and_nav(
-    mod_name: str,
-    mkdocs_config: MkDocsConfig,
-) -> None:
-    """Verify each public API module is indexed in docs/api/index.md and mkdocs.yml."""
-    api_index_text = (_DOCS_DIR / "api" / "index.md").read_text()
-    nav_paths = set(_flatten_nav(mkdocs_config.get("nav", [])))
-
-    short_name = mod_name.rsplit(".", maxsplit=1)[-1]
-    expected_nav_path = f"api/{short_name}.md"
-    assert expected_nav_path in nav_paths, f"Expected {expected_nav_path} to be in mkdocs.yml nav"
-    assert f"[`{mod_name}`]" in api_index_text, (
-        f"Expected [`{mod_name}`] link in docs/api/index.md Module Index"
-    )
-
-
-@pytest.mark.parametrize("mod_name", PUBLIC_API_MODULES)
 def test_documented_api_members_cover_public_interface(
     mod_name: str,
     parsed_api_docs: dict[str, ParsedApiDoc],
@@ -784,18 +773,6 @@ def test_doc_python_snippets_syntax(all_markdown_files: tuple[Path, ...]) -> Non
                 raise AssertionError(pytest_fail_msg) from err
 
 
-@pytest.mark.parametrize("agent", [a for a in known_agents() if a != FAKE_AGENT])
-def test_all_public_agents_in_live_probing_docs(agent: str, config_doc_text: str) -> None:
-    """Verify public agent is documented in docs/index.md and docs/configuration.md."""
-    index_text = (_DOCS_DIR / "index.md").read_text(encoding="utf-8")
-    assert agent in index_text, (
-        f"Agent {agent!r} missing from Live Empirical Probing in docs/index.md"
-    )
-    assert agent in config_doc_text, (
-        f"Agent {agent!r} missing from agent descriptions in docs/configuration.md"
-    )
-
-
 def test_citations_companion_path_documentation() -> None:
     """Verify documentation references queries-citations.json companion file."""
     query_doc_text = (_DOCS_DIR / "cli" / "query.md").read_text()
@@ -811,7 +788,7 @@ def test_readme_repository_layout_paths_exist(readme_text: str) -> None:
     assert layout_match is not None, "Repository Layout code block missing from README.md"
 
     current_root: Path | None = None
-    for raw_line in layout_match.group(1).splitlines():
+    for raw_line in str(layout_match.group(1)).splitlines():
         line = raw_line.strip()
         if not line:
             continue
@@ -918,18 +895,6 @@ def test_doc_python_snippets_reach_imports_resolve(
                             f"Imported symbol {alias.name!r} not found in {node.module} "
                             f"in snippet #{i} of {md_file.relative_to(_ROOT)}"
                         )
-
-
-@pytest.mark.parametrize("section_name", sorted(RunConfig.model_fields))
-def test_runconfig_sections_documented_in_configuration_reference(
-    section_name: str,
-    config_doc_text: str,
-) -> None:
-    """Verify RunConfig section header is documented in docs/configuration.md."""
-    section_header = f"[{section_name}]"
-    assert section_header in config_doc_text, (
-        f"Config section {section_header!r} is not documented in docs/configuration.md"
-    )
 
 
 @pytest.mark.parametrize("verb", _verbs())

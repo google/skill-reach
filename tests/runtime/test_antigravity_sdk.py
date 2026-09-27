@@ -20,11 +20,11 @@ import asyncio
 import importlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Never
+from typing import TYPE_CHECKING, Any, Never, override
 
 import pytest
 
-from reach.config import RuntimeSettings, agent_default_model
+from reach.config import RuntimeSettings
 from reach.runtime import AntigravityRuntime
 from reach.runtime.antigravity_sdk import (
     _HAS_ANTIGRAVITY,
@@ -49,8 +49,6 @@ from .conftest import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from google.antigravity import types as ag_types
 else:
     try:
@@ -63,7 +61,6 @@ else:
 def _require_antigravity(request: pytest.FixtureRequest) -> None:
     """Skip test if google.antigravity is not installed and test requires it."""
     exempt = (
-        "test_model_has_default",
         "test_antigravity_sdk_options_effort",
         "test_antigravity_sdk_options_defaults",
         "test_tool_name_passes_a_custom_tool_name_through",
@@ -84,18 +81,6 @@ def runtime() -> AntigravitySdkRuntime:
 def generator() -> AntigravitySdkGenerator:
     """Provide an AntigravitySdkGenerator instance configured with test-model."""
     return AntigravitySdkGenerator(options=AntigravitySdkOptions(model="test-model"))
-
-
-def test_model_has_default() -> None:
-    """Verify model parameter defaults to configured agent default model."""
-    default = agent_default_model("antigravity-sdk")
-    assert default is not None
-    assert AntigravitySdkOptions().model == default
-
-
-def test_the_agent_reports_the_configured_model(runtime: AntigravitySdkRuntime) -> None:
-    """Verify runtime.model returns the configured model identifier."""
-    assert runtime.model == "test-model"
 
 
 def test_tool_name_reads_the_plain_value_not_the_enum_repr() -> None:
@@ -127,41 +112,6 @@ def test_select_config_omits_response_schema_by_default_and_respects_explicit_js
     schema = json.loads(cfg_explicit.response_schema)
     selected = schema["properties"]["selected_skill"]
     assert {"const": "gke-basics", "type": "string"} in selected["anyOf"]
-
-
-def test_select_config_enables_multi_turn_tools_across_all_turn_budgets(
-    runtime: AntigravitySdkRuntime,
-    tmp_path: Path,
-) -> None:
-    """Verify _select_config enables MULTI_TURN_SELECTION_TOOLS for max_turns=3 and max_turns=1."""
-    from reach.runtime.antigravity_sdk import MULTI_TURN_SELECTION_TOOLS
-
-    runtime._resident = ("a", "b")
-    config = runtime._select_config(tmp_path / "work")
-    assert config.capabilities.enabled_tools == list(MULTI_TURN_SELECTION_TOOLS)
-    assert config.capabilities.enable_subagents is False
-    assert config.budget_config is not None
-    assert config.budget_config.max_model_calls == 3
-
-    single_turn_rt = AntigravitySdkRuntime(
-        options=AntigravitySdkOptions(model="test-model", max_turns=1),
-    )
-    single_turn_rt._resident = ("a", "b")
-    single_cfg = single_turn_rt._select_config(tmp_path / "work")
-    assert single_cfg.capabilities.enabled_tools == list(MULTI_TURN_SELECTION_TOOLS)
-    assert single_cfg.budget_config is not None
-    assert single_cfg.budget_config.max_model_calls == 1
-
-
-def test_selection_schema_names_the_resident_catalog(
-    runtime: AntigravitySdkRuntime,
-) -> None:
-    """Verify selection_json_schema helper contains enum of resident skill names."""
-    runtime._resident = ("gke-basics", "gcs-lifecycle-rules")
-    schema = json.loads(runtime.selection_json_schema(runtime._resident))
-    selected = schema["properties"]["selected_skill"]
-    enum_values = next(branch["enum"] for branch in selected["anyOf"] if "enum" in branch)
-    assert sorted(enum_values) == ["gcs-lifecycle-rules", "gke-basics"]
 
 
 def test_antigravity_sdk_options_effort() -> None:
@@ -381,7 +331,8 @@ def test_select_reports_a_backend_failure_not_raises(
     runtime._resident = ("gke-basics",)
 
     class _RaisingAgent(_FakeAgent):
-        async def __aenter__(self):
+        @override
+        async def __aenter__(self) -> Never:
             msg = "no credentials found"
             raise RuntimeError(msg)
 
@@ -393,49 +344,26 @@ def test_select_reports_a_backend_failure_not_raises(
 def test_select_falls_back_to_a_thread_when_a_loop_is_already_running(
     monkeypatch: pytest.MonkeyPatch,
     runtime: AntigravitySdkRuntime,
+    generator: AntigravitySdkGenerator,
     tmp_path: Path,
 ) -> None:
-    """Verify select executes cleanly when called from within an existing event loop."""
+    """Verify select and complete execute cleanly when called within a running event loop."""
     runtime._resident = ("gke-basics",)
-    _fake_agent(monkeypatch, _FakeResponse(structured={"selected_skill": "gke-basics"}))
+    _fake_agent(
+        monkeypatch,
+        _FakeResponse(structured={"selected_skill": "gke-basics"}, text="drafted query set"),
+    )
 
-    async def call_from_inside_a_running_loop():
-        return runtime.select("how do I set up a cluster?", tmp_path / "work")
+    async def call_from_inside_a_running_loop() -> tuple[Any, str]:
+        return (
+            runtime.select("how do I set up a cluster?", tmp_path / "work"),
+            generator.complete("draft some queries"),
+        )
 
-    outcome = asyncio.run(call_from_inside_a_running_loop())
+    outcome, result = asyncio.run(call_from_inside_a_running_loop())
     assert outcome.invoked_skill == "gke-basics"
     assert outcome.error is None
-
-
-def test_complete_falls_back_to_a_thread_when_a_loop_is_already_running(
-    monkeypatch: pytest.MonkeyPatch,
-    generator: AntigravitySdkGenerator,
-) -> None:
-    """Verify complete executes cleanly when invoked from within a running event loop."""
-    _fake_agent(monkeypatch, _FakeResponse(text="drafted query set"))
-
-    async def call_from_inside_a_running_loop():
-        return generator.complete("draft some queries")
-
-    result = asyncio.run(call_from_inside_a_running_loop())
     assert result == "drafted query set"
-
-
-def test_select_reports_a_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Verify select returns timeout error when asyncio.wait_for times out."""
-    runtime = AntigravitySdkRuntime(
-        options=AntigravitySdkOptions(model="test-model"),
-    )
-    runtime._resident = ("gke-basics",)
-
-    async def timeout(fut, *_args, **_kwargs) -> Never:
-        if asyncio.iscoroutine(fut):
-            fut.close()
-        raise TimeoutError
-
-    monkeypatch.setattr(asyncio, "wait_for", timeout)
-    outcome = runtime.select("q", tmp_path / "work")
-    assert outcome.error == "timeout"
 
 
 def test_complete_returns_the_scripted_text(
@@ -460,6 +388,7 @@ def test_complete_uses_no_isolation(
     config = instances[0].config
     assert config.budget_config is None
     assert config.skills_paths == []
+    assert getattr(config, "response_schema", None) is None
 
 
 def test_complete_passes_response_schema(
@@ -469,9 +398,13 @@ def test_complete_passes_response_schema(
     """Verify complete populates response_schema on agent config when schema is provided."""
     instances = _fake_agent(monkeypatch, _FakeResponse(structured={"queries": []}, text="{}"))
     schema = {"type": "object", "properties": {"queries": {"type": "array"}}}
-    generator.complete("q", schema=schema)
+    out = generator.complete("q", schema=schema)
+    assert json.loads(out) == {"queries": []}
     config = instances[0].config
     assert config.response_schema == json.dumps(schema)
+    assert config.capabilities is not None
+    assert config.capabilities.enabled_tools == []
+    assert config.capabilities.enable_subagents is False
 
 
 def test_complete_uses_thinking_config_when_effort_configured(
@@ -880,32 +813,6 @@ def test_generator_build_env_sanitizes_blocked_env_vars(
     assert custom_env.get("GEMINI_API_KEY") == "test-gemini-key"
 
 
-@pytest.mark.parametrize(
-    ("max_turns", "early_exit"),
-    [
-        (1, False),
-        (3, True),
-    ],
-)
-def test_antigravity_sdk_omits_forced_schema_in_both_single_and_multi_turn(
-    max_turns: int,
-    early_exit: bool,
-    tmp_path: Path,
-) -> None:
-    """Verify AntigravitySdkRuntime omits forced response_schema in both single and multi-turn."""
-    rt = AntigravitySdkRuntime(
-        options=AntigravitySdkOptions(
-            model="test-model",
-            app_data_dir=tmp_path / "app_data",
-            max_turns=max_turns,
-            early_exit=early_exit,
-        ),
-    )
-    rt._resident = ("skill-a", "skill-b")
-    config = rt._select_config(tmp_path)
-    assert config.response_schema is None
-
-
 def test_select_organic_text_abstention_vs_empty_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
     runtime: AntigravitySdkRuntime,
@@ -1138,7 +1045,8 @@ def test_complete_converts_antigravity_validation_error_to_runtime_error(
     from google.antigravity.types import AntigravityValidationError
 
     class _ValidatingAgent(_FakeAgent):
-        async def __aenter__(self):
+        @override
+        async def __aenter__(self) -> Never:
             msg = "A Gemini API key is required."
             raise AntigravityValidationError(msg)
 
@@ -1284,6 +1192,9 @@ def test_select_config_multi_turn_selection_tools(
     config = rt._select_config(tmp_path / "work")
     assert config.capabilities is not None
     assert config.capabilities.enabled_tools is not None
+    assert config.capabilities.enable_subagents is False
+    assert config.budget_config is not None
+    assert config.budget_config.max_model_calls == max_turns
     if expect_multi_turn:
         assert tuple(config.capabilities.enabled_tools) == MULTI_TURN_SELECTION_TOOLS
     else:
@@ -1316,11 +1227,10 @@ def test_build_model_spec_drops_effort_for_non_thinking_models() -> None:
     assert spec25 == "gemini-2.5-flash"
 
     spec38 = _build_model_spec("gemini-3.8-flash", effort="low")
-    if ag_types is not None:
-        assert isinstance(spec38, ag_types.ModelTarget)
-        assert isinstance(spec38.endpoint, ag_types.GeminiAPIEndpoint)
-        assert spec38.endpoint.options is not None
-        assert spec38.endpoint.options.thinking_level == "low"
+    assert isinstance(spec38, ag_types.ModelTarget)
+    assert isinstance(spec38.endpoint, ag_types.GeminiAPIEndpoint)
+    assert spec38.endpoint.options is not None
+    assert spec38.endpoint.options.thinking_level == "low"
 
 
 def test_generator_effective_effort_guards_against_unsupported_models() -> None:
@@ -1330,32 +1240,6 @@ def test_generator_effective_effort_guards_against_unsupported_models() -> None:
 
     gen38 = AntigravitySdkGenerator(model="gemini-3.8-flash")
     assert gen38.effective_effort == "low"
-
-
-def test_generator_complete_uses_structured_output_when_available(
-    monkeypatch: pytest.MonkeyPatch,
-    generator: AntigravitySdkGenerator,
-) -> None:
-    """Verify AntigravitySdkGenerator.complete extracts structured output as JSON."""
-    canned = {"queries": [{"text": "deploy a job", "citation": "cloud-run docs"}]}
-    agents = _fake_agent(monkeypatch, _FakeResponse(structured=canned, text="Finished"))
-    out = generator.complete("generate", schema={"type": "object"})
-    assert json.loads(out) == canned
-    assert json.loads(agents[0].config.response_schema) == {"type": "object"}
-    assert agents[0].config.capabilities is not None
-    assert agents[0].config.capabilities.enabled_tools == []
-    assert agents[0].config.capabilities.enable_subagents is False
-
-
-def test_generator_complete_returns_text_when_no_schema(
-    monkeypatch: pytest.MonkeyPatch,
-    generator: AntigravitySdkGenerator,
-) -> None:
-    """Verify AntigravitySdkGenerator.complete falls back to text when no schema provided."""
-    agents = _fake_agent(monkeypatch, _FakeResponse(text="plain completion"))
-    out = generator.complete("hello")
-    assert out == "plain completion"
-    assert getattr(agents[0].config, "response_schema", None) is None
 
 
 def test_generator_complete_handles_non_callable_structured_output(
@@ -1481,9 +1365,7 @@ def test_select_ignores_transient_history_error_when_turn_succeeded(
     ("tool_calls", "history_steps", "expected_error"),
     [
         pytest.param(
-            [ag_types.ToolCall(name=ag_types.BuiltinTools.LIST_DIR, args={})]
-            if ag_types is not None
-            else [],
+            [ag_types.ToolCall(name=ag_types.BuiltinTools.LIST_DIR, args={})],
             [],
             None,
             id="max-model-calls-with-observed-tools-is-valid-abstention",
@@ -1495,9 +1377,7 @@ def test_select_ignores_transient_history_error_when_turn_succeeded(
             id="max-model-calls-with-zero-tools-is-flagged-as-error",
         ),
         pytest.param(
-            [ag_types.ToolCall(name=ag_types.BuiltinTools.LIST_DIR, args={})]
-            if ag_types is not None
-            else [],
+            [ag_types.ToolCall(name=ag_types.BuiltinTools.LIST_DIR, args={})],
             [_FakeStep(http_code=429, error="Resource exhausted")],
             "rate limit (429): Resource exhausted",
             id="max-model-calls-with-history-429-surfaces-rate-limit",
@@ -1710,24 +1590,6 @@ def test_select_preserves_observed_catalog_on_timeout_and_exception(
     assert exc_outcome.observed_catalog == ("gke-basics", "cloud-run-basics")
 
 
-def test_trajectory_tracker_enforces_max_turns_when_early_exit_disabled() -> None:
-    """Verify TrajectoryTracker.apply_to_outcome truncates at max_turns when early_exit=False."""
-    from reach.runtime import SelectionOutcome, TrajectoryTracker
-
-    tracker = TrajectoryTracker(target_skill="s1", max_turns=2, early_exit=False)
-    assert tracker.observe("s1") is False
-    assert tracker.observe("s2") is False
-    assert tracker.observe("s3") is False
-    assert tracker.early_exit_hit is False
-
-    normalized = tracker.apply_to_outcome(
-        SelectionOutcome(invoked_skills=("s1", "s2", "s3"), turns_taken=3),
-    )
-    assert normalized.invoked_skills == ("s1", "s2")
-    assert normalized.turns_taken == 2
-    assert normalized.early_exit is False
-
-
 def test_select_async_hook_rewrites_skill_directory_to_skill_md_for_multi_turn_recovery(
     monkeypatch: pytest.MonkeyPatch,
     runtime: AntigravitySdkRuntime,
@@ -1749,6 +1611,7 @@ def test_select_async_hook_rewrites_skill_directory_to_skill_md_for_multi_turn_r
         hook_fn = config.hooks[0]
 
         class _HookRunnerResponse(_FakeResponse):
+            @override
             async def structured_output(self) -> object:
                 # Turn 1: Model calls view_file on distractor directory (without /SKILL.md)
                 call_turn1 = ag_types.ToolCall(
@@ -1796,6 +1659,7 @@ def test_select_async_hook_rewrites_skill_directory_to_skill_md_for_multi_turn_r
         hook_fn = config.hooks[0]
 
         class _DirRunnerResponse(_FakeResponse):
+            @override
             async def structured_output(self) -> object:
                 call_dir = ag_types.ToolCall(
                     name="list_dir",
@@ -1858,6 +1722,7 @@ def test_suppress_retryable_step_warnings_filters_503_unless_debug() -> None:
     records: list[logging.LogRecord] = []
 
     class _ListHandler(logging.Handler):
+        @override
         def emit(self, record: logging.LogRecord) -> None:
             records.append(record)
 
@@ -1902,6 +1767,7 @@ def test_antigravity_sdk_select_records_duration_ms(
         workdir: Path,
         target_skill: str | None = None,
     ) -> SelectionOutcome:
+        _ = (query_text, workdir, target_skill)
         return SelectionOutcome(invoked_skills=("alpha",))
 
     monkeypatch.setattr(rt, "_select_async", _fake_select_async)

@@ -168,7 +168,8 @@ def test_html_contains_required_interactive_element_ids(
     context_name: str,
 ) -> None:
     """Verify rendered HTML includes all element IDs actively required by client JS."""
-    tree: HTMLParser = request.getfixturevalue(tree_fixture_name)
+    tree = request.getfixturevalue(tree_fixture_name)
+    assert isinstance(tree, HTMLParser)
     js_code = js_loader()
 
     # 1. Ensure the contract IDs are actively referenced in client JS (prevent stale rules)
@@ -200,7 +201,8 @@ def test_html_inline_event_handlers_exist_in_js(
     js_name: str,
 ) -> None:
     """Verify every onclick/oninput handler in HTML maps to a function in companion JS."""
-    tree: HTMLParser = request.getfixturevalue(tree_fixture_name)
+    tree = request.getfixturevalue(tree_fixture_name)
+    assert isinstance(tree, HTMLParser)
     js_code = js_loader()
 
     unresolved_handlers: list[str] = []
@@ -292,7 +294,7 @@ def test_review_html_body_dataset_contract(
     assert body.attributes.get("data-target-skill") == target.name
 
     # 2. data-rivals consumed as parsed JSON in addNewQueryCard()
-    rivals_raw: str = body.attributes.get("data-rivals") or "[]"
+    rivals_raw = str(body.attributes.get("data-rivals") or "[]")
     rivals_data = json.loads(rivals_raw)
     assert rival_docker.name in rivals_data
     assert rival_git.name in rivals_data

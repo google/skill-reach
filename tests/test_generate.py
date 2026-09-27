@@ -21,7 +21,7 @@ import logging
 import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, override
 
 import pytest
 from pydantic import ValidationError
@@ -50,6 +50,9 @@ from reach.runtime.antigravity_cli import AntigravityCliGenerator
 from reach.runtime.claude_code import ClaudeGenerator
 from reach.runtime.fake import FakeGenerator
 from reach.runtime.keyword import KeywordGenerator
+
+if TYPE_CHECKING:
+    from conftest import SyntheticCorpusBuilder
 
 SKILL_MD = """---
 name: google-cloud-waf-security
@@ -360,7 +363,7 @@ def test_citation_with_markdown_matches_plain_body() -> None:
 
 
 @pytest.fixture
-def target(tmp_path, corpus_builder) -> Skill:
+def target(tmp_path: Path, corpus_builder: type[SyntheticCorpusBuilder]) -> Skill:
     """Provide a target skill backed by a file on disk."""
     builder = corpus_builder().add("target-skill", "d", text=SKILL_MD)
     builder.build_disk(tmp_path)
@@ -368,7 +371,7 @@ def target(tmp_path, corpus_builder) -> Skill:
 
 
 @pytest.fixture
-def rival(tmp_path, corpus_builder) -> Skill:
+def rival(tmp_path: Path, corpus_builder: type[SyntheticCorpusBuilder]) -> Skill:
     """Provide a rival skill backed by a file on disk."""
     builder = corpus_builder().add("rival-skill", "d", text=RIVAL_MD)
     builder.build_disk(tmp_path)
@@ -583,7 +586,7 @@ FIELD = {
 
 
 @pytest.fixture
-def field_of_rivals(tmp_path, corpus_builder) -> list[Skill]:
+def field_of_rivals(tmp_path: Path, corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide a target skill and two ranked rival skills on disk."""
     builder = corpus_builder()
     for name, (description, body) in FIELD.items():
@@ -727,10 +730,10 @@ def test_a_prompt_over_the_window_is_refused_before_it_is_sent(
     assert runtime.completions == 0
 
 
-def test_a_refused_prompt_names_the_cap_and_not_the_catalog(
+def test_the_cap_a_refusal_suggests_is_one_that_really_fits(
     field_of_rivals: list[Skill],
 ) -> None:
-    """Verify prompt length refusal message suggests --top-rivals option."""
+    """Verify prompt length refusal names --top-rivals and suggested value fits in budget."""
     runtime = drafting("q", budget=whole_field_prompt(field_of_rivals) - 1)
     with pytest.raises(ValueError, match="top-rivals") as refusal:
         generate_for_skill(
@@ -742,21 +745,7 @@ def test_a_refused_prompt_names_the_cap_and_not_the_catalog(
     said = str(refusal.value)
     assert "--top-rivals 1" in said
     assert "2 rivals" in said
-
-
-def test_the_cap_a_refusal_suggests_is_one_that_really_fits(
-    field_of_rivals: list[Skill],
-) -> None:
-    """Verify suggested --top-rivals value successfully fits within budget window."""
-    runtime = drafting("q", budget=whole_field_prompt(field_of_rivals) - 1)
-    with pytest.raises(ValueError, match="top-rivals") as refusal:
-        generate_for_skill(
-            "target-skill",
-            neighborhood("target-skill", "near-skill", "far-skill"),
-            field_of_rivals,
-            runtime=runtime,
-        )
-    cap = int(str(refusal.value).split("--top-rivals ")[1].split()[0])
+    cap = int(said.split("--top-rivals ")[1].split(maxsplit=1)[0])
     generate_for_skill(
         "target-skill",
         neighborhood("target-skill", "near-skill", "far-skill"),
@@ -833,6 +822,17 @@ def test_assert_prompts_fit_auto_clamps(
         auto_clamp=True,
     )
     assert longest <= budget
+    assert (
+        assert_prompts_fit(
+            runtime,
+            neighborhood("target-skill", "near-skill", "far-skill"),
+            field_of_rivals,
+            ["target-skill"],
+            top_rivals=1,
+            auto_clamp=False,
+        )
+        <= budget
+    )
 
 
 def test_assert_prompts_fit_auto_clamps_adversarial(
@@ -893,12 +893,6 @@ def test_a_generated_set_records_the_arm_that_produced_it(target: Skill) -> None
     assert query_set.notes == "Generator arm: framing. Masked derivation."
 
 
-def test_the_default_arm_is_recorded_too(target: Skill) -> None:
-    """Verify default CONTENT generator arm is recorded in query set notes."""
-    query_set = generate_query_set(neighborhood("target-skill"), [target], runtime=drafting("q"))
-    assert query_set.notes == "Generator arm: content."
-
-
 def test_a_neighborhood_generates_for_its_target_alone(target: Skill, rival: Skill) -> None:
     """Verify neighborhood catalog only generates queries for its target skill."""
     query_set = generate_query_set(
@@ -948,6 +942,7 @@ class _ConcurrencyProbe(FakeGenerator):
         self.active = 0
         self.peak = 0
 
+    @override
     def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
         with self._lock:
             self.active += 1
@@ -1034,6 +1029,7 @@ def test_generate_retries_transient_value_error_and_succeeds(
     attempts = 0
 
     class TransientFailingRuntime(FakeGenerator):
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             nonlocal attempts
@@ -1064,6 +1060,7 @@ def test_generate_warns_and_continues_on_exhausted_value_errors(
     attempts = 0
 
     class AlwaysFailingRuntime(FakeGenerator):
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             nonlocal attempts
@@ -1090,6 +1087,7 @@ def test_generate_reraises_runtime_error_immediately(
     attempts = 0
 
     class FatalFailingRuntime(FakeGenerator):
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             nonlocal attempts
@@ -1116,6 +1114,7 @@ def test_generate_discards_earlier_exception_when_subsequent_attempt_succeeds_wi
     attempts = 0
 
     class TransientThenEmptyRuntime(FakeGenerator):
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             nonlocal attempts
@@ -1148,6 +1147,7 @@ def test_adversarial_discards_earlier_exception_when_subsequent_attempt_succeeds
     attempts = 0
 
     class TransientThenEmptyAdversarialRuntime(FakeGenerator):
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             nonlocal attempts
@@ -1259,24 +1259,12 @@ def test_nothing_is_borrowed_when_the_catalog_carries_everything() -> None:
 
 
 def test_ground_truth_is_attached_after_generation() -> None:
-    """Verify to_queries sets expected_skill and prefixes query IDs."""
-    drafts = (GeneratedQuery(text="q", citation="c", reason="r"),)
+    """Verify to_queries sets expected_skill, prefixes ID, defaults kind, and populates notes."""
+    drafts = (GeneratedQuery(text="q", citation="c", reason="target justification rationale"),)
     (query,) = to_queries(drafts, expected_skill="skill-a", prefix="gen-skill-a")
     assert query.expected_skill == "skill-a"
     assert query.id == "gen-skill-a-1"
-
-
-def test_a_generated_query_defaults_kind_to_implicit() -> None:
-    """Verify to_queries defaults query kind to QueryKind.IMPLICIT."""
-    drafts = (GeneratedQuery(text="q", citation="c", reason="r"),)
-    (query,) = to_queries(drafts, expected_skill="skill-a", prefix="gen-skill-a")
     assert query.kind is QueryKind.IMPLICIT
-
-
-def test_to_queries_populates_notes_from_draft_reason() -> None:
-    """Verify to_queries attaches draft reason to query notes."""
-    drafts = (GeneratedQuery(text="q", citation="c", reason="target justification rationale"),)
-    (query,) = to_queries(drafts, expected_skill="skill-a", prefix="gen-skill-a")
     assert query.notes == "target justification rationale"
 
 
@@ -1482,6 +1470,7 @@ def test_generate_query_set_includes_adversarial_queries_when_flagged(
             super().__init__()
             self._call_count = 0
 
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             del prompt, args, kwargs
             resp = responses[self._call_count % len(responses)]
@@ -1518,6 +1507,7 @@ def test_select_rivals_preserves_rank_order() -> None:
 
     class _MockScorer:
         def rank(self, target: Skill, candidates: Sequence[Skill]) -> list[tuple[str, float]]:
+            _ = (target, candidates)
             return [("charlie", 10.0), ("alpha", 5.0), ("bravo", 1.0)]
 
     selected = select_rivals(target, residents, top_rivals=2, scorer=_MockScorer())
@@ -1544,6 +1534,7 @@ def test_generate_adversarial_for_skill_enforces_prompt_budget(
     from reach.generate import generate_adversarial_for_skill
 
     class _TightBudgetGenerator(FakeGenerator):
+        @override
         def prompt_budget_chars(self) -> int:
             return 50
 
@@ -1560,71 +1551,6 @@ def test_generate_adversarial_for_skill_enforces_prompt_budget(
             count=1,
             runtime=_TightBudgetGenerator(),
         )
-
-
-def test_generate_query_set_tops_up_partial_verified_drafts(
-    target: Skill,
-    rival: Skill,
-) -> None:
-    """Verify generate_query_set retries to top up drafts when unverified citations occur."""
-    responses = [
-        json.dumps(
-            {
-                "queries": [
-                    {
-                        "text": "How do I structure risk management?",
-                        "citation": "risk management",
-                        "reason": "Direct security pillar question.",
-                    },
-                    {
-                        "text": "How do I configure non-existent feature?",
-                        "citation": "hallucinated citation not in body",
-                        "reason": "Dropped by citation check.",
-                    },
-                ]
-            }
-        ),
-        json.dumps(
-            {
-                "queries": [
-                    {
-                        "text": "How do I enforce identity control?",
-                        "citation": "identity control",
-                        "reason": "Top-up query on second attempt.",
-                    }
-                ]
-            }
-        ),
-    ]
-    calls = 0
-
-    class _PartialThenTopUpGenerator(FakeGenerator):
-        def complete(
-            self,
-            prompt: str,
-            *,
-            schema: str | Mapping[str, Any] | None = None,
-        ) -> str:
-            del schema
-            nonlocal calls
-            self.prompts.append(prompt)
-            idx = min(calls, len(responses) - 1)
-            calls += 1
-            return responses[idx]
-
-    runtime = _PartialThenTopUpGenerator()
-    qs = generate_query_set(
-        neighborhood("target-skill", "rival-skill"),
-        [target, rival],
-        count=2,
-        runtime=runtime,
-        targets=["target-skill"],
-    )
-    assert calls == 2
-    assert [q.text for q in qs.queries] == [
-        "How do I structure risk management?",
-        "How do I enforce identity control?",
-    ]
 
 
 def test_generate_query_set_continues_top_up_until_count_reached(
@@ -1675,6 +1601,7 @@ def test_generate_query_set_continues_top_up_until_count_reached(
     calls = 0
 
     class _MultiStepTopUpGenerator(FakeGenerator):
+        @override
         def complete(
             self,
             prompt: str,

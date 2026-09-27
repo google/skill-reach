@@ -25,11 +25,13 @@ from reach.overlap import Competition, Rival
 from reach.retrieval import Bm25Scorer, skill_text, tokenize
 
 if TYPE_CHECKING:
+    from conftest import SyntheticCorpusBuilder
+
     from reach.models import Skill
 
 
 @pytest.fixture
-def tiny_corpus(corpus_builder) -> list[Skill]:
+def tiny_corpus(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide a small three-skill corpus for term-level overlap verification."""
     return (
         corpus_builder()

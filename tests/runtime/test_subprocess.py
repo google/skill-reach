@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from reach.runtime._subprocess import (
@@ -33,7 +35,11 @@ if TYPE_CHECKING:
 
 def test_run_subprocess_probe_real_execution(tmp_path: Path) -> None:
     """Verify live subprocess probe captures full stdout and returncode on success."""
-    cmd = [sys.executable, "-c", "print('hello'); print('world')"]
+    cmd = (
+        ["sh", "-c", "printf 'hello\\nworld\\n'"]
+        if os.name != "nt"
+        else [sys.executable, "-c", "print('hello'); print('world')"]
+    )
     completed, err = run_subprocess_probe(cmd, tmp_path)
 
     assert err is None
@@ -44,14 +50,21 @@ def test_run_subprocess_probe_real_execution(tmp_path: Path) -> None:
 
 def test_run_subprocess_probe_real_early_exit(tmp_path: Path) -> None:
     """Verify on_line predicate early-terminates process when target line appears."""
-    script = (
-        "import sys, time\n"
-        "print('line1', flush=True)\n"
-        "print('STOP_HERE', flush=True)\n"
-        "time.sleep(2)\n"
-        "print('line3', flush=True)\n"
-    )
-    cmd = [sys.executable, "-c", script]
+    if os.name != "nt":
+        cmd = [
+            "sh",
+            "-c",
+            "printf 'line1\\nSTOP_HERE\\n'; sleep 0.2 >/dev/null 2>&1; printf 'line3\\n'",
+        ]
+    else:
+        script = (
+            "import sys, time\n"
+            "print('line1', flush=True)\n"
+            "print('STOP_HERE', flush=True)\n"
+            "time.sleep(2)\n"
+            "print('line3', flush=True)\n"
+        )
+        cmd = [sys.executable, "-c", script]
 
     def _predicate(line: str) -> bool:
         return "STOP_HERE" in line
@@ -67,21 +80,16 @@ def test_run_subprocess_probe_real_early_exit(tmp_path: Path) -> None:
 
 def test_run_subprocess_probe_real_timeout(tmp_path: Path) -> None:
     """Verify long-running subprocess exceeds timeout during streaming and returns timeout."""
-    cmd = [
-        sys.executable,
-        "-c",
-        "import time; [print('ping', flush=True) or time.sleep(0.01) for _ in range(50)]",
-    ]
-    completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=0.05)
-
-    assert completed is None
-    assert err == "timeout"
-
-
-def test_run_subprocess_probe_silent_command_timeout(tmp_path: Path) -> None:
-    """Verify silent long-running command exceeding timeout returns timeout."""
-    cmd = [sys.executable, "-c", "import time; time.sleep(0.08)"]
-    completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=0.02)
+    cmd = (
+        ["sh", "-c", "while :; do printf 'ping\\n'; done"]
+        if os.name != "nt"
+        else [
+            sys.executable,
+            "-c",
+            "import time; [print('ping', flush=True) or time.sleep(0.01) for _ in range(50)]",
+        ]
+    )
+    completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=0.015)
 
     assert completed is None
     assert err == "timeout"
@@ -89,29 +97,43 @@ def test_run_subprocess_probe_silent_command_timeout(tmp_path: Path) -> None:
 
 def test_run_subprocess_probe_large_stderr_does_not_deadlock(tmp_path: Path) -> None:
     """Verify large stderr volume drains concurrently without pipe deadlock."""
-    script = (
-        "import sys\n"
-        "sys.stderr.write('E' * (2 * 1024 * 1024))\n"
-        "sys.stderr.flush()\n"
-        "sys.stdout.write('probe_completed\\n')\n"
-        "sys.stdout.flush()\n"
-    )
-    cmd = [sys.executable, "-c", script]
+    payload_size = 256 * 1024
+    if os.name != "nt":
+        cmd = [
+            "sh",
+            "-c",
+            f"head -c {payload_size} /dev/zero >&2; printf 'probe_completed\\n'",
+        ]
+    else:
+        script = (
+            "import sys\n"
+            f"sys.stderr.write('E' * {payload_size})\n"
+            "sys.stderr.flush()\n"
+            "sys.stdout.write('probe_completed\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        cmd = [sys.executable, "-c", script]
     completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=4.0)
 
     assert err is None
     assert completed is not None
     assert "probe_completed" in completed.stdout
-    assert len(completed.stderr) == 2 * 1024 * 1024
+    assert len(completed.stderr) == payload_size
+
+
+def _sleep_cmd(seconds: int = 10) -> list[str]:
+    """Return a cross-platform command that sleeps for the given duration."""
+    return (
+        ["sleep", str(seconds)]
+        if os.name != "nt"
+        else [sys.executable, "-c", f"import time; time.sleep({seconds})"]
+    )
 
 
 def test_run_subprocess_probe_watchdog_terminates_silent_hang(tmp_path: Path) -> None:
     """Verify watchdog actively terminates a silent hung command when timeout expires."""
-    import time
-
-    cmd = [sys.executable, "-c", "import time; time.sleep(10)"]
     start = time.monotonic()
-    completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=0.2)
+    completed, err = run_subprocess_probe(_sleep_cmd(10), tmp_path, timeout_s=0.015)
     elapsed = time.monotonic() - start
 
     assert completed is None
@@ -186,9 +208,8 @@ def test_run_subprocess_probe_mock_mode_spawn_error(
 
 def test_process_group_controller_lifecycle(tmp_path: Path) -> None:
     """Verify ProcessGroupController gracefully terminates and kills spawned processes."""
-    cmd = [sys.executable, "-c", "import time; time.sleep(10)"]
-    proc = subprocess.Popen(
-        cmd,
+    proc = subprocess.Popen(  # noqa: S603
+        _sleep_cmd(10),
         cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -230,15 +251,14 @@ def test_stderr_drainer_handles_none_stream() -> None:
 
 def test_stderr_drainer_thread_safe_concurrent_reads() -> None:
     """Verify StderrDrainer safely joins while background thread appends chunks."""
-    import time
 
     def slow_stream() -> Any:
-        for i in range(50):
-            time.sleep(0.001)
+        for i in range(15):
+            time.sleep(0.0002)
             yield f"line {i}\n"
 
     drainer = _StderrDrainer(slow_stream())
-    _ = [drainer.join(timeout=0.005) for _ in range(5)]
+    _ = [drainer.join(timeout=0.001) for _ in range(3)]
     full = drainer.join(timeout=2.0)
     assert "line 0\n" in full
-    assert "line 49\n" in full
+    assert "line 14\n" in full

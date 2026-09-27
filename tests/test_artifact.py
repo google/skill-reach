@@ -51,6 +51,7 @@ from reach.run import Composition
 from reach.runtime import CatalogFit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from reach.config import RunConfig
@@ -82,45 +83,41 @@ def assemble(
 
 
 @pytest.fixture
-def config(make_config) -> RunConfig:
+def config(make_config: Callable[..., RunConfig]) -> RunConfig:
     """Return RunConfig configured for a 3-attempt evaluation over the whole synthetic catalog."""
     return make_config(catalog={"mode": CatalogMode.ALL}, plan={"attempts": 3})
 
 
-def test_the_artifact_states_its_own_schema_version(artifact: Artifact) -> None:
-    """Verify artifact declares its schema version matching SCHEMA_VERSION."""
-    assert artifact.schema_version == SCHEMA_VERSION
-
-
-def test_all_three_digests_are_recorded(
+def test_artifact_schema_digests_provenance_and_roots(
     artifact: Artifact,
     corpus: list[Skill],
     whole_catalog_queries: QuerySet,
     config: RunConfig,
+    skill_repo: Path,
 ) -> None:
-    """Verify configuration, corpus, and query set digests are recorded in artifact provenance."""
+    """Verify artifact schema version, digests, provenance, catalog fields, and resolved roots."""
+    assert artifact.schema_version == SCHEMA_VERSION
     assert artifact.digests.config_fingerprint == config.fingerprint
     assert artifact.digests.corpus_digest == corpus_digest(corpus)
     assert artifact.digests.queries_digest == query_set_digest(whole_catalog_queries)
 
-
-def test_provenance_names_the_run_rather_than_the_slice(
-    artifact: Artifact,
-    config: RunConfig,
-) -> None:
-    """Verify provenance captures runtime agent, model, attempt count, and arm configuration."""
     assert artifact.provenance.runtime == "fake"
     assert artifact.provenance.model == "sonnet"
-
     assert artifact.provenance.attempts == 3
     assert artifact.provenance.arm == config.arm
-
-
-def test_an_artifact_that_was_never_told_the_fit_does_not_invent_one(
-    artifact: Artifact,
-) -> None:
-    """Verify catalog fit remains None when not provided to artifact builder."""
     assert artifact.provenance.catalog_fit is None
+
+    assert artifact.catalog_id == "all"
+    assert artifact.catalog_mode is CatalogMode.ALL
+    assert artifact.catalog_size == 3
+    assert artifact.catalog_target is None
+
+    root = skill_repo.resolve()
+    assert [(r.path, r.skills) for r in artifact.resolved_roots] == [(root, 3)]
+    assert {s.skill: s.root for s in artifact.skills} == dict.fromkeys(
+        (LIFECYCLE, RETENTION, BASICS),
+        root,
+    )
 
 
 def test_the_artifact_records_how_much_of_the_catalog_was_shown(
@@ -150,27 +147,6 @@ def test_the_artifact_records_how_much_of_the_catalog_was_shown(
     assert built.provenance.catalog_fit == fit
     reloaded = Artifact.model_validate_json(built.model_dump_json())
     assert reloaded.provenance.catalog_fit == fit
-
-
-def test_the_catalog_it_measured_is_named(artifact: Artifact) -> None:
-    """Verify artifact records catalog ID, mode, and resident size."""
-    assert artifact.catalog_id == "all"
-    assert artifact.catalog_mode is CatalogMode.ALL
-    assert artifact.catalog_size == 3
-    assert artifact.catalog_target is None
-
-
-def test_every_skill_records_the_root_it_came_from(
-    artifact: Artifact,
-    skill_repo: Path,
-) -> None:
-    """Verify each skill in the artifact records its originating repository root."""
-    root = skill_repo.resolve()
-    assert [(r.path, r.skills) for r in artifact.resolved_roots] == [(root, 3)]
-    assert {s.skill: s.root for s in artifact.skills} == dict.fromkeys(
-        (LIFECYCLE, RETENTION, BASICS),
-        root,
-    )
 
 
 def test_roots_attribute_each_skill_to_the_most_specific_tree(
@@ -932,55 +908,39 @@ def test_a_condition_that_disagrees_is_refused_on_its_own_account(
         assemble(rows, whole_catalog_queries, whole_catalog, corpus, config)
 
 
-def test_the_artifact_names_the_model_the_rows_say_answered(
+def test_artifact_resolved_model_provenance_and_conflict_refusal(
+    artifact: Artifact,
     whole_catalog_results: list[ProbeResult],
     whole_catalog_queries: QuerySet,
     whole_catalog: Catalog,
     corpus: list[Skill],
     config: RunConfig,
 ) -> None:
-    """Verify provenance captures resolved model identifier from probe rows."""
+    """Verify resolved_model defaults empty, records single model, and refuses conflicts."""
+    assert artifact.provenance.model
+    assert artifact.provenance.resolved_model == ""
+
     rows = [
         r.model_copy(update={"resolved_model": "claude-sonnet-5"}) for r in whole_catalog_results
     ]
-    artifact = assemble(
+    built = assemble(
         rows,
         whole_catalog_queries,
         whole_catalog,
         corpus,
         config,
     )
-    assert artifact.provenance.model == "sonnet"
-    assert artifact.provenance.resolved_model == "claude-sonnet-5"
+    assert built.provenance.model == "sonnet"
+    assert built.provenance.resolved_model == "claude-sonnet-5"
 
-
-def test_rows_naming_two_resolved_models_are_refused(
-    whole_catalog_results: list[ProbeResult],
-    whole_catalog_queries: QuerySet,
-    whole_catalog: Catalog,
-    corpus: list[Skill],
-    config: RunConfig,
-) -> None:
-    """Verify ValueError is raised if probe rows contain conflicting resolved models."""
     mixed = [
-        *(
-            r.model_copy(update={"resolved_model": "claude-sonnet-5"})
-            for r in whole_catalog_results
-        ),
+        *rows,
         whole_catalog_results[0].model_copy(
             update={"resolved_model": "claude-sonnet-4-5"},
         ),
     ]
     with pytest.raises(ValueError, match="resolved_model"):
         assemble(mixed, whole_catalog_queries, whole_catalog, corpus, config)
-
-
-def test_rows_that_name_no_resolved_model_leave_the_artifact_silent(
-    artifact: Artifact,
-) -> None:
-    """Verify resolved_model is empty string when not populated in results."""
-    assert artifact.provenance.model
-    assert artifact.provenance.resolved_model == ""
 
 
 def test_rows_from_two_runtimes_are_refused(
@@ -1004,12 +964,6 @@ def test_the_artifact_survives_a_round_trip_through_json(
 ) -> None:
     """Verify Artifact round-trips losslessly through JSON serialization."""
     assert Artifact.model_validate_json(artifact.model_dump_json()) == artifact
-
-
-def test_artifact_records_actual_spend(artifact: Artifact) -> None:
-    """Verify artifact records observed spend and reused probes."""
-    assert artifact.spend_usd == 0.0
-    assert artifact.reused == 0
 
 
 def test_an_artifact_with_an_unstated_digest_is_refused(artifact: Artifact) -> None:

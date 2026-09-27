@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+from typing import Any
 
 import pytest
 
@@ -38,7 +39,7 @@ from reach.runtime.claude_code import (
 
 
 @pytest.fixture
-def three(corpus_builder):
+def three(corpus_builder) -> Any:
     """Provide three sample skills with descriptions of lengths 10, 20, and 30."""
     return (
         corpus_builder()
@@ -236,14 +237,6 @@ def test_a_declared_fraction_prices_at_the_derivation_the_runtime_uses() -> None
     assert listing_budget_chars(0.0000001) == 0, "floored, not rounded"
 
 
-def test_a_suggested_fraction_is_rounded_up_to_something_that_actually_fits() -> None:
-    """Verify budget_fraction_for rounds up fraction to cover required character count."""
-    fraction = budget_fraction_for(51_910)
-    assert fraction == 0.018
-    assert fraction is not None
-    assert listing_budget_chars(fraction) >= 51_910
-
-
 @pytest.mark.parametrize(
     "chars",
     [51_910, 54_000, 30_000, 3_000, 1, 2_999_999, 3_000_000],
@@ -255,6 +248,8 @@ def test_a_suggested_fraction_prices_at_or_above_the_listing_that_asked(
     fraction = budget_fraction_for(chars)
     assert fraction is not None
     assert listing_budget_chars(fraction) >= chars
+    if chars == 51_910:
+        assert fraction == 0.018
 
 
 def test_a_listing_wider_than_the_window_is_not_a_budget_to_raise() -> None:
@@ -293,19 +288,11 @@ def test_a_catalog_over_the_budget_reports_what_it_would_cost_the_descriptions(
     three,
     three_catalog,
 ) -> None:
-    """Verify fit calculates truncated description count when catalog exceeds budget."""
+    """Verify fit calculates truncated description count and remedy when catalog exceeds budget."""
     fit = _tuned(skill_listing_budget_fraction=0.000013).fit(three_catalog, three)
     assert not fit.whole
     assert (fit.allowed, fit.asked) == (39, 91)
     assert fit.truncated == 2, "alpha's description costs 12 of the 14; the others more"
-
-
-def test_the_remedy_names_the_key_and_a_value_that_would_clear_it(
-    three,
-    three_catalog,
-) -> None:
-    """Verify remedy message recommends specific TOML configuration adjustment."""
-    fit = _tuned(skill_listing_budget_fraction=0.000013).fit(three_catalog, three)
     assert "skill_listing_budget_fraction = 0.001" in fit.remedy
     assert "[runtime.options]" in fit.remedy
 

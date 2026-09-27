@@ -32,10 +32,10 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Self, cast, override
 from urllib.parse import parse_qs, urlparse
 
-import bm25s  # type: ignore[import-untyped]
+import bm25s
 import pytest
 from sklearn.exceptions import UndefinedMetricWarning
 from sklearn.metrics import (
@@ -97,7 +97,18 @@ class _DummyModel2Vec:
         return embeddings
 
 
-cast(Any, retrieval)._load_model2vec_model = lambda _name: _DummyModel2Vec()
+_ORIG_LOAD_MODEL2VEC = retrieval._load_model2vec_model
+cast("Any", retrieval)._load_model2vec_model = lambda _name: _DummyModel2Vec()
+
+
+@pytest.fixture
+def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
+    """Yield the unpatched _load_model2vec_model function and clear its LRU cache."""
+    _ORIG_LOAD_MODEL2VEC.cache_clear()
+    try:
+        yield _ORIG_LOAD_MODEL2VEC
+    finally:
+        _ORIG_LOAD_MODEL2VEC.cache_clear()
 
 
 # ==============================================================================
@@ -549,7 +560,7 @@ def write_queries(tmp_path: Path) -> Callable[..., Path]:
             path.write_text(payload, encoding="utf-8")
         else:
             q_list = (
-                tuple(queries)  # type: ignore[arg-type]
+                tuple(q for q in queries if isinstance(q, Query))
                 if queries is not None
                 else tuple(
                     Query(
@@ -640,7 +651,7 @@ def stream_lines(
     model: str | None = "claude-opus-5",
 ) -> list[str]:
     """Format stream-json transcript lines matching runtime output format."""
-    init: dict = {
+    init: dict[str, Any] = {
         "type": "system",
         "subtype": "init",
         "skills": catalog or [],
@@ -648,7 +659,7 @@ def stream_lines(
     }
     if model is not None:
         init["model"] = model
-    events: list[dict] = [init]
+    events: list[dict[str, Any]] = [init]
     if invoked is not None:
         events.append(
             {
@@ -1240,7 +1251,7 @@ class IntegrationWorkspace:
                 *args,
             ]
 
-        return subprocess.run(
+        return subprocess.run(  # noqa: S603
             cmd,
             cwd=self.root,
             capture_output=True,
@@ -1422,7 +1433,8 @@ class MockRegistryHandler(BaseHTTPRequestHandler):
     captured_params: ClassVar[dict[str, list[str]]] = {}
     request_counts: ClassVar[dict[str, int]] = {}
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    @override
+    def log_message(self, format: str, *args: object) -> None:
         """Suppress standard HTTP server request logging."""
 
     def do_GET(self) -> None:

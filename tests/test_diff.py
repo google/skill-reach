@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,7 +31,6 @@ from reach.diff import (
     PAIRING,
     TREATMENT,
     VaryFactor,
-    diff_arms,
     diff_runs,
     load_arm,
     noise_floor,
@@ -72,10 +73,10 @@ DILUTED_TREATMENT = {
 
 
 @pytest.fixture
-def arm(make_config, record_arm):
+def arm(make_config, record_arm: Callable[..., Path]) -> Callable[..., Path]:
     """Provide helper for creating test arm directories and prediction records."""
 
-    def _arm(name: str, predictions: dict, **overrides) -> Path:
+    def _arm(name: str, predictions: dict[str, Any], **overrides: Any) -> Path:
         catalog = {**WIDE, **overrides.pop("catalog", {})}
         attempts = max((len(picks) for picks in predictions.values()), default=1)
         plan = {"attempts": attempts, **overrides.pop("plan", {})}
@@ -170,21 +171,18 @@ def test_a_delta_of_nothing_needs_no_depth_because_it_is_not_a_delta() -> None:
         probes_to_resolve(0.0)
 
 
-def test_noise_floor_defaults_to_the_calibrated_inflation() -> None:
-    """Verify noise_floor defaults to NOISE_INFLATION constant."""
-    assert noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE) == noise_floor(
+def test_noise_floor_default_and_override_inflation() -> None:
+    """Verify noise_floor defaults to NOISE_INFLATION and accepts an override factor."""
+    default_floor = noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE)
+    assert default_floor == noise_floor(
         0.04,
         0.06,
         DEFAULT_CONFIDENCE,
         noise_inflation=NOISE_INFLATION,
     )
-
-
-def test_noise_floor_accepts_an_override_inflation_factor() -> None:
-    """Verify noise_floor computes correctly with custom noise_inflation override."""
-    floor = noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE, noise_inflation=1.0)
-    assert floor == pytest.approx(critical_value(0.95) * 1.0 * 0.10)
-    assert floor < noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE)
+    override_floor = noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE, noise_inflation=1.0)
+    assert override_floor == pytest.approx(critical_value(0.95) * 1.0 * 0.10)
+    assert override_floor < default_floor
 
 
 def test_probes_to_resolve_accepts_an_override_inflation_factor() -> None:
@@ -236,16 +234,11 @@ def test_tightening_the_confidence_widens_the_floor_until_a_delta_falls_inside(
     assert strict.headline.confidence == 0.999
 
 
-def test_diff_runs_records_the_default_inflation_on_the_headline(arm) -> None:
-    """Verify diff_runs records default NOISE_INFLATION on headline result."""
-    comparison = diff_runs(arm("shipped", HALF), arm("patched", HALF), "description")
-    assert comparison.headline.noise_inflation == NOISE_INFLATION
-
-
-def test_diff_runs_threads_an_overridden_inflation_to_the_headline(arm) -> None:
-    """Verify diff_runs propagates overridden noise_inflation to headline."""
+def test_diff_runs_records_default_and_overridden_inflation_on_the_headline(arm) -> None:
+    """Verify diff_runs records default NOISE_INFLATION and propagates overridden inflation."""
     control, treatment = arm("shipped", HALF), arm("patched", BARELY_MORE)
     calibrated = diff_runs(control, treatment, "description")
+    assert calibrated.headline.noise_inflation == NOISE_INFLATION
     uninflated = diff_runs(control, treatment, "description", noise_inflation=1.0)
     assert uninflated.headline.noise_inflation == 1.0
     assert uninflated.headline.floor is not None
@@ -311,7 +304,7 @@ def test_an_arm_compared_with_its_own_twin_finds_nothing(arm) -> None:
     assert "+0.0 points" in comparison.verdict
 
 
-def test_an_arm_that_probed_nothing_leaves_no_floor_and_no_verdict(arm, tmp_path) -> None:
+def test_an_arm_that_probed_nothing_leaves_no_floor_and_no_verdict(arm) -> None:
     """Verify comparison with unprobed arm produces no noise floor and no verdict."""
     empty = arm("empty", {})
     comparison = diff_runs(empty, arm("probed", HITS), "description")
@@ -1081,14 +1074,6 @@ def test_an_arm_is_rebuilt_from_the_rows_rather_than_read_off_disk(arm) -> None:
         "corpus_digest",
         "queries_digest",
     }
-
-
-def test_two_loaded_arms_compare_the_same_as_two_paths(arm) -> None:
-    """Verify diff_arms produces identical output to diff_runs across arm models."""
-    control, treatment = arm("one", HALF), arm("two", BARELY_MORE)
-    from_paths = diff_runs(control, treatment, "description")
-    from_arms = diff_arms(load_arm(control), load_arm(treatment), "description")
-    assert from_arms.model_dump() == from_paths.model_dump()
 
 
 def test_load_arm_reads_artifact_json_directly(arm, tmp_path: Path) -> None:

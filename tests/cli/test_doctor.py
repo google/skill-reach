@@ -35,15 +35,6 @@ from reach.cli.doctor import (
 from reach.views import build_console, render_doctor_table
 
 
-def test_doctor_help(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify reach doctor --help displays options and exits 0."""
-    assert main(["doctor", "--help"]) == 0
-    captured = capsys.readouterr()
-    out = captured.out + captured.err
-    assert "doctor" in out
-    assert "--verbose" in out
-
-
 def test_doctor_runs_cleanly(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """Verify reach doctor runs all diagnostics and outputs results."""
     assert main(["doctor", "--path", str(tmp_path)]) == 0

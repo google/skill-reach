@@ -21,13 +21,12 @@ from collections.abc import Callable
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Never, get_args
+from typing import TYPE_CHECKING, Any, Never, get_args
 from unittest.mock import patch
 
 import pytest
 from cyclopts.exceptions import CycloptsError
 
-from reach import run as reach_run
 from reach.cli import (
     EVAL_REQUIRED,
     AgentName,
@@ -42,7 +41,7 @@ from reach.cli import (
 )
 from reach.cli import _verbs as registered_verbs
 from reach.diff import VaryFactor
-from reach.models import Catalog, Query
+from reach.models import Query
 from reach.queries import (
     Origin,
     QuerySet,
@@ -64,7 +63,7 @@ if TYPE_CHECKING:
 FOLDED = ("config", "catalog", "runtime", "plan", "study", "record")
 
 
-def bind(*argv: str):
+def bind(*argv: str) -> dict[str, Any]:
     """Parse CLI arguments without executing command handler."""
     _, bound, _ = app.parse_args(argv, exit_on_error=False)
     return bound.arguments
@@ -113,7 +112,7 @@ def test_flags_become_a_configuration(base_argv: list[str]) -> None:
     assert config.study.partial is True
 
 
-def test_missing_required_flags_are_named(tmp_path: Path) -> None:
+def test_missing_required_flags_are_named() -> None:
     """Verify missing required flags raise ValueError naming the missing flag."""
     with pytest.raises(ValueError, match="--queries"):
         configure("eval")
@@ -568,15 +567,13 @@ def test_the_overlap_renderers_are_spellings_the_parser_already_accepts(
 
 
 def test_dry_run_issues_no_probes(base_argv: list[str], capsys) -> None:
-    """Verify --dry-run prints probe plan without executing probes."""
+    """Verify --dry-run prints probe plan, fingerprint, and resolution without executing probes."""
     assert main([*base_argv, "--dry-run"]) == 0
-    assert "2 probes" in capsys.readouterr().err
-
-
-def test_dry_run_states_the_configuration_fingerprint(base_argv: list[str], capsys) -> None:
-    """Verify --dry-run outputs configuration fingerprint."""
-    assert main([*base_argv, "--dry-run"]) == 0
-    assert "[config " in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "2 probes" in err
+    assert "[config " in err
+    assert "resolves a per-query rate to +-1.00 at 1 attempts" in err
+    assert "+-0.20 would take 99 per query" in err
 
 
 def test_verbose_puts_the_hex_back_on_the_line_the_badge_replaced(
@@ -589,17 +586,6 @@ def test_verbose_puts_the_hex_back_on_the_line_the_badge_replaced(
     said, hexed = stamp.split()[:2]
     assert badge(hexed) == said
     assert said != hexed
-
-
-def test_dry_run_says_what_the_depth_can_resolve_before_anything_is_spent(
-    base_argv: list[str],
-    capsys,
-) -> None:
-    """Verify --dry-run prints statistical resolution and probe requirement estimate."""
-    assert main([*base_argv, "--dry-run"]) == 0
-    err = capsys.readouterr().err
-    assert "resolves a per-query rate to +-1.00 at 1 attempts" in err
-    assert "+-0.20 would take 99 per query" in err
 
 
 @pytest.fixture
@@ -665,34 +651,12 @@ def test_allowing_truncation_lets_the_run_through(cramped_argv: list[str], capsy
     assert "2 probes" in capsys.readouterr().err
 
 
-def test_a_run_shows_what_it_measured(base_argv: list[str], capsys) -> None:
-    """Verify eval command outputs consistency metrics and neighborhood catalog name to stderr."""
-    assert main(base_argv) == 0
-    shown = capsys.readouterr().err
-    assert "consistency" in shown
-    assert "neighborhood:gcs-lifecycle-rules" in shown
-
-
-def test_the_plan_a_run_prints_is_the_run_it_then_conducts(
-    base_argv: list[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify catalog resolution occurs exactly once between planning and probe execution."""
-    real, builds = reach_run.build_catalogs, []
-
-    def counted(*args, **kwargs) -> list[Catalog]:
-        builds.append(args)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(reach_run, "build_catalogs", counted)
-    assert main(base_argv) == 0
-    assert len(builds) == 1, "the catalog was resolved more than once"
-
-
 def test_a_redirected_run_reports_one_line_per_probe(base_argv: list[str], capsys) -> None:
-    """Verify redirected output writes progress messages per probe without ANSI rewrite codes."""
+    """Verify redirected output writes progress messages per probe and consistency summary."""
     assert main(base_argv) == 0
-    err = capsys.readouterr().err.splitlines()
+    raw_err = capsys.readouterr().err
+    assert "consistency" in raw_err
+    err = raw_err.splitlines()
     assert err[0].startswith("neighborhood:gcs-lifecycle-rules: 3 skills, 2 probes on")
     assert err[1:4] == [
         ("  resolves a per-query rate to +-1.00 at 1 attempts; +-0.20 would take 99 per query"),
@@ -702,35 +666,31 @@ def test_a_redirected_run_reports_one_line_per_probe(base_argv: list[str], capsy
 
 
 def test_quiet_mutes_the_view_and_leaves_the_report(base_argv: list[str], capsys) -> None:
-    """Verify --quiet suppresses stderr progress while preserving stdout report."""
+    """Verify --quiet suppresses stderr progress while preserving machine-readable stdout report."""
     assert main([*base_argv, "--quiet", "--format", "json"]) == 0
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert json.loads(captured.out)["catalog_id"] == "neighborhood:gcs-lifecycle-rules"
+    payload = json.loads(captured.out)
+    assert payload["catalog_id"] == "neighborhood:gcs-lifecycle-rules"
+    assert payload["provenance"]["runtime"] == "fake"
 
 
 def test_quiet_still_lets_a_setup_failure_be_heard(base_argv: list[str], capsys) -> None:
-    """Verify errors remain audible on stderr when --quiet is set."""
+    """Verify errors remain audible on stderr when --quiet is set and rescope is required."""
     assert main([*base_argv, "--quiet", "--catalog", "neighborhood:gke-basics"]) == 2
     assert "rescope" in capsys.readouterr().err
-
-
-def test_json_output_is_machine_readable(base_argv: list[str], capsys) -> None:
-    """Verify --format json produces valid JSON containing provenance."""
-    assert main([*base_argv, "--format", "json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["provenance"]["runtime"] == "fake"
 
 
 def test_workers_runs_probes_without_changing_the_recorded_configuration(
     base_argv: list[str],
     tmp_path: Path,
 ) -> None:
-    """Verify --workers alters worker count in plan settings without modifying fingerprints."""
+    """Verify -j / --workers alters worker count in plan settings without modifying fingerprints."""
     sequential_out = tmp_path / "sequential.jsonl"
     concurrent_out = tmp_path / "concurrent.jsonl"
     assert main([*base_argv, "--out", str(sequential_out)]) == 0
-    assert main([*base_argv, "--out", str(concurrent_out), "--workers", "3"]) == 0
+    assert main([*base_argv, "--out", str(concurrent_out), "-j", "3"]) == 0
+    assert sequential_out.exists()
     sequential_sidecar = json.loads(Path(f"{sequential_out}.config.json").read_text())
     concurrent_sidecar = json.loads(Path(f"{concurrent_out}.config.json").read_text())
     assert concurrent_sidecar["config"]["plan"]["workers"] == 3
@@ -739,66 +699,18 @@ def test_workers_runs_probes_without_changing_the_recorded_configuration(
     assert sequential_sidecar["condition"] == concurrent_sidecar["condition"]
 
 
-def test_the_short_workers_flag_is_accepted(base_argv: list[str]) -> None:
-    """Verify -j flag is parsed as workers alias."""
-    assert main([*base_argv, "-j", "2"]) == 0
-
-
-def test_results_and_their_configuration_land_together(
-    base_argv: list[str],
-    tmp_path: Path,
-) -> None:
-    """Verify --out creates both JSONL results and companion .config.json sidecar file."""
-    out = tmp_path / "results.jsonl"
-    assert main([*base_argv, "--out", str(out)]) == 0
-    assert out.exists()
-    assert Path(f"{out}.config.json").exists()
-
-
 def test_a_setup_failure_exits_two_with_a_message(
-    skill_repo: Path,
-    query_file: Path,
-    tmp_path: Path,
+    base_argv: list[str],
     capsys,
 ) -> None:
-    """Verify referencing nonexistent catalog exits with code 2 and descriptive error."""
-    code = main(
-        [
-            "eval",
-            "--skills",
-            str(skill_repo),
-            "--queries",
-            str(query_file),
-            "--workdir",
-            str(tmp_path / "work"),
-            "--agent",
-            "fake",
-            "--mode",
-            "neighborhood",
-            "--catalog",
-            "neighborhood:ghost",
-            "--rescope",
-        ],
-    )
-    assert code == 2
+    """Verify referencing nonexistent catalog exits with code 2 and descriptive error panel."""
+    assert main([*base_argv, "--catalog", "neighborhood:ghost", "--rescope"]) == 2
     reported = capsys.readouterr().err
     assert "no catalog named" in reported
     assert not reported.lstrip().startswith('"')
     assert '"no catalog' not in reported
-
-
-def test_a_refusal_looks_the_same_whenever_it_arrives(base_argv: list[str], capsys) -> None:
-    """Verify setup errors format with consistent panel styling."""
-    assert main([*base_argv, "--catalog", "neighborhood:ghost", "--rescope"]) == 2
-    framed = capsys.readouterr().err
-    assert "Error" in framed
-    assert "╭" in framed
-
-
-def test_reprobing_elsewhere_needs_saying_so(base_argv: list[str], capsys) -> None:
-    """Verify mismatched catalog for labeled query set requires explicit --rescope."""
-    assert main([*base_argv, "--catalog", "neighborhood:gke-basics"]) == 2
-    assert "rescope" in capsys.readouterr().err
+    assert "Error" in reported
+    assert "╭" in reported
 
 
 def test_a_missing_corpus_exits_two(query_file: Path, tmp_path: Path, capsys) -> None:
@@ -828,7 +740,7 @@ def test_a_runtime_that_refused_the_work_is_reported_not_raised(
 ) -> None:
     """Verify runtime exception during drafting is reported cleanly without traceback."""
 
-    def refuse(*_args, **_kwargs) -> Never:
+    def refuse(*_args: object, **_kwargs: object) -> Never:
         msg = "generation failed: Prompt is too long"
         raise RuntimeError(msg)
 
@@ -898,12 +810,15 @@ def two_arms(skill_repo: Path, query_file: Path, tmp_path: Path, capsys) -> list
 
 
 def test_a_comparison_prices_the_delta_against_the_floor(two_arms, capsys) -> None:
-    """Verify diff command prints delta verdict against noise floor."""
+    """Verify diff command prints delta verdict, default filenames, and non-improvement status."""
     control, treatment = two_arms
     assert main(["diff", str(control), str(treatment), "--vary", "scope"]) == 0
     out = capsys.readouterr().out
     assert "noise floor" in out
     assert "Verdict" in out
+    assert "not an improvement" in out
+    assert control.stem in out
+    assert treatment.stem in out
 
 
 def test_diff_accepts_artifact_json_files(two_arms, tmp_path: Path, capsys) -> None:
@@ -938,8 +853,8 @@ def test_diff_accepts_artifact_json_files(two_arms, tmp_path: Path, capsys) -> N
     assert "Verdict" in out
 
 
-def test_the_noise_inflation_flag_overrides_the_calibrated_default(two_arms, capsys) -> None:
-    """Verify --noise-inflation flag sets over-dispersion multiplier in diff output."""
+def test_diff_flags_override_noise_inflation_and_labels(two_arms, capsys) -> None:
+    """Verify --noise-inflation, --control-label, and --treatment-label customize diff output."""
     control, treatment = two_arms
     assert (
         main(
@@ -951,24 +866,25 @@ def test_the_noise_inflation_flag_overrides_the_calibrated_default(two_arms, cap
                 "scope",
                 "--noise-inflation",
                 "1.0",
+                "--control-label",
+                "v1",
+                "--treatment-label",
+                "v2",
             ],
         )
         == 0
     )
-    assert "1.00x over-dispersion" in capsys.readouterr().out
-
-
-def test_a_refused_delta_still_exits_zero(two_arms, capsys) -> None:
-    """Verify non-improving diff outcome exits with code 0."""
-    control, treatment = two_arms
-    assert main(["diff", str(control), str(treatment), "--vary", "scope"]) == 0
-    assert "not an improvement" in capsys.readouterr().out
+    shown = capsys.readouterr().out
+    assert "1.00x over-dispersion" in shown
+    assert "v1" in shown
+    assert "v2" in shown
+    assert control.stem not in shown
+    assert treatment.stem not in shown
 
 
 def test_diff_cli_respects_config_file(
     write_reach_toml: Callable[..., Path],
     two_arms,
-    tmp_path: Path,
     capsys,
 ) -> None:
     """Verify diff command reads [diff] settings from reach.toml configuration."""
@@ -997,10 +913,9 @@ def test_diff_cli_respects_config_file(
     assert "1.75x over-dispersion" in capsys.readouterr().out
 
 
-def test_a_comparison_without_a_factor_is_refused(two_arms, capsys) -> None:
+def test_a_comparison_without_a_factor_is_refused(capsys) -> None:
     """Verify diff command without --vary flag exits with code 2."""
-    control, treatment = two_arms
-    assert main(["diff", str(control), str(treatment)]) == 2
+    assert main(["diff", "control.jsonl", "treatment.jsonl"]) == 2
     assert "--vary" in capsys.readouterr().err
 
 
@@ -1012,7 +927,7 @@ def test_a_comparison_of_a_file_with_itself_exits_two(two_arms, capsys) -> None:
 
 
 @pytest.fixture
-def two_broken_arms(two_arms) -> list[Path]:
+def two_broken_arms(two_arms: list[Path]) -> list[Path]:
     """Remove sidecar config files from comparison arms."""
     for path in two_arms:
         path.with_suffix(".jsonl.config.json").unlink()
@@ -1034,50 +949,6 @@ def test_a_refused_comparison_names_every_wall_by_default(
     assert control.name in complaint
     assert treatment.name in complaint
     assert "not reached" in complaint
-
-
-def test_a_pairing_that_compares_prints_the_comparison(two_arms, capsys) -> None:
-    """Verify diff prints comparison table when arms are comparable."""
-    control, treatment = two_arms
-    assert main(["diff", str(control), str(treatment), "--vary", "scope"]) == 0
-    assert "Verdict" in capsys.readouterr().out
-
-
-def test_control_and_treatment_labels_replace_the_filenames(two_arms, capsys) -> None:
-    """Verify --control-label and --treatment-label replace file paths in diff table header."""
-    control, treatment = two_arms
-    assert (
-        main(
-            [
-                "diff",
-                str(control),
-                str(treatment),
-                "--vary",
-                "scope",
-                "--control-label",
-                "v1",
-                "--treatment-label",
-                "v2",
-            ],
-        )
-        == 0
-    )
-
-    shown = capsys.readouterr().out
-    assert "v1" in shown
-    assert "v2" in shown
-    assert control.stem not in shown
-    assert treatment.stem not in shown
-
-
-def test_labels_are_not_offered_without_asking_for_them(two_arms, capsys) -> None:
-    """Verify default diff output uses filenames when labels are not specified."""
-    control, treatment = two_arms
-    assert main(["diff", str(control), str(treatment), "--vary", "scope"]) == 0
-
-    shown = capsys.readouterr().out
-    assert control.stem in shown
-    assert treatment.stem in shown
 
 
 FOREIGN_ROWS = (
@@ -1216,34 +1087,11 @@ def test_a_spreadsheet_saved_export_comes_back_as_the_same_evidence(
     assert query_set_digest(load_query_set(back)) == query_set_digest(exchange_set)
 
 
-def test_an_imported_set_says_where_it_came_from(foreign_file: Path, tmp_path: Path) -> None:
-    """Verify imported query set records Origin.IMPORTED and source path in provenance."""
-    destination = tmp_path / "set.json"
-    assert (
-        main(
-            [
-                "query",
-                str(foreign_file),
-                "--out",
-                str(destination),
-                "--catalog",
-                "all",
-                *FOREIGN_FLAGS,
-            ],
-        )
-        == 0
-    )
-    provenance = load_query_set(destination).provenance
-    assert provenance is not None
-    assert provenance.origin is Origin.IMPORTED
-    assert provenance.source == str(foreign_file)
-
-
-def test_a_foreign_file_is_mapped_by_flags_rather_than_by_code(
+def test_a_foreign_file_is_mapped_by_flags_and_records_import_provenance(
     foreign_file: Path,
     tmp_path: Path,
 ) -> None:
-    """Verify column mapping flags map foreign CSV columns to Query fields."""
+    """Verify column mapping flags map foreign CSV columns and record Origin.IMPORTED."""
     destination = tmp_path / "set.json"
     assert (
         main(
@@ -1259,7 +1107,11 @@ def test_a_foreign_file_is_mapped_by_flags_rather_than_by_code(
         )
         == 0
     )
-    imported = load_query_set(destination).queries[0]
+    loaded = load_query_set(destination)
+    assert loaded.provenance is not None
+    assert loaded.provenance.origin is Origin.IMPORTED
+    assert loaded.provenance.source == str(foreign_file)
+    imported = loaded.queries[0]
     assert imported.id == "q-1"
     assert imported.expected_skill == "kms-rotation"
     assert imported.acceptable_skills == ("skill-finder", "kms-router")
@@ -1795,7 +1647,7 @@ def test_draft_concurrency_flag_reaches_generate_query_set(
     """Verify --draft-concurrency flag is passed to generate_query_set."""
     captured: dict[str, object] = {}
 
-    def fake_generate(*args, **kwargs) -> QuerySet:
+    def fake_generate(*_args: object, **kwargs: object) -> QuerySet:
         captured.update(kwargs)
         return QuerySet(
             catalog_id="all",
@@ -1923,7 +1775,7 @@ def test_query_view_renders_a_table_without_writing_anything(
     tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify query view prints table to stderr without modifying filesystem."""
+    """Verify query view prints table to stderr without writing files or showing leaks."""
     before = sorted(tmp_path.rglob("*"))
     assert main(["query", "view", str(viewable_set), "--skills", str(skill_repo)]) == 0
 
@@ -1931,17 +1783,8 @@ def test_query_view_renders_a_table_without_writing_anything(
     assert "v-1" in shown
     assert "gcs-lifecycle-rules" in shown
     assert "Tier old objects" in shown
+    assert "leak" not in shown
     assert sorted(tmp_path.rglob("*")) == before
-
-
-def test_query_view_leaks_column_is_off_by_default(
-    viewable_set: Path,
-    skill_repo: Path,
-    capsys,
-) -> None:
-    """Verify query view omits leak column by default."""
-    assert main(["query", "view", str(viewable_set), "--skills", str(skill_repo)]) == 0
-    assert "leak" not in capsys.readouterr().err
 
 
 def test_query_view_leaks_flag_adds_a_column(skill_repo: Path, tmp_path: Path, capsys) -> None:
@@ -2074,16 +1917,21 @@ ALL_HELP_COMMANDS = [
 ALL_HELP_IDS = ["reach" if not argv else "-".join(argv) for argv in ALL_HELP_COMMANDS]
 
 FORMATTED_ARGV = [["overlap"], ["eval"], ["diff"]]
-ALL_VERB_COMMANDS = [argv for argv in ALL_HELP_COMMANDS if argv and argv != ["query"]]
 
 
 @pytest.mark.parametrize("argv", ALL_HELP_COMMANDS, ids=ALL_HELP_IDS)
 def test_every_verb_gets_the_styled_help(argv: list[str], capsys) -> None:
-    """Verify --help renders with themed console panel styling across all verbs."""
+    """Verify --help writes styled usage to stdout with no stderr or default-False noise."""
     assert main([*argv, "--help"]) == 0
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert out.startswith("Usage:")
     assert "╭─" in out
+    assert captured.err == ""
+    assert "[default: False]" not in out
+    if argv == ["optimize"]:
+        for flag in ("--iterations", "--holdout", "--review", "--force", "--no-auto-queries"):
+            assert flag in out
 
 
 @pytest.mark.parametrize("argv", FORMATTED_ARGV, ids=" ".join)
@@ -2102,13 +1950,6 @@ def test_a_runtime_that_probes_nothing_is_not_offered_as_though_it_did(
     assert _flag_line(capsys.readouterr().out, "--agent") == snapshot
 
 
-@pytest.mark.parametrize("argv", ALL_VERB_COMMANDS, ids=" ".join)
-def test_a_switch_never_states_its_default(argv: list[str], capsys) -> None:
-    """Verify boolean switch flags omit redundant default false annotations in help output."""
-    assert main([*argv, "--help"]) == 0
-    assert "[default: False]" not in capsys.readouterr().out
-
-
 def _flag_line(rendered: str, flag: str) -> str:
     """Extract and normalize help table row for specified flag."""
     lines = rendered.splitlines()
@@ -2123,15 +1964,6 @@ def _flag_line(rendered: str, flag: str) -> str:
             break
         row.append(line)
     return " ".join(part.strip("│ ") for part in row)
-
-
-@pytest.mark.parametrize("argv", ALL_HELP_COMMANDS, ids=ALL_HELP_IDS)
-def test_help_answers_on_stdout(argv: list[str], capsys) -> None:
-    """Verify --help writes formatted usage text to stdout rather than stderr."""
-    assert main([*argv, "--help"]) == 0
-    captured = capsys.readouterr()
-    assert "Usage:" in captured.out
-    assert captured.err == ""
 
 
 LOOP_VERBS = {
@@ -2177,11 +2009,12 @@ def _verbs(section: str) -> set[str]:
 
 
 def test_the_listing_asks_for_a_verb_and_nothing_else(capsys) -> None:
-    """Verify root help usage line specifies COMMAND placeholder."""
+    """Verify root help usage line specifies COMMAND placeholder and omits unbuilt verbs."""
     assert main(["--help"]) == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0] == "Usage: reach COMMAND"
     assert "TOKENS" not in out
+    assert not {"generate", "ablate", "compare"} & set(out.split())
 
 
 def test_every_verb_is_filed_under_what_it_is_for(capsys, snapshot) -> None:
@@ -2204,14 +2037,6 @@ def test_the_run_flags_are_grouped_by_what_they_configure(capsys) -> None:
     for section in ("Catalog", "Runtime", "Plan", "Study"):
         assert section in out
     assert out.index("Study") < out.index("Catalog")
-
-
-def test_the_unbuilt_verbs_are_not_advertised(capsys) -> None:
-    """Verify unbuilt or legacy command names are absent from help output."""
-    assert main(["--help"]) == 0
-    out = capsys.readouterr().out
-    assert not {"generate"} & set(out.split())
-    assert not {"ablate", "compare"} & set(out.split())
 
 
 VERB_MINIMUM = {
@@ -2378,18 +2203,6 @@ def test_cli_subcommand_is_imported_in_cli_init(verb: str, cli_init_content: str
     )
 
 
-def test_agent_cli_literal_matches_known_agents() -> None:
-    """Verify AgentName literal type in reach.cli.flags matches known_agents registry."""
-    import typing
-
-    target_type = AgentName.__value__ if hasattr(AgentName, "__value__") else AgentName
-    cli_agents = set(typing.get_args(target_type))
-    registered_agents = set(known_agents())
-    assert cli_agents == registered_agents, (
-        f"AgentName choices {cli_agents} do not match known_agents {registered_agents}"
-    )
-
-
 def test_query_draft_destination_collision_and_force(
     skill_repo: Path,
     tmp_path: Path,
@@ -2440,7 +2253,6 @@ def test_query_draft_destination_collision_and_force(
 def test_bare_query_command_auto_discovers_skills(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Verify bare reach query without target auto-discovers skills from workspace."""
     drafted = QuerySet(

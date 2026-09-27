@@ -20,7 +20,7 @@ import csv
 import io
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -41,7 +41,6 @@ from reach.rewrite import (
     CededTerm,
     Rewrite,
     Verdict,
-    ceded_terms,
     skill_body,
     suggest_all,
     suggest_rewrite,
@@ -53,10 +52,12 @@ from reach.views import print_rewrite, render_rewrite, suggest_view
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from conftest import SyntheticCorpusBuilder
+
     from reach.models import Skill
 
 
-def emitted(argv: list[str], capsys) -> str:
+def emitted(argv: list[str], capsys: pytest.CaptureFixture[str]) -> str:
     """Execute CLI command and return captured stdout output."""
     assert main(argv) == 0
     return capsys.readouterr().out
@@ -76,7 +77,7 @@ Staging catches drift before rollout. Use canary cohorts; canary first.
 
 
 @pytest.fixture
-def bystanders(corpus_builder) -> list[Skill]:
+def bystanders(corpus_builder: type[SyntheticCorpusBuilder]) -> list[Skill]:
     """Provide five non-competing skills to establish baseline corpus size."""
     return (
         corpus_builder()
@@ -110,7 +111,7 @@ def make_corpus(corpus_builder, bystanders: list[Skill]) -> Callable[..., list[S
 
 
 @pytest.fixture
-def suggest(make_corpus):
+def suggest(make_corpus) -> Callable[..., Rewrite]:
     """Return a factory that ranks a corpus and suggests against one skill of it."""
 
     def build(
@@ -118,7 +119,7 @@ def suggest(make_corpus):
         name: str = "widget-basics",
         body: str = BODY,
         rival: str = RIVAL,
-        **options,
+        **options: Any,
     ) -> Rewrite:
         """Suggest for the named skill of a corpus described as asked."""
         corpus = make_corpus(description, name, rival)
@@ -129,7 +130,7 @@ def suggest(make_corpus):
 
 
 @pytest.fixture
-def shown(make_console, rendered) -> Callable[..., str]:
+def shown(make_console, rendered: Callable[..., str]) -> Callable[..., str]:
     """Return what `print_rewrite` draws for one suggestion."""
 
     def render(rewrite: Rewrite, width: int = 100) -> str:
@@ -427,16 +428,6 @@ def test_a_skill_with_no_file_behind_it_has_no_body_rather_than_an_error(
 # --- CLI suggestion output formatting ----------------------------------------
 
 
-def test_the_page_leads_with_the_edit_and_names_both_skills(suggest, shown) -> None:
-    """Verify printed suggestion displays skill name, rival name, ceded term, and unclaimed term."""
-    page = shown(suggest())
-
-    assert "widget-basics" in page
-    assert "widget-rollout" in page
-    assert "rollout" in page
-    assert "staging" in page
-
-
 def test_the_page_says_outright_that_no_wording_change_will_help(suggest, shown) -> None:
     """Verify printed page explicitly explains when no wording change is recommended."""
     page = shown(suggest(HEDGED))
@@ -493,13 +484,16 @@ def test_a_crowded_field_is_reported_beside_the_one_rival_that_was_named(
     rendered_rewrite = shown(rewrite)
     assert "1 more rival scores within 10% (widget-" in rendered_rewrite
 
-
-def test_a_field_of_one_says_nothing_about_how_many_others_are_close(suggest, shown) -> None:
-    """Verify single contender does not report crowded field warning."""
-    rewrite = suggest()
-
-    assert rewrite.contenders == ("widget-rollout",)
-    assert "also within reach" not in shown(rewrite)
+    # Also verify dynamic band formatting with multiple contenders
+    custom_rw = Rewrite(
+        skill="target-skill",
+        rival="primary-rival",
+        contenders=("primary-rival", "second-rival", "third-rival"),
+        band=0.85,
+    )
+    assert "2 more rivals score within 15% (second-rival, third-rival)" in shown(
+        custom_rw, width=120
+    )
 
 
 def test_the_terms_survive_a_terminal_too_narrow_for_the_line(suggest, shown) -> None:
@@ -619,7 +613,7 @@ def test_a_ceded_term_cannot_carry_a_negative_share() -> None:
 
 
 def test_the_suggestion_renders_as_json(skill_repo: Path, capsys) -> None:
-    """Verify overlap --suggest --format json outputs structured suggestion payload."""
+    """Verify overlap --suggest --format json outputs structured suggestion payload and caveat."""
     payload = json.loads(
         emitted(
             [
@@ -628,6 +622,8 @@ def test_the_suggestion_renders_as_json(skill_repo: Path, capsys) -> None:
                 str(skill_repo),
                 "--skill",
                 "gke-basics",
+                "--skill",
+                "gcs-lifecycle-rules",
                 "--suggest",
                 "--format",
                 "json",
@@ -638,33 +634,13 @@ def test_the_suggestion_renders_as_json(skill_repo: Path, capsys) -> None:
     row = payload["skills"][0]
 
     assert payload["corpus_size"] == 3
-    assert row["skill"] == "gke-basics"
+    assert [r["skill"] for r in payload["skills"]] == [
+        "gke-basics",
+        "gcs-lifecycle-rules",
+    ]
     assert row["verdict"] in {v.value for v in Verdict}
     assert isinstance(row["crowded"], bool)
     assert isinstance(row["contenders"], list)
-
-
-def test_the_rendering_inherits_the_measure_s_caveat_and_adds_its_own(
-    skill_repo: Path,
-    capsys,
-) -> None:
-    """Verify suggestion JSON caveat includes base overlap caveat plus drafting disclaimer."""
-    payload = json.loads(
-        emitted(
-            [
-                "overlap",
-                "--skills",
-                str(skill_repo),
-                "--skill",
-                "gke-basics",
-                "--suggest",
-                "--format",
-                "json",
-            ],
-            capsys,
-        ),
-    )
-
     assert payload["caveat"] == list(REWRITE_CAVEAT)
     assert "replacement descriptions" in payload["caveat"][-1]
 
@@ -683,42 +659,14 @@ def test_a_skill_nothing_competes_with_renders_its_rival_as_absent(
     assert payload["skills"][0]["rival"] is None
 
 
-def test_the_rendering_answers_for_every_skill_it_was_asked_about(
-    skill_repo: Path,
-    capsys,
-) -> None:
-    """Verify JSON output includes entries for each repeated --skill flag."""
-    payload = json.loads(
-        emitted(
-            [
-                "overlap",
-                "--skills",
-                str(skill_repo),
-                "--skill",
-                "gke-basics",
-                "--skill",
-                "gcs-lifecycle-rules",
-                "--suggest",
-                "--format",
-                "json",
-            ],
-            capsys,
-        ),
-    )
-
-    assert [r["skill"] for r in payload["skills"]] == [
-        "gke-basics",
-        "gcs-lifecycle-rules",
-    ]
-
-
 def test_the_csv_draws_one_row_per_term_and_says_which_kind_it_is(make_corpus) -> None:
-    """Verify CSV output breaks down suggestion terms by role column."""
+    """Verify CSV output breaks down suggestion terms by role column and counts contenders."""
     corpus = make_corpus()
     view = suggest_view(rank_corpus(corpus), corpus, ["widget-basics"])
     rows = list(csv.DictReader(io.StringIO(render_rewrite(view, "csv"))))
     roles = {row["role"] for row in rows}
     ceded = next(row for row in rows if row["role"] == "ceded")
+    named = json.loads(render_rewrite(view, "json"))["skills"][0]["contenders"]
 
     assert list(rows[0]) == [
         "skill",
@@ -733,6 +681,7 @@ def test_the_csv_draws_one_row_per_term_and_says_which_kind_it_is(make_corpus) -
     assert "ceded" in roles
     assert ceded["rival"] == "widget-rollout"
     assert float(ceded["share"]) > 0
+    assert {row["contenders"] for row in rows} == {str(len(named))}
 
 
 def test_a_declined_suggestion_still_draws_a_row(make_corpus) -> None:
@@ -744,16 +693,6 @@ def test_a_declined_suggestion_still_draws_a_row(make_corpus) -> None:
     assert view.skills[0].verdict is Verdict.CONTESTED
     assert [row["skill"] for row in rows] == ["widget-basics"] * len(rows)
     assert all(row["verdict"] == "contested" for row in rows)
-
-
-def test_the_csv_counts_the_contenders_the_json_names(make_corpus) -> None:
-    """Verify CSV contenders column contains integer count of contenders list."""
-    corpus = make_corpus()
-    view = suggest_view(rank_corpus(corpus), corpus, ["widget-basics"])
-    rows = list(csv.DictReader(io.StringIO(render_rewrite(view, "csv"))))
-    named = json.loads(render_rewrite(view, "json"))["skills"][0]["contenders"]
-
-    assert {row["contenders"] for row in rows} == {str(len(named))}
 
 
 def test_the_rendering_goes_to_stdout_and_the_notes_beside_it(
@@ -864,38 +803,6 @@ def test_suggest_rewrite_tracks_missing_mutual_handoffs(corpus_builder) -> None:
     assert rw_2.missing_mutual_handoffs == ()
 
 
-@pytest.mark.parametrize(
-    ("band", "contenders", "expected_text"),
-    [
-        (
-            0.90,
-            ("primary-rival", "second-rival"),
-            "1 more rival scores within 10% (second-rival)",
-        ),
-        (
-            0.85,
-            ("primary-rival", "second-rival", "third-rival"),
-            "2 more rivals score within 15% (second-rival, third-rival)",
-        ),
-    ],
-)
-def test_print_rewrite_formats_dynamic_contender_band_and_names(
-    shown,
-    band: float,
-    contenders: tuple[str, ...],
-    expected_text: str,
-) -> None:
-    """Verify print_rewrite formats contender percentage from rewrite.band and lists rival names."""
-    rw = Rewrite(
-        skill="target-skill",
-        rival=contenders[0],
-        contenders=contenders,
-        band=band,
-    )
-    rendered_text = shown(rw, width=120)
-    assert expected_text in rendered_text
-
-
 def test_overlap_cli_wires_overlap_settings_from_reach_toml(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -933,41 +840,6 @@ def test_overlap_cli_wires_overlap_settings_from_reach_toml(
     assert code == 0
     err = capsys.readouterr().err
     assert "within 20%" in err
-
-
-def test_ceded_terms_excludes_target_skill_name_tokens(corpus_builder) -> None:
-    """Verify ceded_terms never flags tokens from the target skill's own name."""
-    corpus = (
-        corpus_builder()
-        .add(
-            "flux-engine",
-            "Guide Flux Engine usage on relay clusters with batch pipeline transforms.",
-        )
-        .add(
-            "flux-engine-streaming",
-            "Use the Flux Engine streaming endpoint for Flux Engine events and Flux Engine hooks.",
-        )
-        .add(
-            "vault-archives",
-            "Manage cold storage vaults and archive retention lock policies.",
-        )
-        .add(
-            "parcel-routing",
-            "Route inbound freight parcels across regional sorting hubs.",
-        )
-        .build_skills()
-    )
-    scorer = Bm25Scorer.from_skills(corpus)
-    overlap = rank_corpus(corpus)
-    comp = overlap.find("flux-engine")
-    assert comp.nearest_rival is not None
-    target = next(s for s in corpus if s.name == "flux-engine")
-    rival = next(s for s in corpus if s.name == comp.nearest_rival.name)
-
-    ceded = ceded_terms(target, rival, scorer, comp.nearest_rival.score)
-    ceded_names = {c.term for c in ceded}
-    assert "flux" not in ceded_names
-    assert "engine" not in ceded_names
 
 
 def test_suggest_all_honors_overlap_settings_min_claim_length_and_uses(

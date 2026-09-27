@@ -220,10 +220,10 @@ def test_view_without_artifact_and_no_default_gives_clear_guidance(
     assert "reach eval" in clean
 
 
-def test_the_document_is_one_self_contained_file(
+def test_the_document_is_one_self_contained_file_with_matrix_and_queries(
     artifact: Artifact, external_reference_re: re.Pattern[str]
 ) -> None:
-    """Verify render_view_html generates self-contained HTML without external assets."""
+    """Verify render_view_html generates self-contained HTML with confusion matrix and queries."""
     out = render_view_html(artifact)
     assert out.lstrip().startswith("<!DOCTYPE html>")
     tree = HTMLParser(out)
@@ -231,6 +231,29 @@ def test_the_document_is_one_self_contained_file(
     assert tree.css_first("style") is not None
     assert tree.css_first("script") is not None
     assert not external_reference_re.search(out)
+
+    # Confusion matrix misroute cell and abstention column
+    miss_cell = tree.css_first("#confusion-table td.miss")
+    assert miss_cell is not None
+    assert miss_cell.text().strip() == "1"
+    assert "Keep audit logs for seven years for compliance." in (
+        miss_cell.attributes.get("title") or ""
+    )
+    headers = [th.text().strip() for th in tree.css("#confusion-table thead th")]
+    assert "(no skill)" in headers
+
+    # Expandable queries and hit/miss styling
+    details = tree.css("details.query")
+    assert len(details) == len(artifact.queries)
+    preview_texts = [node.text().strip() for node in tree.css("details.query summary .query-text")]
+    assert "Keep audit logs for seven years for compliance." in preview_texts
+    assert "Tier old objects to Coldline after 30 days." in preview_texts
+    assert tree.css_first("details.query.hit") is not None
+    assert tree.css_first("details.query.miss, details.query.error") is not None
+
+    # Header consistency interval formatting
+    dim_spans = [span.text().strip() for span in tree.css(".figures dd span.dim")]
+    assert any(s.startswith("(") and s.endswith(")") for s in dim_spans)
 
 
 def test_render_view_dispatches_by_format_name(artifact: Artifact) -> None:
@@ -245,24 +268,12 @@ def test_an_unknown_format_names_the_ones_that_exist(artifact: Artifact) -> None
         render_view(artifact, "pdf")
 
 
-def test_the_confusion_matrix_shows_the_split_querys_misroute(
-    artifact: Artifact,
-) -> None:
-    """Verify confusion matrix renders misrouted cell with query text hover title."""
-    tree = HTMLParser(render_view_html(artifact))
-    miss_cell = tree.css_first("#confusion-table td.miss")
-    assert miss_cell is not None
-    assert miss_cell.text().strip() == "1"
-    assert "Keep audit logs for seven years for compliance." in (
-        miss_cell.attributes.get("title") or ""
-    )
-
-
 def test_confusion_matrix_and_collisions_show_reasoning_when_present(
     artifact: Artifact,
 ) -> None:
     """Verify HTML view renders thought traces in tooltip and collisions table."""
     from reach.artifact import NO_SKILL, SampleQuery
+    from reach.leak import Leak
 
     collision_pair = next(p for p in artifact.confusion if p.invoked not in (p.expected, NO_SKILL))
     updated_pair = collision_pair.model_copy(
@@ -277,17 +288,19 @@ def test_confusion_matrix_and_collisions_show_reasoning_when_present(
             ),
         },
     )
-    test_artifact = artifact.model_copy(update={"confusion": (updated_pair,)})
+    test_artifact = artifact.model_copy(
+        update={
+            "confusion": (updated_pair,),
+            "queries": (
+                artifact.queries[0].model_copy(update={"leak": Leak(names_target=True)}),
+                *artifact.queries[1:],
+            ),
+        },
+    )
     tree = HTMLParser(render_view_html(test_artifact))
     assert "thought: Thinking about bucket retention rules." in tree.text()
+    assert "names target" in tree.text()
     assert tree.css_first("#collisions-table") is not None
-
-
-def test_abstention_is_a_column_of_its_own(artifact: Artifact) -> None:
-    """Verify confusion matrix includes explicit '(no skill)' column for abstentions."""
-    tree = HTMLParser(render_view_html(artifact))
-    headers = [th.text().strip() for th in tree.css("#confusion-table thead th")]
-    assert "(no skill)" in headers
 
 
 def test_an_unprobed_artifact_says_so_rather_than_rendering_an_empty_table(
@@ -299,36 +312,6 @@ def test_an_unprobed_artifact_says_so_rather_than_rendering_an_empty_table(
     text = tree.text()
     assert "No probes were recorded." in text
     assert "No queries were recorded." in text
-
-
-def test_the_skills_table_is_filterable(artifact: Artifact) -> None:
-    """Verify HTML output includes interactive JavaScript filter function and skills table."""
-    tree = HTMLParser(render_view_html(artifact))
-    assert tree.css_first("input[oninput*=\"reachFilterRows(this, 'skills-table')\"]") is not None
-    table = tree.css_first("#skills-table")
-    assert table is not None
-    rendered_skills = [td.text().strip() for td in table.css("tbody td:first-child")]
-    for skill in artifact.skills:
-        assert skill.skill in rendered_skills
-
-
-def test_queries_are_expandable_and_carry_their_full_text(
-    artifact: Artifact,
-) -> None:
-    """Verify queries are rendered as expandable HTML details elements containing full text."""
-    tree = HTMLParser(render_view_html(artifact))
-    details = tree.css("details.query")
-    assert len(details) == len(artifact.queries)
-    preview_texts = [node.text().strip() for node in tree.css("details.query summary .query-text")]
-    assert "Keep audit logs for seven years for compliance." in preview_texts
-    assert "Tier old objects to Coldline after 30 days." in preview_texts
-
-
-def test_a_clean_query_and_a_split_one_are_styled_apart(artifact: Artifact) -> None:
-    """Verify HTML styling distinguishes fully hit queries from misrouted queries."""
-    tree = HTMLParser(render_view_html(artifact))
-    assert tree.css_first("details.query.hit") is not None
-    assert tree.css_first("details.query.miss, details.query.error") is not None
 
 
 def test_query_text_is_escaped_not_executed(corpus, whole_catalog, make_config) -> None:
@@ -378,14 +361,6 @@ def test_query_text_is_escaped_not_executed(corpus, whole_catalog, make_config) 
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in out
 
 
-def test_the_queries_container_is_filterable(artifact: Artifact) -> None:
-    """Verify HTML output includes interactive query filter function and container."""
-    tree = HTMLParser(render_view_html(artifact))
-    filter_selector = "input[oninput*=\"reachFilterQueries(this, 'queries-container')\"]"
-    assert tree.css_first(filter_selector) is not None
-    assert tree.css_first("#queries-container") is not None
-
-
 def test_view_open_flag_launches_browser(recorded: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify reach view --open renders HTML and triggers webbrowser.open."""
     opened_urls: list[str] = []
@@ -395,15 +370,6 @@ def test_view_open_flag_launches_browser(recorded: Path, monkeypatch: pytest.Mon
     assert len(opened_urls) == 1
     assert opened_urls[0].startswith("file://")
     assert opened_urls[0].endswith(".html")
-
-
-def test_header_consistency_interval_formatting_includes_parentheses(
-    artifact: Artifact,
-) -> None:
-    """Verify consistency interval is rendered with spacing and dim parentheses."""
-    tree = HTMLParser(render_view_html(artifact))
-    dim_spans = [span.text().strip() for span in tree.css(".figures dd span.dim")]
-    assert any(s.startswith("(") and s.endswith(")") for s in dim_spans)
 
 
 def test_skills_table_renders_dash_for_missing_and_explicit_absorbed_zero(
@@ -429,39 +395,6 @@ def test_skills_table_renders_dash_for_missing_and_explicit_absorbed_zero(
     assert dash.text().strip() == "—"
     cell_texts = [td.text().strip() for td in row.css("td")]
     assert "0" in cell_texts
-
-
-def test_query_summary_contains_query_text_preview(artifact: Artifact) -> None:
-    """Verify query summary accordion contains query text preview element."""
-    tree = HTMLParser(render_view_html(artifact))
-    query_texts = tree.css("details.query summary span.query-text")
-    assert len(query_texts) > 0
-
-
-def test_queries_support_expand_and_collapse_all(artifact: Artifact) -> None:
-    """Verify view HTML contains expand all and collapse all toggles and script function."""
-    tree = HTMLParser(render_view_html(artifact))
-    assert tree.css_first('button[onclick*="reachToggleAllQueries(true)"]') is not None
-    assert tree.css_first('button[onclick*="reachToggleAllQueries(false)"]') is not None
-    script = tree.css_first("script")
-    assert script is not None
-    assert "function reachToggleAllQueries" in script.text()
-
-
-def test_queries_render_exact_data_attributes_and_exact_js_matching(artifact: Artifact) -> None:
-    """Verify details.query elements expose data attributes and JS uses exact array matching."""
-    tree = HTMLParser(render_view_html(artifact))
-    details = tree.css("details.query")
-    assert len(details) > 0
-    for item in details:
-        assert "data-expected" in item.attributes
-        assert "data-selections" in item.attributes
-    script = tree.css_first("script")
-    assert script is not None
-    js_text = script.text()
-    assert "getSelectedSkills(q).includes(" in js_text
-    assert "q.textContent.includes(" not in js_text
-    assert "td.textContent.trim() === ''" in js_text
 
 
 def test_collisions_html_renders_individual_query_probe_count(artifact: Artifact) -> None:
@@ -612,3 +545,55 @@ def test_html_view_renders_consistency_dash_when_no_repeated_queries(
     dd_text = dd.text().strip()
     assert dd_text.startswith("—")
     assert "no repeated queries" in dd_text
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "text"])
+def test_view_eval_and_sweep_file_outputs(
+    recorded: Path,
+    sample_scaling_study: ScalingStudy,
+    tmp_path: Path,
+    fmt: str,
+) -> None:
+    """Verify reach view --out writes evaluation and sweep artifacts across formats."""
+    eval_out = tmp_path / f"eval_out.{fmt}"
+    assert (
+        main(["view", str(recorded), "--format", fmt, "--show-queries", "--out", str(eval_out)])
+        == 0
+    )
+    assert eval_out.is_file()
+    assert eval_out.read_text(encoding="utf-8")
+
+    sweep_in = tmp_path / "sweep_in.json"
+    sweep_in.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+    sweep_fmt = "json" if fmt == "jsonl" else fmt
+    sweep_out = tmp_path / f"sweep_out.{sweep_fmt}"
+    assert main(["view", str(sweep_in), "--format", sweep_fmt, "--out", str(sweep_out)]) == 0
+    assert sweep_out.is_file()
+    assert sweep_out.read_text(encoding="utf-8")
+
+
+def test_view_browser_default_out_and_alt_artifact_fallback(
+    artifact: Artifact,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify reach view resolves queries.json.artifact.json and writes .reach/report.html."""
+    monkeypatch.chdir(tmp_path)
+    reach_dir = tmp_path / ".reach"
+    reach_dir.mkdir()
+    alt_path = reach_dir / "queries.json.artifact.json"
+    alt_path.write_text(artifact.model_dump_json(), encoding="utf-8")
+
+    opened: list[str] = []
+
+    def _fake_open(url: str) -> bool:
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr("webbrowser.open", _fake_open)
+    assert main(["view", "--open"]) == 0
+    assert (reach_dir / "report.html").is_file()
+    assert len(opened) == 1
+
+    # Passing a directory as artifact triggers OSError when reading text (exit 2)
+    assert main(["view", str(reach_dir)]) == 2

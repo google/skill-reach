@@ -25,11 +25,11 @@ import pytest
 from reach.cli import main
 
 if TYPE_CHECKING:
-    pass
+    from conftest import SyntheticCorpusBuilder
 
 
 @pytest.fixture
-def cluster_corpus(corpus_builder, tmp_path: Path) -> Path:
+def cluster_corpus(corpus_builder: type[SyntheticCorpusBuilder], tmp_path: Path) -> Path:
     """Provide a corpus of skills with clear community structure."""
     return (
         corpus_builder()
