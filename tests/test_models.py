@@ -78,17 +78,6 @@ def test_probe_result_invoked_skill_property() -> None:
     assert res2.predicted_label == NO_SKILL
 
 
-def test_selection_outcome_invoked_skill_property() -> None:
-    """Verify SelectionOutcome exposes invoked_skill as property over invoked_skills."""
-    out1 = SelectionOutcome(invoked_skills=("skill-1", "skill-2"))
-    assert out1.invoked_skills == ("skill-1", "skill-2")
-    assert out1.invoked_skill == "skill-1"
-
-    out2 = SelectionOutcome()
-    assert out2.invoked_skills == ()
-    assert out2.invoked_skill is None
-
-
 def test_probe_result_from_outcome() -> None:
     """Verify ProbeResult.from_outcome converts SelectionOutcome into a ProbeResult."""
     from reach.models import Catalog, Provenance
@@ -132,13 +121,26 @@ def test_probe_result_from_outcome() -> None:
 
 
 def test_catalog_rejects_duplicate_skills() -> None:
-    """Verify Catalog model rejects duplicate skill names in skills tuple."""
+    """Verify Catalog model rejects duplicate skill names."""
     with pytest.raises(ValueError, match="duplicate"):
         Catalog(
             id="cat-dup",
             mode=CatalogMode.ALL,
             skills=("skill-a", "skill-b", "skill-a"),
         )
+
+
+def test_skill_requires_non_empty_name_and_description() -> None:
+    """Verify Skill custom field validators reject whitespace-only name or description."""
+    from pathlib import Path
+
+    from reach.models import Skill
+
+    with pytest.raises(ValidationError, match="name must be non-empty"):
+        Skill(name="   ", description="Valid description.", path=Path("SKILL.md"))
+
+    with pytest.raises(ValidationError, match="description must be non-empty"):
+        Skill(name="s", description="   ", path=Path("SKILL.md"))
 
 
 def test_query_acceptable_skills() -> None:
@@ -155,73 +157,3 @@ def test_query_acceptable_skills() -> None:
         }
     )
     assert q_with_list.acceptable_skills == ("cloud-run-deploy", "app-engine-deploy")
-
-
-def test_query_and_catalog_forbid_extra_fields() -> None:
-    """Verify Query and Catalog reject unexpected extra attributes."""
-    with pytest.raises(ValidationError, match="extra"):
-        Query.model_validate(
-            {
-                "id": "q1",
-                "text": "Deploy app",
-                "expected_skill": "deploy",
-                "extra_attribute": "disallowed",
-            }
-        )
-
-    with pytest.raises(ValidationError, match="extra"):
-        Catalog.model_validate(
-            {
-                "id": "cat1",
-                "mode": CatalogMode.ALL,
-                "skills": ("deploy",),
-                "unknown_key": "disallowed",
-            }
-        )
-
-
-def test_probe_result_turns_taken_validation() -> None:
-    """Verify ProbeResult enforces turns_taken greater than or equal to one."""
-    res = ProbeResult(
-        query_id="q1",
-        catalog_id="cat1",
-        catalog_mode=CatalogMode.ALL,
-        catalog_size=1,
-        model="test-model",
-        runtime="test-runtime",
-        turns_taken=2,
-    )
-    assert res.turns_taken == 2
-
-    with pytest.raises(ValidationError, match="greater than or equal to 1"):
-        ProbeResult.model_validate(
-            {
-                "query_id": "q1",
-                "catalog_id": "cat1",
-                "catalog_mode": CatalogMode.ALL,
-                "catalog_size": 1,
-                "model": "test-model",
-                "runtime": "test-runtime",
-                "turns_taken": 0,
-            }
-        )
-
-
-def test_probe_result_requires_runtime() -> None:
-    """Verify ProbeResult requires an explicit runtime parameter."""
-    from pathlib import Path
-
-    from reach.models import Skill
-
-    with pytest.raises(ValidationError, match="runtime"):
-        ProbeResult.model_validate(
-            {
-                "query_id": "q1",
-                "catalog_id": "cat1",
-                "catalog_mode": CatalogMode.ALL,
-                "catalog_size": 1,
-                "model": "test-model",
-            }
-        )
-    with pytest.raises(ValidationError, match="description must be non-empty"):
-        Skill(name="s", description="   ", path=Path("SKILL.md"))

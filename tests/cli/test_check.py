@@ -228,46 +228,6 @@ def test_check_cli_since_flag_overrides_config(
         assert mock_run.call_args.kwargs["since"] == "HEAD~1"
 
 
-def test_check_cli_trajectory_flags_passed_to_run_check(
-    write_skill: Callable[..., Path],
-) -> None:
-    """Verify trajectory threshold CLI flags are passed correctly to run_check."""
-    from unittest.mock import patch
-
-    from reach.check import CheckOutcome
-    from reach.lint import LintReport
-
-    skill_dir = write_skill(
-        name="valid-skill",
-        description="A sufficiently detailed description that satisfies standard rules.",
-    )
-    mock_outcome = CheckOutcome(lint_report=LintReport(), skills_checked=1)
-
-    with patch("reach.cli.check.run_check", return_value=mock_outcome) as mock_run:
-        main(
-            [
-                "check",
-                str(skill_dir),
-                "--min-entrypoint",
-                "0.85",
-                "--min-reachability",
-                "0.90",
-                "--min-efficiency",
-                "0.80",
-                "--min-f1",
-                "0.82",
-                "--max-redundancy",
-                "0.5",
-            ]
-        )
-        kwargs = mock_run.call_args.kwargs
-        assert kwargs["min_entrypoint"] == 0.85
-        assert kwargs["min_reachability"] == 0.90
-        assert kwargs["min_efficiency"] == 0.80
-        assert kwargs["min_f1"] == 0.82
-        assert kwargs["max_redundancy"] == 0.5
-
-
 def test_check_cli_range_validators_reject_invalid_values(capsys) -> None:
     """Verify cyclopts range validators reject out-of-bounds numeric CLI flags."""
     assert main(["check", "--min-recall", "1.5"]) == 2

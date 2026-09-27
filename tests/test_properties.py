@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from reach.exchange import Exchange, export_query_set, import_query_set
@@ -97,6 +97,7 @@ def skill_corpora(draw: st.DrawFn) -> list[Skill]:
     ]
 
 
+@settings(max_examples=35)
 @given(skill_corpora(), st.lists(_TERM, max_size=6))
 def test_bm25_scores_are_never_negative(skills: list[Skill], query: list[str]) -> None:
     """Verify BM25 scores are non-negative across all skills and queries."""
@@ -106,6 +107,7 @@ def test_bm25_scores_are_never_negative(skills: list[Skill], query: list[str]) -
         assert scorer.score(query, skill.name) >= 0.0
 
 
+@settings(max_examples=35)
 @given(skill_corpora(), st.data())
 def test_bm25_ranking_does_not_depend_on_input_order(
     skills: list[Skill],

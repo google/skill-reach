@@ -123,46 +123,31 @@ def test_runtime_summary_descriptions(runtime_name: str, expected_fragment: str)
     assert expected_fragment in summary
 
 
-def test_confirm_bypass_when_dry_run(test_console: Console) -> None:
-    """Verify dry_run=True bypasses safety confirmation immediately."""
+@pytest.mark.parametrize(
+    ("runtime_name", "dry_run", "yes", "trusted"),
+    [
+        ("pi", True, False, False),
+        ("fake", False, False, False),
+        ("keyword", False, False, False),
+        ("pi", False, True, False),
+        ("pi", False, False, True),
+    ],
+)
+def test_confirm_skill_execution_bypass_conditions(
+    test_console: Console,
+    runtime_name: str,
+    dry_run: bool,
+    yes: bool,
+    trusted: bool,
+) -> None:
+    """Verify dry_run, simulated runtimes, yes, and trusted flags bypass confirmation."""
     code = confirm_skill_execution(
         test_console,
-        runtime_name="pi",
+        runtime_name=runtime_name,
         skills=5,
-        dry_run=True,
-    )
-    assert code == 0
-
-
-@pytest.mark.parametrize("mock_runtime", ["fake", "keyword"])
-def test_confirm_bypass_for_mock_runtimes(test_console: Console, mock_runtime: str) -> None:
-    """Verify simulated drivers (fake, keyword) bypass confirmation automatically."""
-    code = confirm_skill_execution(
-        test_console,
-        runtime_name=mock_runtime,
-        skills=5,
-    )
-    assert code == 0
-
-
-def test_confirm_bypass_when_yes_flag(test_console: Console) -> None:
-    """Verify yes=True flag bypasses confirmation immediately."""
-    code = confirm_skill_execution(
-        test_console,
-        runtime_name="pi",
-        skills=5,
-        yes=True,
-    )
-    assert code == 0
-
-
-def test_confirm_bypass_when_trusted_config(test_console: Console) -> None:
-    """Verify trusted=True configuration bypasses confirmation immediately."""
-    code = confirm_skill_execution(
-        test_console,
-        runtime_name="pi",
-        skills=5,
-        trusted=True,
+        dry_run=dry_run,
+        yes=yes,
+        trusted=trusted,
     )
     assert code == 0
 

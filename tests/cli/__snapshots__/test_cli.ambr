@@ -11,15 +11,6 @@
 # name: test_every_format_flag_says_what_it_renders[overlap]
   '--format         How to render the ranking [choices: csv, json, jsonl, text] [default: text]'
 # ---
-# name: test_every_verb_is_filed_under_what_it_is_for
-  '''
-   ──────────────────────────────────────────────────────────────────────╮
-  │ --help -h  Display this message and exit.                                    │
-  │ --version  Display application version.                                      │
-  ╰──────────────────────────────────────────────────────────────────────────────╯
-  
-  '''
-# ---
 # name: test_the_verbs_are_listed_under_one_heading
   '''
   Usage: reach COMMAND

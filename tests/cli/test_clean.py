@@ -92,24 +92,6 @@ def test_clean_project_scoping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert file_b.exists()
 
 
-def test_clean_all_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify reach clean --all deletes evaluation artifacts and query sets in addition to cache."""
-    monkeypatch.chdir(tmp_path)
-    reach_dir = tmp_path / ".reach"
-    reach_dir.mkdir(parents=True, exist_ok=True)
-    eval_file = reach_dir / "eval.json"
-    queries_file = reach_dir / "queries.json"
-    report_file = reach_dir / "report.html"
-    eval_file.write_text("{}")
-    queries_file.write_text("{}")
-    report_file.write_text("<html></html>")
-
-    assert main(["clean", "--all"]) == 0
-    assert not eval_file.exists()
-    assert not queries_file.exists()
-    assert not report_file.exists()
-
-
 def test_clean_all_removes_sweep_results_and_artifact_sidecars(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -123,6 +105,8 @@ def test_clean_all_removes_sweep_results_and_artifact_sidecars(
         for name in (
             "eval.json",
             "eval.json.artifact.json",
+            "queries.json",
+            "report.html",
             "sweep.json",
             "sweep.json.artifact.json",
             "custom-run.json.artifact.json",

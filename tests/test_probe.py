@@ -125,10 +125,12 @@ def test_records_the_selection_and_its_provenance(
     assert result.error is None
 
 
+@pytest.mark.parametrize("resolved", ["claude-sonnet-5", ""])
 def test_the_row_records_what_answered_beside_what_was_asked_for(
     query: Query,
     catalog: Catalog,
     tmp_path: Path,
+    resolved: str,
 ) -> None:
     """Verify probe result preserves configured model alias alongside resolved runtime model."""
 
@@ -143,26 +145,13 @@ def test_the_row_records_what_answered_beside_what_was_asked_for(
             target_skill: str | None = None,
         ) -> SelectionOutcome:
             outcome = super().select(query_text, workdir, target_skill=target_skill)
-            return outcome.model_copy(update={"resolved_model": "claude-sonnet-5"})
+            return outcome.model_copy(update={"resolved_model": resolved})
 
     runtime = Named({query.text: "a"}, model="sonnet")
     runtime.install(catalog, _skills(("a", "b"), tmp_path), tmp_path)
     result = _probe(query, catalog, tmp_path, runtime)
     assert result.model == "sonnet"
-    assert result.resolved_model == "claude-sonnet-5"
-
-
-def test_a_runtime_that_names_no_model_leaves_the_row_saying_so(
-    query: Query,
-    catalog: Catalog,
-    tmp_path: Path,
-) -> None:
-    """Verify empty resolved_model remains empty if runtime provides no resolution."""
-    runtime = FakeRuntime({query.text: "a"}, model="sonnet")
-    runtime.install(catalog, _skills(("a", "b"), tmp_path), tmp_path)
-    result = _probe(query, catalog, tmp_path, runtime)
-    assert result.model == "sonnet"
-    assert result.resolved_model == ""
+    assert result.resolved_model == resolved
 
 
 def test_abstention_is_recorded_not_treated_as_failure(
@@ -212,46 +201,26 @@ def test_a_drifted_catalog_invalidates_the_probe(
     assert result.error == "catalog not resident: b"
 
 
-def test_attempt_number_is_recorded(query: Query, catalog: Catalog, tmp_path: Path) -> None:
-    """Verify attempt parameter is recorded in probe result."""
-    result = _probe(query, catalog, tmp_path, FakeRuntime(), attempt=3)
-    assert result.attempt == 3
-
-
-def test_every_invocation_is_carried_onto_the_row(
+@pytest.mark.parametrize(
+    ("scripted", "attempt", "expected_first", "expected_tuple"),
+    [
+        (SelectionOutcome(invoked_skills=("a", "b")), 3, "a", ("a", "b")),
+        ("a", 1, "a", ("a",)),
+        (SelectionOutcome(invoked_skills=()), 1, None, ()),
+    ],
+)
+def test_invocations_and_attempt_are_carried_onto_the_row(
     query: Query,
     catalog: Catalog,
     tmp_path: Path,
+    scripted: SelectionOutcome | str,
+    attempt: int,
+    expected_first: str | None,
+    expected_tuple: tuple[str, ...],
 ) -> None:
-    """Verify invoked_skills sequence is preserved on probe result."""
-    runtime = FakeRuntime(
-        {query.text: SelectionOutcome(invoked_skills=("a", "b"))},
-    )
-    result = _probe(query, catalog, tmp_path, runtime)
-    assert result.invoked_skill == "a"
-    assert result.invoked_skills == ("a", "b")
-
-
-def test_single_invocation_promotes_to_tuple_on_the_row(
-    query: Query,
-    catalog: Catalog,
-    tmp_path: Path,
-) -> None:
-    """Verify single invoked skill defaults to 1-tuple in invoked_skills."""
-    result = _probe(query, catalog, tmp_path, FakeRuntime({query.text: "a"}))
-    assert result.invoked_skills == ("a",)
-
-
-def test_no_invocations_defaults_to_empty_tuple(
-    query: Query,
-    catalog: Catalog,
-    tmp_path: Path,
-) -> None:
-    """Verify zero invoked skills yields empty tuple in invoked_skills."""
-    result = _probe(
-        query,
-        catalog,
-        tmp_path,
-        FakeRuntime({query.text: SelectionOutcome(invoked_skills=())}),
-    )
-    assert result.invoked_skills == ()
+    """Verify invoked_skills tuple and attempt number are preserved on probe result."""
+    runtime = FakeRuntime({query.text: scripted})
+    result = _probe(query, catalog, tmp_path, runtime, attempt=attempt)
+    assert result.attempt == attempt
+    assert result.invoked_skill == expected_first
+    assert result.invoked_skills == expected_tuple
