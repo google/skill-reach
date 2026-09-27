@@ -22,6 +22,8 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from reach.runtime._subprocess import (
     _ProcessGroupController,
     _StderrDrainer,
@@ -34,7 +36,7 @@ if TYPE_CHECKING:
 
 
 def test_run_subprocess_probe_real_execution(tmp_path: Path) -> None:
-    """Verify live subprocess probe captures full stdout and returncode on success."""
+    """Verify live subprocess probe captures full stdout and reaps children closing stdout early."""
     cmd = (
         ["sh", "-c", "printf 'hello\\nworld\\n'"]
         if os.name != "nt"
@@ -46,6 +48,13 @@ def test_run_subprocess_probe_real_execution(tmp_path: Path) -> None:
     assert completed is not None
     assert completed.returncode == 0
     assert completed.stdout == "hello\nworld\n"
+
+    if os.name != "nt":
+        early_close_cmd = ["sh", "-c", "printf 'done\\n'; exec >&-; sleep 0.03"]
+        res, close_err = run_subprocess_probe(early_close_cmd, tmp_path, timeout_s=2.0)
+        assert close_err is None
+        assert res is not None
+        assert "done" in res.stdout
 
 
 def test_run_subprocess_probe_real_early_exit(tmp_path: Path) -> None:
@@ -78,23 +87,6 @@ def test_run_subprocess_probe_real_early_exit(tmp_path: Path) -> None:
     assert "line3" not in completed.stdout
 
 
-def test_run_subprocess_probe_real_timeout(tmp_path: Path) -> None:
-    """Verify long-running subprocess exceeds timeout during streaming and returns timeout."""
-    cmd = (
-        ["sh", "-c", "while :; do printf 'ping\\n'; done"]
-        if os.name != "nt"
-        else [
-            sys.executable,
-            "-c",
-            "import time; [print('ping', flush=True) or time.sleep(0.01) for _ in range(50)]",
-        ]
-    )
-    completed, err = run_subprocess_probe(cmd, tmp_path, timeout_s=0.015)
-
-    assert completed is None
-    assert err == "timeout"
-
-
 def test_run_subprocess_probe_large_stderr_does_not_deadlock(tmp_path: Path) -> None:
     """Verify large stderr volume drains concurrently without pipe deadlock."""
     payload_size = 256 * 1024
@@ -121,19 +113,37 @@ def test_run_subprocess_probe_large_stderr_does_not_deadlock(tmp_path: Path) -> 
     assert len(completed.stderr) == payload_size
 
 
-def _sleep_cmd(seconds: int = 10) -> list[str]:
+def _sleep_cmd(seconds: int = 10, *, emit_ping: bool = False) -> list[str]:
     """Return a cross-platform command that sleeps for the given duration."""
-    return (
-        ["sleep", str(seconds)]
-        if os.name != "nt"
-        else [sys.executable, "-c", f"import time; time.sleep({seconds})"]
-    )
+    if os.name != "nt":
+        return (
+            ["sh", "-c", f"printf 'ping\\n'; sleep {seconds}"]
+            if emit_ping
+            else ["sleep", str(seconds)]
+        )
+    prefix = "print('ping', flush=True); " if emit_ping else ""
+    return [sys.executable, "-c", f"import time; {prefix}time.sleep({seconds})"]
 
 
-def test_run_subprocess_probe_watchdog_terminates_silent_hang(tmp_path: Path) -> None:
-    """Verify watchdog actively terminates a silent hung command when timeout expires."""
+@pytest.mark.parametrize(
+    ("emit_ping", "timeout_s"),
+    [
+        pytest.param(False, 0.015, id="silent-hang"),
+        pytest.param(True, 0.001, id="streaming-hang"),
+    ],
+)
+def test_run_subprocess_probe_watchdog_terminates_hung_process(
+    tmp_path: Path,
+    emit_ping: bool,
+    timeout_s: float,
+) -> None:
+    """Verify watchdog terminates both silent and streaming hung subprocesses on timeout."""
     start = time.monotonic()
-    completed, err = run_subprocess_probe(_sleep_cmd(10), tmp_path, timeout_s=0.015)
+    completed, err = run_subprocess_probe(
+        _sleep_cmd(10, emit_ping=emit_ping),
+        tmp_path,
+        timeout_s=timeout_s,
+    )
     elapsed = time.monotonic() - start
 
     assert completed is None

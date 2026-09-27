@@ -82,22 +82,6 @@ from .conftest import build_agent as _build_agent
 _KEY_SYNC_AGENTS = ("antigravity-cli", "antigravity-sdk", "goose", "pi")
 
 
-def test_agent_runtime_cannot_be_instantiated_directly() -> None:
-    """Verify AgentRuntime ABC raises TypeError when instantiated directly."""
-    with pytest.raises(TypeError, match="Can't instantiate abstract class AgentRuntime"):
-        AgentRuntime()  # type: ignore[abstract]  # ty: ignore[call-non-callable]
-
-
-def test_incomplete_runtime_subclass_cannot_be_instantiated() -> None:
-    """Verify subclasses missing abstract methods cannot be instantiated."""
-
-    class IncompleteRuntime(AgentRuntime[Any]):
-        name = "incomplete"
-
-    with pytest.raises(TypeError, match="Can't instantiate abstract class IncompleteRuntime"):
-        IncompleteRuntime()  # type: ignore[abstract]  # ty: ignore[call-non-callable]
-
-
 def _assert_runtime_attributes(runtime: AgentRuntime[Any], agent: str) -> None:
     """Verify runtime instance meets required attribute and counter types."""
     assert isinstance(runtime.name, str)

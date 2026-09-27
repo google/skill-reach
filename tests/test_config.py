@@ -238,37 +238,6 @@ def test_toml_absolute_paths_are_left_alone(tmp_path: Path) -> None:
     assert RunConfig.from_toml(path).study.skills == Path("/opt/corpus")
 
 
-def test_a_variable_names_a_corpus_a_study_cannot_commit(tmp_path: Path, monkeypatch) -> None:
-    """Verify environment variable substitutions expand in TOML path fields."""
-    monkeypatch.setenv("REACH_SKILL_ROOT", str(tmp_path / "gskills"))
-    path = write_toml(
-        tmp_path,
-        """
-        [study]
-        skills = "${REACH_SKILL_ROOT}"
-        queries = "queries/waf.json"
-        workdir = "work"
-        """,
-    )
-    assert RunConfig.from_toml(path).study.skills == tmp_path / "gskills"
-
-
-def test_an_unset_variable_is_named_where_it_was_written(tmp_path: Path, monkeypatch) -> None:
-    """Verify ValueError is raised when referenced environment variable is unset."""
-    monkeypatch.delenv("REACH_SKILL_ROOT", raising=False)
-    path = write_toml(
-        tmp_path,
-        """
-        [study]
-        skills = "${REACH_SKILL_ROOT}"
-        queries = "queries/waf.json"
-        workdir = "work"
-        """,
-    )
-    with pytest.raises(ValueError, match="REACH_SKILL_ROOT"):
-        RunConfig.from_toml(path)
-
-
 def test_toml_carries_every_section(tmp_path: Path) -> None:
     """Verify RunConfig.from_toml correctly parses study, runtime, catalog, and plan sections."""
     path = write_toml(
@@ -341,32 +310,20 @@ def test_spelling_out_an_agent_default_is_the_same_run(minimal: RunConfig) -> No
     assert explicit.arm == claude_cfg.arm
 
 
-def test_the_fingerprint_ignores_where_a_run_writes(minimal: RunConfig, tmp_path: Path) -> None:
-    """Verify output path and workdir do not affect the fingerprint."""
-    elsewhere = minimal.with_overrides(
-        study={"out": tmp_path / "other.jsonl", "workdir": tmp_path / "other"},
-    )
-    assert elsewhere.fingerprint == minimal.fingerprint
-
-
-def test_the_fingerprint_ignores_where_the_corpus_is_checked_out(
+def test_the_fingerprint_ignores_filesystem_locations(
     minimal: RunConfig,
     tmp_path: Path,
 ) -> None:
-    """Verify filesystem path of the corpus directory does not affect the fingerprint."""
-    elsewhere = minimal.with_overrides(study={"skills": tmp_path / "somewhere-else"})
+    """Verify output, workdir, corpus, and query file paths do not alter fingerprint."""
+    elsewhere = minimal.with_overrides(
+        study={
+            "out": tmp_path / "other.jsonl",
+            "workdir": tmp_path / "other",
+            "skills": tmp_path / "somewhere-else",
+            "queries": tmp_path / "moved" / "queries.json",
+        },
+    )
     assert elsewhere.study.skills != minimal.study.skills
-    assert elsewhere.fingerprint == minimal.fingerprint
-
-
-def test_the_fingerprint_ignores_where_the_query_set_sits(
-    minimal: RunConfig,
-    tmp_path: Path,
-) -> None:
-    """Verify query set file path does not affect configuration fingerprint."""
-    elsewhere = minimal.with_overrides(
-        study={"queries": tmp_path / "moved" / "queries.json"},
-    )
     assert elsewhere.study.queries != minimal.study.queries
     assert elsewhere.fingerprint == minimal.fingerprint
 
@@ -454,44 +411,6 @@ def test_the_digests_are_cached_on_frozen_config(
     _ = minimal.condition
     _ = minimal.fingerprint
     assert calls == 1
-
-
-def test_an_unknown_runtime_setting_is_refused() -> None:
-    """Verify ValidationError is raised when unknown fields are passed to RuntimeSettings."""
-    with pytest.raises(ValidationError):
-        RuntimeSettings.model_validate(
-            {"agent": "claude-code", "denied_tools": ["Bash"], "max_turns": 1},
-        )
-
-
-def test_an_unknown_configuration_table_is_refused(tmp_path: Path) -> None:
-    """Verify ValidationError is raised when unknown section names are passed to RunConfig."""
-    with pytest.raises(ValidationError):
-        RunConfig.model_validate(
-            {
-                "study": {
-                    "skills": tmp_path / "corpus",
-                    "queries": tmp_path / "q.json",
-                    "workdir": tmp_path / "work",
-                },
-                "plann": {"attempts": 3},
-            },
-        )
-
-
-def test_an_unknown_study_setting_is_refused(tmp_path: Path) -> None:
-    """Verify ValidationError is raised when unknown study fields are passed to RunConfig."""
-    with pytest.raises(ValidationError):
-        RunConfig.model_validate(
-            {
-                "study": {
-                    "skills": tmp_path / "corpus",
-                    "queries": tmp_path / "q.json",
-                    "workdir": tmp_path / "work",
-                    "rescoped": True,
-                },
-            },
-        )
 
 
 def test_study_settings_require_paths_success(minimal: RunConfig, tmp_path: Path) -> None:

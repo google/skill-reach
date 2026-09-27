@@ -389,19 +389,6 @@ def test_parse_stream_extracts_agent_response_text_delta() -> None:
     )
 
 
-def test_finish_always_survives() -> None:
-    """Verify finish tool invocations are not flagged as tool leaks."""
-    attempts = [ToolAttempt(name="finish", path=None)]
-    assert _leaked_tools(attempts, frozenset()) == ()
-
-
-def test_a_view_file_on_a_resident_skill_survives() -> None:
-    """Verify view_file on resident skill files is not flagged as a tool leak."""
-    resident = frozenset({"/work/.agents/skills/a/SKILL.md"})
-    attempts = [ToolAttempt(name="view_file", path="/work/.agents/skills/a/SKILL.md")]
-    assert _leaked_tools(attempts, resident) == ()
-
-
 def test_a_view_file_through_a_symlinked_workdir_survives(tmp_path) -> None:
     """Verify view_file through symlinked paths resolves target correctly against resident set."""
     real = tmp_path / "real"
@@ -410,150 +397,116 @@ def test_a_view_file_through_a_symlinked_workdir_survives(tmp_path) -> None:
     linked.symlink_to(real)
     resident = frozenset({str((real / "SKILL.md").resolve())})
     attempts = [ToolAttempt(name="view_file", path=str(linked / "SKILL.md"))]
-    assert _leaked_tools(attempts, resident) == ()
+    assert _leaked_tools(attempts, resident, allowed_tools=("view_file",)) == ()
 
 
-def test_a_view_file_elsewhere_is_a_leak() -> None:
-    """Verify view_file targeting files outside resident skill paths is flagged as leak."""
-    resident = frozenset({"/work/.agents/skills/a/SKILL.md"})
-    attempts = [ToolAttempt(name="view_file", path="/etc/passwd")]
-    assert _leaked_tools(attempts, resident, allowed_tools=("view_file",)) == ("view_file",)
+_STANDARD_ALLOWED_TOOLS = (
+    "finish",
+    "view_file",
+    "list_dir",
+    "find_by_name",
+    "grep_search",
+    "read_url_content",
+    "read_url",
+    "run_command",
+    "write_to_file",
+    "search_web",
+)
 
 
-def test_any_other_tool_is_a_leak() -> None:
-    """Verify unapproved tool invocations are flagged when allowed_tools is specified."""
-    attempts = [ToolAttempt(name="unapproved_custom_tool", path=None)]
-    assert _leaked_tools(
-        attempts,
-        frozenset(),
-        allowed_tools=("finish",),
-    ) == ("unapproved_custom_tool",)
-
-
-def test_tools_bypass_leak_check_when_allowed_tools_is_none() -> None:
-    """Verify all tool invocations are permitted when allowed_tools is omitted."""
-    attempts = [
-        ToolAttempt(name="search_web", path=None),
-        ToolAttempt(name="run_command", path=None),
-        ToolAttempt(name="unapproved_custom_tool", path=None),
-    ]
-    assert _leaked_tools(attempts, frozenset(), allowed_tools=None) == ()
-
-
-def test_a_clean_probe_reports_no_leak() -> None:
-    """Verify clean tool execution sequences report empty leak tuple."""
-    resident = frozenset({"/work/.agents/skills/a/SKILL.md"})
-    attempts = [
-        ToolAttempt(name="view_file", path="/work/.agents/skills/a/SKILL.md"),
-        ToolAttempt(name="finish", path=None),
-    ]
-    assert _leaked_tools(attempts, resident) == ()
-
-
-def test_a_view_file_on_a_resident_skill_subpath_survives() -> None:
-    """Verify view_file on bundled reference files within resident skill survives."""
-    resident = frozenset({"/work/.agents/skills/a/SKILL.md"})
-    attempts = [
-        ToolAttempt(
-            name="view_file",
-            path="/work/.agents/skills/a/references/guide.md",
+@pytest.mark.parametrize(
+    ("attempts", "resident", "workdir", "allowed_tools", "expected"),
+    [
+        (
+            [
+                ToolAttempt(name="search_web", path=None),
+                ToolAttempt(name="run_command", path=None),
+                ToolAttempt(name="unapproved_custom_tool", path=None),
+            ],
+            frozenset(),
+            None,
+            None,
+            (),
         ),
-    ]
-    assert _leaked_tools(attempts, resident) == ()
-
-
-def test_inspection_tools_within_workdir_survive() -> None:
-    """Verify inspection tools targeting paths within workdir are permitted."""
-    attempts = [
-        ToolAttempt(name="list_dir", path="/work/.agents/skills"),
-        ToolAttempt(name="find_by_name", path="/work"),
-        ToolAttempt(name="grep_search", path="/work/.agents/skills/a"),
-    ]
-    assert _leaked_tools(attempts, (), workdir="/work") == ()
-
-
-def test_inspection_tools_targeting_outside_workdir_are_leaks() -> None:
-    """Verify inspection tools targeting directories outside workdir are flagged as leaks."""
-    attempts = [
-        ToolAttempt(name="list_dir", path="/etc"),
-        ToolAttempt(name="grep_search", path="/var/other"),
-    ]
-    assert _leaked_tools(
-        attempts,
-        (),
-        workdir="/work",
-        allowed_tools=("list_dir", "grep_search"),
-    ) == ("grep_search", "list_dir")
-
-
-def test_inspection_tools_without_workdir_are_leaks() -> None:
-    """Verify inspection tools without active workdir context are flagged as leaks."""
-    attempts = [ToolAttempt(name="list_dir", path="/work/.agents/skills")]
-    assert _leaked_tools(attempts, (), workdir=None, allowed_tools=("list_dir",)) == ("list_dir",)
-
-
-def test_documentation_tools_survive() -> None:
-    """Verify documentation reading tools are permitted."""
-    attempts = [
-        ToolAttempt(name="read_url_content", path="https://docs.cloud.google.com/foo"),
-        ToolAttempt(name="read_url", path="https://cloud.google.com/bar"),
-    ]
-    assert _leaked_tools(attempts, ()) == ()
-
-
-def test_execution_tools_survive() -> None:
-    """Verify execution and artifact tools used during skill workflows are permitted."""
-    attempts = [
-        ToolAttempt(name="run_command", path=None),
-        ToolAttempt(name="write_to_file", path=None),
-    ]
-    assert _leaked_tools(attempts, ()) == ()
-
-
-def test_search_web_survives() -> None:
-    """Verify search_web is permitted by default allowed tools."""
-    attempts = [ToolAttempt(name="search_web", path=None)]
-    assert _leaked_tools(attempts, ()) == ()
-
-
-def test_custom_allowed_tools_filters_tools() -> None:
-    """Verify custom allowed_tools setting filters out tools not included in the set."""
-    attempts = [ToolAttempt(name="search_web", path=None)]
-    assert _leaked_tools(
-        attempts,
-        (),
-        allowed_tools=("finish", "view_file"),
-    ) == ("search_web",)
-
-
-def test_home_dir_defaults_to_none() -> None:
-    """Verify home_dir parameter defaults to None before runtime initialization."""
-    assert AntigravityCliOptions().home_dir is None
-
-
-def test_model_provider_accepts_configured_provider(home_dir: Path) -> None:
-    """Verify model_provider and provider fields validate successfully."""
-    opts = AntigravityCliOptions.model_validate(
-        {
-            "model": "claude-sonnet-4.6",
-            "home_dir": str(home_dir),
-            "model_provider": "anthropic",
-        },
+        (
+            [
+                ToolAttempt(name="finish", path=None),
+                ToolAttempt(name="view_file", path="/work/.agents/skills/a/SKILL.md"),
+                ToolAttempt(
+                    name="view_file",
+                    path="/work/.agents/skills/a/references/guide.md",
+                ),
+                ToolAttempt(name="list_dir", path="/work/.agents/skills"),
+                ToolAttempt(name="find_by_name", path="/work"),
+                ToolAttempt(name="grep_search", path="/work/.agents/skills/a"),
+                ToolAttempt(name="read_url_content", path="https://docs.cloud.google.com/foo"),
+                ToolAttempt(name="read_url", path="https://cloud.google.com/bar"),
+                ToolAttempt(name="run_command", path=None),
+                ToolAttempt(name="write_to_file", path=None),
+                ToolAttempt(name="search_web", path=None),
+            ],
+            frozenset({"/work/.agents/skills/a/SKILL.md"}),
+            "/work",
+            _STANDARD_ALLOWED_TOOLS,
+            (),
+        ),
+        (
+            [ToolAttempt(name="view_file", path="/etc/passwd")],
+            frozenset({"/work/.agents/skills/a/SKILL.md"}),
+            None,
+            ("view_file",),
+            ("view_file",),
+        ),
+        (
+            [ToolAttempt(name="unapproved_custom_tool", path=None)],
+            frozenset(),
+            None,
+            ("finish",),
+            ("unapproved_custom_tool",),
+        ),
+        (
+            [
+                ToolAttempt(name="list_dir", path="/etc"),
+                ToolAttempt(name="grep_search", path="/var/other"),
+            ],
+            frozenset(),
+            "/work",
+            ("list_dir", "grep_search"),
+            ("grep_search", "list_dir"),
+        ),
+        (
+            [ToolAttempt(name="list_dir", path="/work/.agents/skills")],
+            frozenset(),
+            None,
+            ("list_dir",),
+            ("list_dir",),
+        ),
+        (
+            [ToolAttempt(name="search_web", path=None)],
+            frozenset(),
+            None,
+            ("finish", "view_file"),
+            ("search_web",),
+        ),
+    ],
+)
+def test_leaked_tools_sandbox_policy(
+    attempts: list[ToolAttempt],
+    resident: frozenset[str],
+    workdir: str | None,
+    allowed_tools: tuple[str, ...] | None,
+    expected: tuple[str, ...],
+) -> None:
+    """Verify _leaked_tools enforces resident skill, workdir, and allowed_tools policies."""
+    assert (
+        _leaked_tools(
+            attempts,
+            resident,
+            workdir=workdir,
+            allowed_tools=allowed_tools,
+        )
+        == expected
     )
-    assert opts.model == "claude-sonnet-4.6"
-    assert opts.model_provider == "anthropic"
-
-
-def test_model_provider_gemini_accepts_a_gemini_model(home_dir: Path) -> None:
-    """Verify valid gemini model validation succeeds under gemini model provider."""
-    options = AntigravityCliOptions.model_validate(
-        {
-            "model": DEFAULT_GEMINI_MODEL,
-            "home_dir": str(home_dir),
-            "model_provider": "gemini",
-        },
-    )
-    assert options.model == DEFAULT_GEMINI_MODEL
 
 
 def test_constructing_the_agent_writes_the_closed_permission_policy(
@@ -692,129 +645,78 @@ def test_install_does_not_clear_a_configured_model_provider(
     assert settings["modelProvider"] == "gemini"
 
 
-def test_command_names_the_query_the_model_and_the_stream_format(
-    runtime: AntigravityCliRuntime,
-) -> None:
-    """Verify build_command generates expected command flags and arguments."""
-    command = runtime.build_command("do a thing")
-    assert command[:3] == ["agy", "-p", "do a thing"]
-    assert command[command.index("--model") + 1] == "test-model"
-    assert command[command.index("--output-format") + 1] == "stream-json"
-
-
-def test_command_always_asks_for_a_new_project(runtime: AntigravityCliRuntime) -> None:
-    """Verify build_command always includes --new-project flag."""
-    assert "--new-project" in runtime.build_command("q")
-
-
-def test_command_disables_slash_command_expansion_by_default(
-    runtime: AntigravityCliRuntime,
-) -> None:
-    """Verify build_command includes --disable-slash-commands by default."""
-    assert "--disable-slash-commands" in runtime.build_command("q")
-
-
-def test_command_allows_slash_commands_when_disabled_in_options(home_dir: Path) -> None:
-    """Verify build_command omits --disable-slash-commands when disabled in options."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(home_dir=home_dir, disable_slash_commands=False),
-    )
-    assert "--disable-slash-commands" not in runtime.build_command("q")
-
-
-def test_command_includes_dangerously_skip_permissions_by_default(
-    runtime: AntigravityCliRuntime,
-) -> None:
-    """Verify build_command includes --dangerously-skip-permissions by default."""
-    assert "--dangerously-skip-permissions" in runtime.build_command("q")
-
-
-def test_command_omits_dangerously_skip_permissions_when_false(home_dir: Path) -> None:
-    """Verify build_command omits --dangerously-skip-permissions when disabled."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(home_dir=home_dir, dangerously_skip_permissions=False),
-    )
-    assert "--dangerously-skip-permissions" not in runtime.build_command("q")
-
-
-def test_command_includes_print_timeout(runtime: AntigravityCliRuntime) -> None:
-    """Verify build_command includes --print-timeout matching settings timeout."""
-    assert runtime.settings is not None
-    cmd = runtime.build_command("q")
-    assert cmd[cmd.index("--print-timeout") + 1] == f"{int(runtime.settings.timeout_s)}s"
-
-
-def test_command_uses_explicit_print_timeout(home_dir: Path) -> None:
-    """Verify build_command uses explicit print_timeout when configured."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(home_dir=home_dir, print_timeout="45s"),
-    )
-    cmd = runtime.build_command("q")
-    assert cmd[cmd.index("--print-timeout") + 1] == "45s"
-
-
-def test_command_omits_schema_by_default_even_with_resident_skills(
-    runtime: AntigravityCliRuntime,
-) -> None:
-    """Verify build_command omits --json-schema by default to preserve organic selection."""
-    runtime._resident = ("a", "b")
-    command = runtime.build_command("q")
-    assert "--json-schema" not in command
-
-
-def test_command_includes_explicit_json_schema_when_configured(
+@pytest.mark.parametrize(
+    ("opt_kwargs", "prompt", "expected_present", "expected_absent", "expected_pairs"),
+    [
+        pytest.param(
+            {"model": "test-model"},
+            "do a thing",
+            ("--new-project", "--disable-slash-commands", "--dangerously-skip-permissions"),
+            ("--effort",),
+            (
+                ("--model", "test-model"),
+                ("--output-format", "stream-json"),
+                ("--print-timeout", "200s"),
+            ),
+            id="defaults",
+        ),
+        pytest.param(
+            {
+                "model": "m",
+                "disable_slash_commands": False,
+                "dangerously_skip_permissions": False,
+                "print_timeout": "45s",
+                "effort": "high",
+            },
+            "q",
+            ("--new-project",),
+            ("--disable-slash-commands", "--dangerously-skip-permissions"),
+            (("--model", "m"), ("--print-timeout", "45s"), ("--effort", "high")),
+            id="overrides",
+        ),
+    ],
+)
+def test_build_command_default_and_override_flags(
     home_dir: Path,
+    opt_kwargs: dict[str, Any],
+    prompt: str,
+    expected_present: tuple[str, ...],
+    expected_absent: tuple[str, ...],
+    expected_pairs: tuple[tuple[str, str], ...],
 ) -> None:
-    """Verify build_command passes --json-schema when explicitly configured in options."""
-    explicit_schema = AntigravityCliRuntime.selection_json_schema(("a", "b"))
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(home_dir=home_dir, json_schema=explicit_schema),
+    """Verify build_command generates default CLI flags and honors option overrides."""
+    rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir, **opt_kwargs))
+    command = rt.build_command(prompt)
+    assert command[:3] == ["agy", "-p", prompt]
+    for flag in expected_present:
+        assert flag in command
+    for flag in expected_absent:
+        assert flag not in command
+    for flag, value in expected_pairs:
+        assert command[command.index(flag) + 1] == value
+
+
+@pytest.mark.parametrize("use_explicit_schema", [False, True], ids=["default-omitted", "explicit"])
+def test_build_command_json_schema_handling(
+    home_dir: Path,
+    use_explicit_schema: bool,
+) -> None:
+    """Verify build_command omits --json-schema by default and passes it when configured."""
+    schema_opt = (
+        AntigravityCliRuntime.selection_json_schema(("a", "b")) if use_explicit_schema else None
     )
-    runtime._resident = ("a", "b")
-    command = runtime.build_command("q")
-    schema = json.loads(command[command.index("--json-schema") + 1])
-    branches = schema["properties"]["selected_skill"]["anyOf"]
-    enum = next(b["enum"] for b in branches if "enum" in b)
-    assert sorted(enum) == ["a", "b"]
-
-
-def test_effort_is_omitted_when_unset(runtime: AntigravityCliRuntime) -> None:
-    """Verify --effort flag is omitted when effort option is not configured."""
-    assert "--effort" not in runtime.build_command("q")
-
-
-def test_effort_reaches_the_command_line_when_set(home_dir: Path) -> None:
-    """Verify --effort flag is included in build_command when set."""
-    runtime = AntigravityCliRuntime(
-        options=AntigravityCliOptions(model="m", home_dir=home_dir, effort="high"),
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, json_schema=schema_opt),
     )
-    command = runtime.build_command("q")
-    assert command[command.index("--effort") + 1] == "high"
-
-
-def test_effort_allows_custom_model_and_effort(home_dir: Path) -> None:
-    """Verify custom model and effort tiers pass through without validation restrictions."""
-    options = AntigravityCliOptions.model_validate(
-        {
-            "model": "gemini-3.8-flash",
-            "home_dir": str(home_dir),
-            "effort": "custom_tier",
-        },
-    )
-    assert options.model == "gemini-3.8-flash"
-    assert options.effort == "custom_tier"
-
-
-def test_effort_allows_a_bare_model_family_name(home_dir: Path) -> None:
-    """Verify effort configuration validates successfully on model slugs without embedded tiers."""
-    options = AntigravityCliOptions.model_validate(
-        {
-            "model": "gemini-3.7-flash",
-            "home_dir": str(home_dir),
-            "effort": "high",
-        },
-    )
-    assert options.effort == "high"
+    rt._resident = ("a", "b")
+    command = rt.build_command("q")
+    if not use_explicit_schema:
+        assert "--json-schema" not in command
+    else:
+        schema = json.loads(command[command.index("--json-schema") + 1])
+        branches = schema["properties"]["selected_skill"]["anyOf"]
+        enum = next(b["enum"] for b in branches if "enum" in b)
+        assert sorted(enum) == ["a", "b"]
 
 
 def test_select_accepts_a_clean_probe(

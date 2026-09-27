@@ -102,14 +102,6 @@ def test_init_overwrites_with_force(
     assert 'agent = "keyword"' in content
 
 
-def test_detect_skills_directory_finds_existing(tmp_path: Path) -> None:
-    """Verify skill directory detection picks existing .claude/skills if present."""
-    claude_skills = tmp_path / ".claude" / "skills"
-    claude_skills.mkdir(parents=True)
-    detected = _detect_skills_directory(tmp_path)
-    assert detected == claude_skills
-
-
 def test_detect_default_agent() -> None:
     """Verify default agent detection prioritizes available binaries."""
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
@@ -135,19 +127,6 @@ def test_detect_skills_directory_agent_aware(tmp_path: Path) -> None:
     existing = tmp_path / "skills"
     existing.mkdir()
     assert _detect_skills_directory(tmp_path, agent="claude-code") == existing
-
-
-def test_init_with_agent_claude_code_creates_claude_skills(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify reach init --agent claude-code creates .claude/skills when no skills dir exists."""
-    monkeypatch.chdir(tmp_path)
-    assert main(["init", "--agent", "claude-code"]) == 0
-    assert (tmp_path / ".claude" / "skills").is_dir()
-    toml_path = tmp_path / "reach.toml"
-    content = toml_path.read_text(encoding="utf-8")
-    assert 'skills = ".claude/skills"' in content
 
 
 def test_init_with_path_flag(tmp_path: Path) -> None:

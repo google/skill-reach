@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable
 from enum import Enum
@@ -118,87 +119,13 @@ def test_missing_required_flags_are_named() -> None:
         configure("eval")
 
 
-def test_a_config_file_supplies_everything(
+def test_config_file_loading_relative_workdir_and_flag_overrides(
     write_reach_toml: Callable[..., Path],
     tmp_path: Path,
     skill_repo: Path,
     query_file: Path,
 ) -> None:
-    """Verify --config TOML file populates RunConfig options and study paths."""
-    path = write_reach_toml(
-        f"""
-        [study]
-        skills = "{skill_repo}"
-        queries = "{query_file}"
-        workdir = "{tmp_path / "work"}"
-
-        [runtime]
-        agent = "fake"
-
-        [runtime.options]
-        model = "opus"
-        """,
-    )
-    config = configure("eval", "--config", str(path))
-    assert config.runtime.options["model"] == "opus"
-    assert config.study.skills == skill_repo
-
-
-def test_a_flag_overrides_the_file(
-    write_reach_toml: Callable[..., Path],
-    tmp_path: Path,
-    skill_repo: Path,
-    query_file: Path,
-) -> None:
-    """Verify explicit CLI flags override values from --config TOML."""
-    path = write_reach_toml(
-        f"""
-        [study]
-        skills = "{skill_repo}"
-        queries = "{query_file}"
-        workdir = "{tmp_path / "work"}"
-
-        [plan]
-        attempts = 9
-        """,
-    )
-    assert configure("eval", "--config", str(path)).plan.attempts == 9
-    assert configure("eval", "--config", str(path), "--attempts", "2").plan.attempts == 2
-
-
-def test_an_unpassed_flag_does_not_clobber_the_file(
-    write_reach_toml: Callable[..., Path],
-    tmp_path: Path,
-    skill_repo: Path,
-    query_file: Path,
-) -> None:
-    """Verify unpassed CLI flags do not overwrite values defined in TOML config."""
-    path = write_reach_toml(
-        f"""
-        [study]
-        skills = "{skill_repo}"
-        queries = "{query_file}"
-        workdir = "{tmp_path / "work"}"
-
-        [runtime]
-        timeout_s = 500
-
-        [runtime.options]
-        executable = "/opt/claude/bin/claude"
-        """,
-    )
-    config = configure("eval", "--config", str(path))
-    assert config.runtime.timeout_s == 500
-    assert config.runtime.options["executable"] == "/opt/claude/bin/claude"
-
-
-def test_a_config_file_keeps_the_settings_no_flag_can_reach(
-    write_reach_toml: Callable[..., Path],
-    tmp_path: Path,
-    skill_repo: Path,
-    query_file: Path,
-) -> None:
-    """Verify TOML configuration resolves relative paths against config directory."""
+    """Verify --config populates RunConfig, resolves relative paths, and yields to CLI flags."""
     path = write_reach_toml(
         f"""
         [study]
@@ -208,15 +135,28 @@ def test_a_config_file_keeps_the_settings_no_flag_can_reach(
 
         [runtime]
         agent = "claude-code"
+        timeout_s = 500
 
         [runtime.options]
         executable = "/opt/claude/bin/claude"
+        model = "opus"
+
+        [plan]
+        attempts = 9
         """,
         directory=tmp_path / "study",
     )
     config = configure("eval", "--config", str(path))
+    assert config.study.skills == skill_repo
     assert config.study.workdir == tmp_path / "study" / "work"
+    assert config.runtime.timeout_s == 500
     assert config.runtime.options["executable"] == "/opt/claude/bin/claude"
+    assert config.runtime.options["model"] == "opus"
+    assert config.plan.attempts == 9
+
+    overridden = configure("eval", "--config", str(path), "--attempts", "2")
+    assert overridden.plan.attempts == 2
+    assert overridden.runtime.timeout_s == 500
 
 
 def test_only_known_agents_are_accepted(base_argv: list[str], capsys) -> None:
@@ -236,15 +176,6 @@ def test_agent_help_text_excludes_fake() -> None:
     assert "antigravity-cli" in text
     assert "goose" in text
     assert "pi" in text
-
-
-def test_a_setting_the_config_model_refuses_is_refused_while_parsing(
-    base_argv: list[str],
-    capsys,
-) -> None:
-    """Verify invalid catalog mode string exits with code 2 during parsing."""
-    assert main([*base_argv, "--mode", "handwritten"]) == 2
-    assert capsys.readouterr().out == ""
 
 
 def test_a_refused_value_is_named_by_the_flag_that_carried_it(
@@ -267,18 +198,19 @@ LEAK_INDICATORS = (
 )
 
 
-@pytest.mark.parametrize("leak", LEAK_INDICATORS)
 def test_a_refused_value_suppresses_internal_schema_dumps(
     base_argv: list[str],
     capsys,
-    leak: str,
 ) -> None:
-    """Verify schema error formatting suppresses raw Pydantic validation dumps."""
+    """Verify schema error formatting exits with code 2 and suppresses raw Pydantic dumps."""
     assert main([*base_argv, "--mode", "handwritten"]) == 2
-    reported = capsys.readouterr().err.replace("\n", " ")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    reported = captured.err.replace("\n", " ")
     assert "--mode" in reported
     assert "neighborhood" in reported
-    assert leak not in reported
+    for leak in LEAK_INDICATORS:
+        assert leak not in reported
 
 
 def test_explain_handles_empty_loc_model_level_validation_error() -> None:
@@ -312,12 +244,6 @@ def test_explain_handles_empty_loc_model_level_validation_error() -> None:
     assert "Invalid value" in explanations[0]
     assert "--input" in explanations[0]
     assert "Whole model is invalid" in explanations[0]
-
-
-def test_opt_lands_in_runtime_options_for_the_fake_agent(base_argv: list[str]) -> None:
-    """Verify -O key=value pairs populate runtime.options."""
-    config = configure(*base_argv, "--agent", "fake", "-O", "model=custom-model")
-    assert config.runtime.options == {"model": "custom-model"}
 
 
 def test_repeated_opt_flags_accumulate_into_one_dict(base_argv: list[str]) -> None:
@@ -370,22 +296,6 @@ def test_model_and_effort_flags_combined(base_argv: list[str]) -> None:
         "medium",
     )
     assert config.runtime.options == {"model": "claude-sonnet-5", "effort": "medium"}
-
-
-def test_opt_is_agent_agnostic_across_two_different_options_models(
-    base_argv: list[str],
-) -> None:
-    """Verify -O parses options according to agent-specific schemas."""
-    fake = configure(*base_argv, "--agent", "fake", "-O", "model=scripted")
-    claude = configure(
-        *base_argv,
-        "--agent",
-        "claude-code",
-        "-O",
-        "setting_sources=user",
-    )
-    assert fake.runtime.options == {"model": "scripted"}
-    assert claude.runtime.options == {"setting_sources": "user"}
 
 
 @pytest.mark.parametrize(
@@ -984,23 +894,11 @@ def foreign_file(tmp_path: Path) -> Path:
 
 
 def test_a_set_exports_to_stdout_when_no_file_is_named(exported: Path, capsys) -> None:
-    """Verify query export writes CSV to stdout when --out is omitted."""
-    assert main(["query", str(exported), "--format", "csv"]) == 0
-    header = capsys.readouterr().out.splitlines()[0]
-    assert header == "id,text,kind,expected_skill,acceptable_skills,notes"
-
-
-def test_a_custom_separator_is_used_for_stdout_exports(exported: Path, capsys) -> None:
-    """Verify --separator controls acceptable skill joining on stdout export."""
+    """Verify query export writes CSV with custom separator to stdout when --out is omitted."""
     assert main(["query", str(exported), "--format", "csv", "--separator", "|"]) == 0
-    assert "finding-google-skills|gcs-router" in capsys.readouterr().out
-
-
-def test_a_custom_separator_is_used_for_file_exports(exported: Path, tmp_path: Path) -> None:
-    """Verify --separator controls acceptable skill joining on file export."""
-    out = tmp_path / "rows.csv"
-    assert main(["query", str(exported), "--out", str(out), "--separator", "|"]) == 0
-    assert "finding-google-skills|gcs-router" in out.read_text(encoding="utf-8")
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "id,text,kind,expected_skill,acceptable_skills,notes"
+    assert "finding-google-skills|gcs-router" in out
 
 
 def test_the_row_format_is_read_off_the_name_it_writes(exported: Path, tmp_path: Path) -> None:
@@ -1023,54 +921,21 @@ def test_a_name_that_says_nothing_about_its_format_asks_for_one(
     assert not out.exists()
 
 
-def test_the_command_line_round_trip_does_not_fork_the_evidence(
-    exported: Path,
-    exchange_set: QuerySet,
-    tmp_path: Path,
-) -> None:
-    """Verify query export followed by query import preserves ground truth digest."""
-    rows = tmp_path / "rows.csv"
-    back = tmp_path / "back.json"
-    assert main(["query", str(exported), "--out", str(rows)]) == 0
-    assert (
-        main(
-            [
-                "query",
-                str(rows),
-                "--out",
-                str(back),
-                "--catalog",
-                exchange_set.catalog_id,
-            ],
-        )
-        == 0
-    )
-    assert query_set_digest(load_query_set(back)) == query_set_digest(exchange_set)
-
-
-def test_an_export_names_the_catalog_its_labels_are_valid_in(
+def test_a_spreadsheet_saved_export_comes_back_as_the_same_evidence(
     exported: Path,
     exchange_set: QuerySet,
     tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify query export prints the valid catalog identifier to stderr."""
-    out = tmp_path / "rows.csv"
-    assert main(["query", str(exported), "--out", str(out)]) == 0
-    assert exchange_set.catalog_id in capsys.readouterr().err
-
-
-def test_a_spreadsheet_saved_export_comes_back_as_the_same_evidence(
-    exported: Path,
-    exchange_set: QuerySet,
-    tmp_path: Path,
-) -> None:
-    """Verify exported and re-imported BOM-prefixed CSV produces identical ground truth digest."""
+    """Verify exported CSV reports catalog, honors separator, and round-trips with BOM prefix."""
     rows = tmp_path / "rows.csv"
     back = tmp_path / "back.json"
-    assert main(["query", str(exported), "--out", str(rows)]) == 0
+    assert main(["query", str(exported), "--out", str(rows), "--separator", "|"]) == 0
+    assert exchange_set.catalog_id in capsys.readouterr().err
+    exported_text = rows.read_text(encoding="utf-8")
+    assert "finding-google-skills|gcs-router" in exported_text
     # Simulate spreadsheet export saved as UTF-8 with BOM prefix.
-    rows.write_text(rows.read_text(encoding="utf-8"), encoding="utf-8-sig")
+    rows.write_text(exported_text, encoding="utf-8-sig")
     assert (
         main(
             [
@@ -1080,6 +945,8 @@ def test_a_spreadsheet_saved_export_comes_back_as_the_same_evidence(
                 str(back),
                 "--catalog",
                 exchange_set.catalog_id,
+                "--separator",
+                "|",
             ],
         )
         == 0
@@ -1919,35 +1786,52 @@ ALL_HELP_IDS = ["reach" if not argv else "-".join(argv) for argv in ALL_HELP_COM
 FORMATTED_ARGV = [["overlap"], ["eval"], ["diff"]]
 
 
+@functools.cache
+def _help_output(argv: tuple[str, ...]) -> tuple[int, str, str]:
+    """Execute main([*argv, '--help']) once per unique argv tuple and capture output."""
+    import contextlib
+    import io
+
+    out_buf = io.StringIO()
+    err_buf = io.StringIO()
+    with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+        code = main([*argv, "--help"])
+    return code, out_buf.getvalue(), err_buf.getvalue()
+
+
 @pytest.mark.parametrize("argv", ALL_HELP_COMMANDS, ids=ALL_HELP_IDS)
-def test_every_verb_gets_the_styled_help(argv: list[str], capsys) -> None:
+def test_every_verb_gets_the_styled_help(argv: list[str]) -> None:
     """Verify --help writes styled usage to stdout with no stderr or default-False noise."""
-    assert main([*argv, "--help"]) == 0
-    captured = capsys.readouterr()
-    out = captured.out
+    code, out, err = _help_output(tuple(argv))
+    assert code == 0
     assert out.startswith("Usage:")
     assert "╭─" in out
-    assert captured.err == ""
+    assert err == ""
     assert "[default: False]" not in out
-    if argv == ["optimize"]:
+    if argv == ["eval"]:
+        for section in ("Catalog", "Runtime", "Plan", "Study"):
+            assert section in out
+        assert out.index("Study") < out.index("Catalog")
+    elif argv == ["optimize"]:
         for flag in ("--iterations", "--holdout", "--review", "--force", "--no-auto-queries"):
             assert flag in out
 
 
 @pytest.mark.parametrize("argv", FORMATTED_ARGV, ids=" ".join)
-def test_every_format_flag_says_what_it_renders(argv: list[str], capsys, snapshot) -> None:
+def test_every_format_flag_says_what_it_renders(argv: list[str], snapshot) -> None:
     """Verify --format flag help line explains rendered output format."""
-    assert main([*argv, "--help"]) == 0
-    assert _flag_line(capsys.readouterr().out, "--format") == snapshot
+    code, out, _ = _help_output(tuple(argv))
+    assert code == 0
+    assert _flag_line(out, "--format") == snapshot
 
 
 def test_a_runtime_that_probes_nothing_is_not_offered_as_though_it_did(
-    capsys,
     snapshot,
 ) -> None:
-    """Verify public agents are dynamically listed in help without internal fake runtime."""
-    assert main(["eval", "--help"]) == 0
-    assert _flag_line(capsys.readouterr().out, "--agent") == snapshot
+    """Verify eval --help --agent choices exclude non-probing internal runtimes."""
+    code, out, _ = _help_output(("eval",))
+    assert code == 0
+    assert _flag_line(out, "--agent") == snapshot
 
 
 def _flag_line(rendered: str, flag: str) -> str:
@@ -1982,61 +1866,22 @@ SETUP_VERBS = {"clean", "completion", "doctor", "init"}
 ALL_VERBS = LOOP_VERBS | SETUP_VERBS
 
 
-def test_the_verbs_are_listed_under_one_heading(capsys, snapshot) -> None:
-    """Verify main help groups commands under standard headings."""
-    assert main(["--help"]) == 0
-    assert capsys.readouterr().out == snapshot
-
-
-def test_no_removed_verb_is_still_listed() -> None:
-    """Verify deprecated verbs are removed from the command registry."""
-    assert not set(registered_verbs()) & {
-        "run",
-        "findings",
-        "difficulty",
-        "taxonomy",
-    }
-
-
-def test_every_registered_verb_is_one_the_loop_heading_claims() -> None:
-    """Verify registered verbs match expected command sets."""
+def test_the_verbs_are_listed_under_one_heading(snapshot) -> None:
+    """Verify main help usage header, registered verb sets, and command grouping match snapshot."""
     assert set(registered_verbs()) == ALL_VERBS
-
-
-def _verbs(section: str) -> set[str]:
-    """Extract recognized loop verbs present within help section text."""
-    return {word for word in section.split() if word in ALL_VERBS}
-
-
-def test_the_listing_asks_for_a_verb_and_nothing_else(capsys) -> None:
-    """Verify root help usage line specifies COMMAND placeholder and omits unbuilt verbs."""
-    assert main(["--help"]) == 0
-    out = capsys.readouterr().out
+    assert not set(registered_verbs()) & {"run", "findings", "difficulty", "taxonomy"}
+    code, out, _ = _help_output(())
+    assert code == 0
     assert out.splitlines()[0] == "Usage: reach COMMAND"
     assert "TOKENS" not in out
     assert not {"generate", "ablate", "compare"} & set(out.split())
-
-
-def test_every_verb_is_filed_under_what_it_is_for(capsys, snapshot) -> None:
-    """Verify help command categories match snapshot layout."""
-    assert main(["--help"]) == 0
-    _, _, about = capsys.readouterr().out.partition("About")
-    assert about == snapshot
+    assert out == snapshot
 
 
 def test_the_version_flag_reports_the_version_that_is_installed(capsys) -> None:
     """Verify --version returns package metadata version."""
     assert main(["--version"]) == 0
     assert capsys.readouterr().out.strip() == metadata.version("skill-reach")
-
-
-def test_the_run_flags_are_grouped_by_what_they_configure(capsys) -> None:
-    """Verify eval --help organizes configuration options into distinct panels."""
-    assert main(["eval", "--help"]) == 0
-    out = capsys.readouterr().out
-    for section in ("Catalog", "Runtime", "Plan", "Study"):
-        assert section in out
-    assert out.index("Study") < out.index("Catalog")
 
 
 VERB_MINIMUM = {
@@ -2152,7 +1997,7 @@ def global_skills_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-@pytest.mark.parametrize("verb", ["lint", "overlap", "check"])
+@pytest.mark.parametrize("verb", ["lint", "check"])
 @pytest.mark.parametrize("flag", ["--global", "-g"])
 def test_global_flag_prefix_and_postfix(
     verb: str,

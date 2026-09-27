@@ -201,7 +201,7 @@ convention = "pep257"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config --durations=5 -n auto --dist=worksteal"
+addopts = "-ra --strict-markers --strict-config --durations=5 -n auto --maxprocesses=4 --dist=worksteal"
 markers = [
     "integration: mark test as integration test (skipped by default unless --integration or -m integration is passed)",
 ]

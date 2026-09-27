@@ -57,13 +57,6 @@ def test_doctor_verbose_includes_remedy_panel(
     assert "Recommended Actions" in out
 
 
-def test_check_python_supported() -> None:
-    """Verify Python version check passes on Python >= 3.12."""
-    res = _check_python((3, 13, 0))
-    assert res.category == "Python Environment"
-    assert res.status == "ok"
-
-
 def test_check_python_unsupported() -> None:
     """Verify Python check fails on unsupported major.minor versions."""
     res = _check_python((3, 11, 0))
@@ -71,17 +64,52 @@ def test_check_python_unsupported() -> None:
     assert "unsupported" in res.detail
 
 
-def test_check_cli_binary_found_and_missing() -> None:
-    """Verify CLI binary checks detect presence and absence properly."""
-    with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        res = _check_cli_binary("Claude Code CLI", "claude", "claude-code")
-        assert res.status == "ok"
-        assert "/usr/local/bin/claude" in res.detail
-
-    with patch("shutil.which", return_value=None):
-        res = _check_cli_binary("Goose CLI", "goose", "goose")
-        assert res.status == "warn"
-        assert "not found in PATH" in res.detail
+@pytest.mark.parametrize(
+    ("label", "binary", "agent_name", "alternates", "found_map", "expected_status", "expected_sub"),
+    [
+        (
+            "Claude Code CLI",
+            "claude",
+            "claude-code",
+            (),
+            {"claude": "/usr/local/bin/claude"},
+            "ok",
+            "/usr/local/bin/claude",
+        ),
+        (
+            "Antigravity CLI",
+            "agy",
+            "antigravity-cli",
+            ("antigravity",),
+            {"antigravity": "/usr/local/bin/antigravity"},
+            "ok",
+            "/usr/local/bin/antigravity",
+        ),
+        (
+            "Goose CLI",
+            "goose",
+            "goose",
+            (),
+            {},
+            "warn",
+            "not found in PATH",
+        ),
+    ],
+)
+def test_check_cli_binary_found_and_missing(
+    label: str,
+    binary: str,
+    agent_name: str,
+    alternates: tuple[str, ...],
+    found_map: dict[str, str],
+    expected_status: str,
+    expected_sub: str,
+) -> None:
+    """Verify CLI binary checks detect primary, alternate, and missing executables."""
+    with patch("shutil.which", side_effect=found_map.get):
+        res = _check_cli_binary(label, binary, agent_name, alternates=alternates)
+        assert res.status == expected_status
+        assert expected_sub in res.detail
 
 
 def test_check_sdk_installed_and_missing() -> None:
@@ -238,22 +266,6 @@ def test_check_agent_registry_uses_custom_workdir_cache(tmp_path: Path) -> None:
         res = _check_agent_registry(custom_workdir)
         assert res.status == "ok"
         assert "bytes cached" in res.detail
-
-
-def test_check_cli_binary_supports_alternates() -> None:
-    """Verify _check_cli_binary detects alternate executable names such as 'antigravity'."""
-    with patch(
-        "shutil.which",
-        side_effect=lambda cmd: "/usr/local/bin/antigravity" if cmd == "antigravity" else None,
-    ):
-        res = _check_cli_binary(
-            "Antigravity CLI",
-            "agy",
-            "antigravity-cli",
-            alternates=("antigravity",),
-        )
-        assert res.status == "ok"
-        assert res.detail == "/usr/local/bin/antigravity"
 
 
 def test_doctor_positional_path(

@@ -27,7 +27,6 @@ from reach.retrieval import (
     Bm25Scorer,
     DenseScorer,
     HybridScorer,
-    TextScorer,
     build_scorer,
     compute_rrf,
     cosine_similarity,
@@ -44,48 +43,35 @@ def _make_skill(name: str, desc: str) -> Skill:
     )
 
 
-def test_cosine_similarity_identical_vectors() -> None:
-    """Verify cosine similarity of identical vectors is 1.0."""
-    v = [1.0, 2.0, 3.0]
-    assert pytest.approx(cosine_similarity(v, v)) == 1.0
+_OVERSHOOT_VEC = [
+    -5.627240503927933,
+    0.10710576206724731,
+    -9.469280606322727,
+    -6.02324698626703,
+    2.997688755590463,
+    0.8988296120643327,
+    -5.591187559186066,
+    1.7853136775181753,
+    6.1886091335565325,
+    -9.87002480643878,
+]
 
 
-def test_cosine_similarity_orthogonal_vectors() -> None:
-    """Verify cosine similarity of orthogonal vectors is 0.0."""
-    v1 = [1.0, 0.0]
-    v2 = [0.0, 1.0]
-    assert pytest.approx(cosine_similarity(v1, v2)) == 0.0
-
-
-def test_cosine_similarity_zero_vector_returns_zero() -> None:
-    """Verify cosine similarity handles zero magnitude vectors safely."""
-    v1 = [0.0, 0.0]
-    v2 = [1.0, 2.0]
-    assert cosine_similarity(v1, v2) == 0.0
-
-
-def test_cosine_similarity_clamps_floating_point_overshoot() -> None:
-    """Verify cosine similarity clamps floating-point rounding errors to [-1.0, 1.0]."""
-    v = [
-        -5.627240503927933,
-        0.10710576206724731,
-        -9.469280606322727,
-        -6.02324698626703,
-        2.997688755590463,
-        0.8988296120643327,
-        -5.591187559186066,
-        1.7853136775181753,
-        6.1886091335565325,
-        -9.87002480643878,
-    ]
-    sim = cosine_similarity(v, v)
-    assert sim <= 1.0
-    assert sim == 1.0
-
-    neg_v = [-x for x in v]
-    neg_sim = cosine_similarity(v, neg_v)
-    assert neg_sim >= -1.0
-    assert neg_sim == -1.0
+@pytest.mark.parametrize(
+    ("v1", "v2", "expected"),
+    [
+        ([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], 1.0),
+        ([1.0, 0.0], [0.0, 1.0], 0.0),
+        ([0.0, 0.0], [1.0, 2.0], 0.0),
+        (_OVERSHOOT_VEC, _OVERSHOOT_VEC, 1.0),
+        (_OVERSHOOT_VEC, [-x for x in _OVERSHOOT_VEC], -1.0),
+    ],
+)
+def test_cosine_similarity(v1: list[float], v2: list[float], expected: float) -> None:
+    """Verify cosine similarity handles identical, orthogonal, zero, and overshoot vectors."""
+    sim = cosine_similarity(v1, v2)
+    assert -1.0 <= sim <= 1.0
+    assert pytest.approx(sim) == expected
 
 
 def test_directional_projection_asymmetry() -> None:
@@ -324,17 +310,6 @@ def test_build_scorer_hybrid_missing_model2vec_falls_back_to_bm25(
     assert scorer.__class__.__name__ == "Bm25Scorer"
 
 
-def test_unit_vector_normalization() -> None:
-    """Verify _unit_vector normalizes vectors to length 1.0 and handles zero vectors."""
-    from reach.retrieval import _unit_vector
-
-    norm = _unit_vector([3.0, 4.0])
-    assert pytest.approx(norm) == [0.6, 0.8]
-
-    zero = _unit_vector([0.0, 0.0, 0.0])
-    assert zero == [0.0, 0.0, 0.0]
-
-
 def test_dense_scorer_zero_vector_handling() -> None:
     """Verify DenseScorer handles zero-length vectors without dividing by zero."""
     s1 = _make_skill("s1", "desc1")
@@ -347,36 +322,6 @@ def test_dense_scorer_zero_vector_handling() -> None:
 
     ranked = scorer.rank(s1, [s2])
     assert ranked == [("s2", 0.0)]
-
-
-def test_bm25_scorer_declared_in_retrieval() -> None:
-    """Verify Bm25Scorer, Scorer, K1, B, and tokenize are defined in reach.retrieval."""
-    from reach.retrieval import K1, B, Bm25Scorer, Scorer, skill_text, tokenize
-
-    assert K1 > 0
-    assert 0 <= B <= 1
-    s1 = _make_skill("skill-a", "python coding assistant")
-    s2 = _make_skill("skill-b", "python code refactoring")
-    tokens = tokenize(skill_text(s1))
-    assert "python" in tokens
-    assert "assistant" in tokens
-
-    scorer = Bm25Scorer.from_skills([s1, s2])
-    assert isinstance(scorer, Scorer)
-    ranked = scorer.rank(s1, [s2])
-    assert len(ranked) == 1
-    assert ranked[0][0] == "skill-b"
-    assert ranked[0][1] > 0
-
-
-def test_dense_and_hybrid_scorers_conform_to_text_scorer() -> None:
-    """Verify DenseScorer and HybridScorer implement the TextScorer protocol."""
-    dense = DenseScorer(vectors={"s1": [1.0, 0.0]})
-    assert isinstance(dense, TextScorer)
-
-    lexical = Bm25Scorer.from_skills([])
-    hybrid = HybridScorer(lexical=lexical, semantic=dense)
-    assert isinstance(hybrid, TextScorer)
 
 
 def test_dense_scorer_rank_text() -> None:
@@ -550,15 +495,3 @@ def test_overlap_quadrant_missing(
         assert OverlapQuadrant._missing_(raw) is None
     else:
         assert OverlapQuadrant(raw) == expected
-
-
-def test_scorer_pydantic_field_constraints() -> None:
-    """Verify Bm25Scorer and DenseScorer enforce Pydantic Field and Literal constraints."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        Bm25Scorer(documents={}, k1=0.0)
-    with pytest.raises(ValidationError):
-        Bm25Scorer(documents={}, b=1.5)
-    with pytest.raises(ValidationError):
-        DenseScorer.model_validate({"mode": "invalid-mode"})

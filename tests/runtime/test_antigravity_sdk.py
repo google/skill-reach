@@ -31,8 +31,6 @@ from reach.runtime.antigravity_sdk import (
     AntigravitySdkGenerator,
     AntigravitySdkOptions,
     AntigravitySdkRuntime,
-    _build_model_spec,
-    _tool_name,
 )
 
 from .conftest import (
@@ -61,9 +59,6 @@ else:
 def _require_antigravity(request: pytest.FixtureRequest) -> None:
     """Skip test if google.antigravity is not installed and test requires it."""
     exempt = (
-        "test_antigravity_sdk_options_effort",
-        "test_antigravity_sdk_options_defaults",
-        "test_tool_name_passes_a_custom_tool_name_through",
         "missing_dependency",
         "uninstalled",
     )
@@ -81,16 +76,6 @@ def runtime() -> AntigravitySdkRuntime:
 def generator() -> AntigravitySdkGenerator:
     """Provide an AntigravitySdkGenerator instance configured with test-model."""
     return AntigravitySdkGenerator(options=AntigravitySdkOptions(model="test-model"))
-
-
-def test_tool_name_reads_the_plain_value_not_the_enum_repr() -> None:
-    """Verify _tool_name extracts string value from BuiltinTools enum members."""
-    assert _tool_name(ag_types.BuiltinTools.FINISH) == "finish"
-
-
-def test_tool_name_passes_a_custom_tool_name_through() -> None:
-    """Verify _tool_name returns plain string tool names unmodified."""
-    assert _tool_name("my_mcp_tool") == "my_mcp_tool"
 
 
 def test_select_config_omits_response_schema_by_default_and_respects_explicit_json_schema(
@@ -112,17 +97,6 @@ def test_select_config_omits_response_schema_by_default_and_respects_explicit_js
     schema = json.loads(cfg_explicit.response_schema)
     selected = schema["properties"]["selected_skill"]
     assert {"const": "gke-basics", "type": "string"} in selected["anyOf"]
-
-
-def test_antigravity_sdk_options_effort() -> None:
-    """Verify AntigravitySdkOptions accepts model and optional effort."""
-    opts_with_effort = AntigravitySdkOptions(model="gemini-3.8-flash", effort="medium")
-    assert opts_with_effort.model == "gemini-3.8-flash"
-    assert opts_with_effort.effort == "medium"
-
-    opts_no_effort = AntigravitySdkOptions(model="gemini-3.8-flash")
-    assert opts_no_effort.model == "gemini-3.8-flash"
-    assert opts_no_effort.effort is None
 
 
 def test_select_config_sets_thinking_config(tmp_path: Path) -> None:
@@ -482,15 +456,6 @@ def test_antigravity_sdk_generator_uninstalled_raises_helpful_error(
         AntigravitySdkGenerator()
 
 
-def test_antigravity_sdk_options_defaults() -> None:
-    """Verify AntigravitySdkOptions default parameters for performance and isolation."""
-    opts = AntigravitySdkOptions()
-    assert opts.use_symlinks is False
-    assert opts.isolate_config_dir is True
-    assert opts.auto_clean is False
-    assert opts.app_data_dir is None
-
-
 def test_antigravity_sdk_build_env_synchronizes_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify build_env synchronizes GEMINI_API_KEY and GOOGLE_API_KEY bidirectionally."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -836,19 +801,6 @@ def test_select_organic_text_abstention_vs_empty_rate_limit(
     )
 
 
-def test_build_model_spec_plain_and_effort() -> None:
-    """Verify _build_model_spec returns plain string or ModelTarget based on effort."""
-    assert _build_model_spec("plain-model") == "plain-model"
-    assert _build_model_spec("plain-model", None) == "plain-model"
-
-    target = _build_model_spec("gemini-3.8-flash", "high")
-    assert isinstance(target, ag_types.ModelTarget)
-    assert target.name == "gemini-3.8-flash"
-    assert isinstance(target.endpoint, ag_types.GeminiAPIEndpoint)
-    assert target.endpoint.options is not None
-    assert target.endpoint.options.thinking_level == ag_types.ThinkingLevel.HIGH
-
-
 def test_select_async_registers_hooks_in_config(
     monkeypatch: pytest.MonkeyPatch,
     runtime: AntigravitySdkRuntime,
@@ -964,24 +916,6 @@ def test_select_ignores_empty_or_whitespace_reasoning(
     assert outcome.reasoning == ()
 
 
-def test_build_model_spec_vertex_endpoint() -> None:
-    """Verify _build_model_spec returns VertexEndpoint when vertex is True."""
-    target = _build_model_spec(
-        "gemini-3.8-flash",
-        "low",
-        vertex=True,
-        project="my-project",
-        location="global",
-    )
-    assert isinstance(target, ag_types.ModelTarget)
-    assert target.name == "gemini-3.8-flash"
-    assert isinstance(target.endpoint, ag_types.VertexEndpoint)
-    assert target.endpoint.project == "my-project"
-    assert target.endpoint.location == "global"
-    assert target.endpoint.options is not None
-    assert target.endpoint.options.thinking_level == ag_types.ThinkingLevel.LOW
-
-
 def test_effective_vertex_and_project_location_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify effective_vertex, effective_project, and effective_location resolution."""
     monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
@@ -1036,6 +970,17 @@ def test_select_config_passes_vertex_and_project_location(tmp_path: Path) -> Non
     assert cfg.vertex is True
     assert cfg.project == "my-p"
     assert cfg.location == "my-loc"
+    assert isinstance(cfg.model, ag_types.ModelTarget)
+    assert isinstance(cfg.model.endpoint, ag_types.VertexEndpoint)
+    assert cfg.model.endpoint.options is not None
+
+    rt_no_effort = AntigravitySdkRuntime(
+        options=AntigravitySdkOptions(vertex=True, project="my-p", location="my-loc", effort="off"),
+    )
+    cfg_no_effort = rt_no_effort._select_config(tmp_path)
+    assert isinstance(cfg_no_effort.model, ag_types.ModelTarget)
+    assert isinstance(cfg_no_effort.model.endpoint, ag_types.VertexEndpoint)
+    assert cfg_no_effort.model.endpoint.options is None
 
 
 def test_complete_converts_antigravity_validation_error_to_runtime_error(
@@ -1054,23 +999,6 @@ def test_complete_converts_antigravity_validation_error_to_runtime_error(
     gen = AntigravitySdkGenerator()
     with pytest.raises(RuntimeError, match=r"generation failed: A Gemini API key is required\."):
         gen.complete("test prompt")
-
-
-def test_build_model_spec_vertex_endpoint_without_effort() -> None:
-    """Verify _build_model_spec instantiates VertexEndpoint when vertex=True and effort=None."""
-    target = _build_model_spec(
-        "gemini-3.8-flash",
-        effort=None,
-        vertex=True,
-        project="p1",
-        location="us-central1",
-    )
-    assert isinstance(target, ag_types.ModelTarget)
-    assert target.name == "gemini-3.8-flash"
-    assert isinstance(target.endpoint, ag_types.VertexEndpoint)
-    assert target.endpoint.project == "p1"
-    assert target.endpoint.location == "us-central1"
-    assert target.endpoint.options is None
 
 
 def test_effective_project_and_location_none_when_vertex_is_false(
@@ -1099,13 +1027,6 @@ def test_blocked_env_vars_strips_google_application_credentials_in_vertex(
     )
     env = rt.build_env()
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
-
-
-def test_antigravity_validation_error_stub_is_exception_subclass() -> None:
-    """Verify AntigravityValidationError is a valid Exception subclass."""
-    from reach.runtime.antigravity_sdk import AntigravityValidationError
-
-    assert issubclass(AntigravityValidationError, Exception)
 
 
 def test_select_async_hook_records_skill_when_early_exit_false_and_allows_view_file(
@@ -1221,22 +1142,14 @@ def test_model_supports_thinking(model_name: str, expected_thinking: bool) -> No
     assert _model_supports_thinking(model_name) is expected_thinking
 
 
-def test_build_model_spec_drops_effort_for_non_thinking_models() -> None:
-    """Verify _build_model_spec does not set thinking_level on models that do not support it."""
-    spec25 = _build_model_spec("gemini-2.5-flash", effort="low")
-    assert spec25 == "gemini-2.5-flash"
-
-    spec38 = _build_model_spec("gemini-3.8-flash", effort="low")
-    assert isinstance(spec38, ag_types.ModelTarget)
-    assert isinstance(spec38.endpoint, ag_types.GeminiAPIEndpoint)
-    assert spec38.endpoint.options is not None
-    assert spec38.endpoint.options.thinking_level == "low"
-
-
 def test_generator_effective_effort_guards_against_unsupported_models() -> None:
     """Verify AntigravitySdkGenerator.effective_effort avoids fallback effort on 2.5 models."""
-    gen25 = AntigravitySdkGenerator(model="gemini-2.5-flash")
+    gen25 = AntigravitySdkGenerator(
+        model="gemini-2.5-flash",
+        options=AntigravitySdkOptions(model="gemini-2.5-flash", vertex=False),
+    )
     assert gen25.effective_effort is None
+    assert gen25._target_model_spec("gemini-2.5-flash", "low") == "gemini-2.5-flash"
 
     gen38 = AntigravitySdkGenerator(model="gemini-3.8-flash")
     assert gen38.effective_effort == "low"

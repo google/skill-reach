@@ -165,58 +165,42 @@ def discovered_argv(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_a_missing_query_set_is_drafted_and_written(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify missing query set file is drafted from corpus and saved to disk."""
-    assert main(argv) == 0
-
-    written = load_query_set(tmp_path / "queries.json")
-    assert written.catalog_id == "all"
-    assert len(written.queries) == 6
-
-
-def test_nothing_is_probed_on_the_invocation_that_drafted_the_set(
+def test_missing_query_set_is_drafted_with_citations_notes_and_cost_without_probing(
     argv: list[str],
     generator: FakeGenerator,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
 ) -> None:
-    """Verify eval stops after drafting queries and does not immediately probe."""
+    """Verify cold-start eval drafts queries, citations, notes, and cost without probing."""
 
     def refuse(*_args: object, **_kwargs: object) -> Never:
         msg = "eval probed a query set it had just written"
         raise AssertionError(msg)
 
     monkeypatch.setattr("reach.cli.eval.conduct", refuse)
+    generator.completion_cost_usd = 0.1234
     assert main(argv) == 0
 
-
-def test_the_citations_land_beside_the_set_they_ground(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify drafted citations are saved to queries-citations.json beside query file."""
-    assert main(argv) == 0
+    written = load_query_set(tmp_path / "queries.json")
+    assert written.catalog_id == "all"
+    assert len(written.queries) == 6
+    assert "content" in written.notes
+    assert "Review before probing" in written.notes
+    assert written.provenance is not None
+    assert written.provenance.reviewed is None
 
     trail = json.loads((tmp_path / "queries-citations.json").read_text())
     assert len(trail) == 6
     assert {entry["citation"] for entry in trail} == {"Overview"}
     assert {entry["skill"] for entry in trail} == set(SPECS)
+    assert not (tmp_path / "queries.json.artifact.json").exists()
 
-
-def test_the_set_says_how_it_was_made(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify query set notes document drafting provenance and review instructions."""
-    assert main(argv) == 0
-    notes = load_query_set(tmp_path / "queries.json").notes
-    assert "content" in notes
-    assert "Review before probing" in notes
+    err = capsys.readouterr().err
+    assert "$0.1234" in err
+    assert "reach query" in err
+    assert str(tmp_path / "queries.json") in err
+    assert "queries.csv" in err
 
 
 def test_the_whole_catalog_is_resident_even_when_one_skill_is_asked_about(
@@ -416,17 +400,6 @@ def test_a_target_that_is_not_resident_is_refused_before_anything_is_spent(
     assert generator.prompts == []
 
 
-def test_drafting_reports_what_it_spent(
-    argv: list[str],
-    generator: FakeGenerator,
-    capsys,
-) -> None:
-    """Verify generation cost is printed to stderr upon completion."""
-    generator.completion_cost_usd = 0.1234
-    assert main(argv) == 0
-    assert "$0.1234" in capsys.readouterr().err
-
-
 @pytest.fixture
 def dying(generator: FakeGenerator, monkeypatch: pytest.MonkeyPatch) -> FakeGenerator:
     """Provide a generator runtime that succeeds once and then raises RuntimeError."""
@@ -452,7 +425,7 @@ def test_what_was_drafted_before_a_failure_is_still_on_disk(
     dying: FakeGenerator,
     tmp_path: Path,
 ) -> None:
-    """Verify partial checkpoint file preserves queries drafted before generator failure."""
+    """Verify partial checkpoint preserves drafted queries without writing final files."""
     assert main(argv) == 2
 
     banked = read_checkpoint(tmp_path / "queries.json.partial")
@@ -460,16 +433,6 @@ def test_what_was_drafted_before_a_failure_is_still_on_disk(
     assert len(banked.citations) == 2, "the grounding for it did not survive either"
     assert len(banked.covered) == 1
     assert len(banked.owed) == 2, "the run must know what it still owes"
-
-
-def test_a_draft_that_did_not_finish_is_not_left_where_it_would_be_probed(
-    argv: list[str],
-    dying: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify interrupted draft does not write incomplete query file to final destination."""
-    assert main(argv) == 2
-
     assert not (tmp_path / "queries.json").exists(), "a partial reached the destination"
     assert not (tmp_path / "queries-citations.json").exists()
 
@@ -480,31 +443,9 @@ def test_a_resumed_draft_does_not_re_buy_the_targets_already_paid_for(
     generator: FakeGenerator,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify resuming interrupted draft only requests remaining owed targets."""
-    assert main(argv) == 2
-
-    monkeypatch.setattr("reach.cli.drafting.text_generator", lambda **_: generator)
-    assert main(argv) == 0
-
-    assert generator.completions == 2, "a target already bought was bought again"
-    written = load_query_set(tmp_path / "queries.json")
-    assert len(written.queries) == 6, "the two halves did not add up to a whole set"
-    trail = json.loads((tmp_path / "queries-citations.json").read_text())
-    assert len(trail) == 6, "the grounding did not carry across the resume"
-    assert not (tmp_path / "queries.json.partial").exists(), (
-        "the partial outlived the set it was superseded by"
-    )
-
-
-def test_a_resumed_draft_reports_what_it_recovered_before_spending_more(
-    argv: list[str],
-    dying: FakeGenerator,
-    generator: FakeGenerator,
-    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    """Verify resume announcement logs recovered checkpoint targets and owed targets."""
+    """Verify resuming interrupted draft logs recovery and only requests owed targets."""
     assert main(argv) == 2
     capsys.readouterr()
 
@@ -515,6 +456,14 @@ def test_a_resumed_draft_reports_what_it_recovered_before_spending_more(
     assert "resuming" in err
     assert "queries.json.partial" in err
     assert "1 targets already drafted, 2 still owed" in err
+    assert generator.completions == 2, "a target already bought was bought again"
+    written = load_query_set(tmp_path / "queries.json")
+    assert len(written.queries) == 6, "the two halves did not add up to a whole set"
+    trail = json.loads((tmp_path / "queries-citations.json").read_text())
+    assert len(trail) == 6, "the grounding did not carry across the resume"
+    assert not (tmp_path / "queries.json.partial").exists(), (
+        "the partial outlived the set it was superseded by"
+    )
 
 
 def test_a_partial_drafted_under_another_arm_is_refused_rather_than_extended(
@@ -602,24 +551,13 @@ def test_a_dry_run_says_what_it_would_draft_and_drafts_nothing(
     tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify --dry-run prints planned query counts without sending prompts or writing files."""
+    """Verify --dry-run prints planned query counts and destination without writing files."""
     assert main([*argv, "--dry-run"]) == 0
 
     assert not (tmp_path / "queries.json").exists()
     assert generator.prompts == []
-    assert "9 queries" in capsys.readouterr().err
-
-
-def test_a_dry_run_names_where_the_set_would_land_and_that_it_stops_there(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """Verify --dry-run prints destination path and explains two-invocation workflow."""
-    assert main([*argv, "--dry-run"]) == 0
-
     err = capsys.readouterr().err
+    assert "9 queries" in err
     assert str(tmp_path / "queries.json") in err
     assert "second invocation" in err
 
@@ -662,33 +600,23 @@ def test_a_dry_run_refuses_the_draft_the_real_run_would_be_refused_for(
     assert not (tmp_path / "queries.json").exists()
 
 
-def test_the_draft_points_at_the_command_that_shows_the_whole_text(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """Verify drafting output prints reach query review command to review full text."""
-    assert main(argv) == 0
-
-    err = capsys.readouterr().err
-    assert "reach query" in err
-    assert str(tmp_path / "queries.json") in err
-    assert "queries.csv" in err
-
-
 def test_auto_eval_measures_in_one_invocation(
     argv: list[str],
     generator: FakeGenerator,
     tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify --auto drafts and immediately probes in a single run."""
+    """Verify --auto drafts unreviewed queries and immediately probes in a single run."""
     assert main([*argv, "--auto"]) == 0
 
-    assert load_query_set(tmp_path / "queries.json").queries
+    loaded = load_query_set(tmp_path / "queries.json")
+    assert loaded.queries
+    assert loaded.provenance is not None
+    assert loaded.provenance.reviewed is False
     assert read_artifact(tmp_path / "queries.json.artifact.json").catalog_id == "all"
-    assert "recall" in capsys.readouterr().err.split()
+    err = capsys.readouterr().err
+    assert "--auto" in err
+    assert "recall" in err.split()
 
 
 def test_auto_eval_without_explicit_queries_drafts_and_probes(
@@ -716,43 +644,6 @@ def test_auto_eval_without_explicit_queries_drafts_and_probes(
     assert "--auto was passed" in clean
 
 
-def test_the_default_two_invocation_flow_is_unchanged_without_the_flag(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify omitting --auto stops after drafting without creating artifact."""
-    assert main(argv) == 0
-
-    assert not (tmp_path / "queries.json.artifact.json").exists()
-
-
-def test_an_auto_set_records_that_nothing_reviewed_it(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify --auto records reviewed=False in query set provenance."""
-    assert main([*argv, "--auto"]) == 0
-
-    provenance = load_query_set(tmp_path / "queries.json").provenance
-    assert provenance is not None
-    assert provenance.reviewed is False
-
-
-def test_an_ordinary_formal_draft_leaves_reviewed_unstated(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify normal two-step draft leaves reviewed=None in provenance."""
-    assert main(argv) == 0
-
-    provenance = load_query_set(tmp_path / "queries.json").provenance
-    assert provenance is not None
-    assert provenance.reviewed is None
-
-
 def test_a_quick_drafted_set_is_also_stamped_unreviewed(
     quick_argv: list[str],
     generator: FakeGenerator,
@@ -770,17 +661,6 @@ def test_a_quick_drafted_set_is_also_stamped_unreviewed(
     assert main(quick_argv) == 0
 
     assert written["provenance"].reviewed is False
-
-
-def test_auto_says_so_before_probing(
-    argv: list[str],
-    generator: FakeGenerator,
-    capsys,
-) -> None:
-    """Verify --auto logs notification before probing begins."""
-    assert main([*argv, "--auto"]) == 0
-
-    assert "--auto" in capsys.readouterr().err
 
 
 def test_auto_has_no_effect_on_a_set_already_there(
@@ -807,30 +687,39 @@ def test_a_set_that_is_already_there_is_probed_rather_than_redrafted(
     argv: list[str],
     generator: FakeGenerator,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
 ) -> None:
-    """Verify existing query set file is probed on subsequent invocation without re-drafting."""
+    """Verify existing query set is probed once without redrafting and writes scorecard."""
+    real, builds = run_module.build_catalogs, []
+
+    def counted(*args: Any, **kwargs: Any) -> list[Catalog]:
+        builds.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(run_module, "build_catalogs", counted)
     assert main(argv) == 0
     drafted = (tmp_path / "queries.json").read_text()
     generator.prompts.clear()
+    builds.clear()
+    capsys.readouterr()
 
     assert main(argv) == 0
 
     assert (tmp_path / "queries.json").read_text() == drafted
     assert generator.prompts == [], "the set on disk was redrafted"
-
-
-def test_the_run_leaves_an_artifact_beside_the_questions_it_answered(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify eval creates artifact JSON file alongside query set upon probing."""
-    assert main(argv) == 0
-    assert main(argv) == 0
+    assert len(builds) == 1, "the catalog was resolved more than once"
 
     artifact = read_artifact(tmp_path / "queries.json.artifact.json")
     assert artifact.catalog_id == "all"
     assert artifact.catalog_size == len(SPECS)
+
+    shown = capsys.readouterr().err
+    assert "recall" in shown.split()
+    assert "reach" not in shown.split()
+    assert "gke-basics" in shown
+    assert "| arm" not in shown
+    assert "[arm" in shown
 
 
 def test_the_artifact_follows_the_rows_when_a_run_records_them(
@@ -860,71 +749,23 @@ def test_the_artifact_can_be_sent_somewhere_named(
     assert read_artifact(named).catalog_id == "all"
 
 
-def test_the_scorecard_is_what_a_finished_eval_shows(
+def test_tag_is_shown_in_scorecard_persisted_on_artifact_and_read_by_view(
     argv: list[str],
     generator: FakeGenerator,
+    tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify completed evaluation outputs per-skill recall scorecard."""
-    assert main(argv) == 0
-    capsys.readouterr()
-    assert main(argv) == 0
-
-    shown = capsys.readouterr().err
-    assert "recall" in shown.split()
-    assert "reach" not in shown.split()
-    assert "gke-basics" in shown
-
-
-def test_tag_is_shown_beside_the_arm_in_the_scorecard_header(
-    argv: list[str],
-    generator: FakeGenerator,
-    capsys,
-) -> None:
-    """Verify --tag value is displayed alongside arm name in scorecard header."""
+    """Verify --tag is shown in scorecard, persisted on artifact, and read back by reach view."""
     assert main([*argv, "--tag", "v1-baseline"]) == 0
     capsys.readouterr()
     assert main([*argv, "--tag", "v1-baseline"]) == 0
 
     assert "v1-baseline | arm" in capsys.readouterr().err
-
-
-def test_no_tag_means_no_tag_shown(argv: list[str], generator: FakeGenerator, capsys) -> None:
-    """Verify scorecard header omits tag delimiter when --tag is omitted."""
-    assert main(argv) == 0
-    capsys.readouterr()
-    assert main(argv) == 0
-
-    shown = capsys.readouterr().err
-    assert "| arm" not in shown
-    assert "[arm" in shown
-
-
-def test_the_tag_lands_on_the_artifact(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify --tag value is persisted into artifact digests.tag field."""
-    assert main([*argv, "--tag", "v1-baseline"]) == 0
-    assert main([*argv, "--tag", "v1-baseline"]) == 0
-
-    artifact = read_artifact(tmp_path / "queries.json.artifact.json")
+    artifact_path = tmp_path / "queries.json.artifact.json"
+    artifact = read_artifact(artifact_path)
     assert artifact.digests.tag == "v1-baseline"
 
-
-def test_reach_view_shows_the_tag_read_back_from_the_artifact(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """Verify reach view displays stored tag when loading artifact."""
-    assert main([*argv, "--tag", "v1-baseline"]) == 0
-    assert main([*argv, "--tag", "v1-baseline"]) == 0
-    capsys.readouterr()
-
-    assert main(["view", str(tmp_path / "queries.json.artifact.json")]) == 0
+    assert main(["view", str(artifact_path)]) == 0
     assert "v1-baseline | arm" in capsys.readouterr().err
 
 
@@ -990,26 +831,6 @@ def test_a_dry_run_over_an_existing_set_plans_without_probing(
     assert main([*argv, "--dry-run"]) == 0
 
     assert not (tmp_path / "queries.json.artifact.json").exists()
-
-
-def test_the_plan_an_eval_prints_is_the_run_it_then_conducts(
-    argv: list[str],
-    generator: FakeGenerator,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify catalog resolution occurs once for both plan preview and execution."""
-    real, builds = run_module.build_catalogs, []
-
-    def counted(*args: Any, **kwargs: Any) -> list[Catalog]:
-        builds.append(args)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(run_module, "build_catalogs", counted)
-    assert main(argv) == 0
-    builds.clear()
-
-    assert main(argv) == 0
-    assert len(builds) == 1, "the catalog was resolved more than once"
 
 
 def test_the_corpus_can_come_from_the_runtime_rather_than_a_flag(
@@ -1336,15 +1157,24 @@ def quick_argv(bodied_corpus: Path) -> list[str]:
 def test_naming_a_skill_drafts_probes_and_summarizes_in_one_invocation(
     quick_argv: list[str],
     generator: FakeGenerator,
+    scratch: Path,
+    tmp_path: Path,
     capsys,
 ) -> None:
-    """Verify positional skill name triggers combined drafting and probing in one invocation."""
+    """Verify positional skill name drafts, probes, logs scope, and cleans scratch in one run."""
     assert main(quick_argv) == 0
 
     shown = capsys.readouterr().err
     assert generator.prompts, "nothing was drafted"
     assert "recall" in shown.split(), shown
     assert "gke-basics" in shown
+    assert "neighborhood:gke-basics" in shown
+    assert f"{len(SPECS)} of {len(SPECS)} skills resident" in shown
+    assert "3 attempts per query" in shown
+    assert "drafted here and probed unreviewed, against 2 rivals" in shown
+    assert not scratch.exists()
+    assert list(tmp_path.rglob("*artifact*")) == []
+    assert list(tmp_path.rglob("*.json")) == []
 
 
 def test_a_quick_dry_run_offers_no_path_to_a_file_nobody_could_open(
@@ -1377,21 +1207,6 @@ def test_a_quick_run_holds_the_named_skills_neighborhood_and_not_the_corpus(
     assert read_artifact(named).catalog_id == "neighborhood:gke-basics"
 
 
-def test_a_quick_run_states_the_scope_the_depth_and_the_rivals_behind_its_answer(
-    quick_argv: list[str],
-    generator: FakeGenerator,
-    capsys,
-) -> None:
-    """Verify quick mode logs catalog scope, depth, and rival count."""
-    assert main(quick_argv) == 0
-
-    shown = capsys.readouterr().err
-    assert "neighborhood:gke-basics" in shown
-    assert f"{len(SPECS)} of {len(SPECS)} skills resident" in shown
-    assert "3 attempts per query" in shown
-    assert "drafted here and probed unreviewed, against 2 rivals" in shown
-
-
 @pytest.mark.parametrize("source", ["cli", "autodiscovered_config"])
 def test_the_depth_a_quick_run_states_is_the_one_it_was_given(
     source: str,
@@ -1413,20 +1228,6 @@ def test_the_depth_a_quick_run_states_is_the_one_it_was_given(
     monkeypatch.chdir(cfg_dir)
     assert main(quick_argv) == 0
     assert "4 attempts per query" in capsys.readouterr().err
-
-
-def test_a_quick_run_banks_nothing_where_a_later_run_would_find_it(
-    quick_argv: list[str],
-    generator: FakeGenerator,
-    scratch: Path,
-    tmp_path: Path,
-) -> None:
-    """Verify default quick mode deletes scratch directory and writes no artifact files."""
-    assert main(quick_argv) == 0
-
-    assert not scratch.exists()
-    assert list(tmp_path.rglob("*artifact*")) == []
-    assert list(tmp_path.rglob("*.json")) == []
 
 
 def test_a_quick_run_records_when_it_is_asked_to(
@@ -1560,19 +1361,6 @@ def test_an_expectation_with_no_question_to_attach_it_to_is_refused(capsys) -> N
     assert main(["eval", "gke-basics", "--expected", "gke-basics"]) == 2
 
     assert "--expected labels a --query" in capsys.readouterr().err
-
-
-def test_the_formal_path_is_not_reached_by_leaving_the_skill_off(
-    argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify omitting positional skill follows formal two-step drafting path."""
-    assert main(argv) == 0
-
-    written = load_query_set(tmp_path / "queries.json")
-    assert written.catalog_id == "all"
-    assert not (tmp_path / "queries.json.artifact.json").exists()
 
 
 def test_save_promotes_the_query_set_the_citations_and_the_artifact(

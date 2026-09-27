@@ -354,16 +354,25 @@ def test_resolve_corpus_falls_through_empty_skills_folder(tmp_path: Path) -> Non
     assert roots == (tmp_path / ".agents" / "skills",)
 
 
-def test_resolve_corpus_discovers_cursor_skills_when_earlier_candidates_absent(
+@pytest.mark.parametrize(
+    ("client_subdir", "skill_name"),
+    [
+        (".cursor/skills", "cursor-skill"),
+        (".github/skills", "copilot-skill"),
+    ],
+)
+def test_resolve_corpus_discovers_fallback_client_skills_when_earlier_candidates_absent(
     tmp_path: Path,
+    client_subdir: str,
+    skill_name: str,
 ) -> None:
-    """Verify resolve_corpus discovers .cursor/skills when earlier candidates are absent."""
+    """Verify resolve_corpus discovers fallback client directories when earlier ones are absent."""
     from reach.runtime.keyword import KeywordRuntime
 
-    cursor_dir = tmp_path / ".cursor" / "skills" / "cursor-skill"
-    cursor_dir.mkdir(parents=True)
-    (cursor_dir / "SKILL.md").write_text(
-        "---\nname: cursor-skill\ndescription: A Cursor skill.\n---\nBody",
+    skill_dir = tmp_path / client_subdir / skill_name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {skill_name}\ndescription: A fallback client skill.\n---\nBody",
         encoding="utf-8",
     )
 
@@ -371,29 +380,8 @@ def test_resolve_corpus_discovers_cursor_skills_when_earlier_candidates_absent(
     skills, roots, _found = resolve_corpus(runtime, tmp_path, None)
 
     assert len(skills) == 1
-    assert skills[0].name == "cursor-skill"
-    assert roots == (tmp_path / ".cursor" / "skills",)
-
-
-def test_resolve_corpus_discovers_github_skills_when_earlier_candidates_absent(
-    tmp_path: Path,
-) -> None:
-    """Verify resolve_corpus discovers .github/skills when earlier candidates are absent."""
-    from reach.runtime.keyword import KeywordRuntime
-
-    github_dir = tmp_path / ".github" / "skills" / "copilot-skill"
-    github_dir.mkdir(parents=True)
-    (github_dir / "SKILL.md").write_text(
-        "---\nname: copilot-skill\ndescription: A GitHub Copilot skill.\n---\nBody",
-        encoding="utf-8",
-    )
-
-    runtime = KeywordRuntime()
-    skills, roots, _found = resolve_corpus(runtime, tmp_path, None)
-
-    assert len(skills) == 1
-    assert skills[0].name == "copilot-skill"
-    assert roots == (tmp_path / ".github" / "skills",)
+    assert skills[0].name == skill_name
+    assert roots == (tmp_path / client_subdir,)
 
 
 def test_resolve_corpus_discovers_global_skills_when_global_scope_set(
