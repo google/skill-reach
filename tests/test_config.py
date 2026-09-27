@@ -508,6 +508,7 @@ def test_corpus_override_and_env_var_resolution(
     other = tmp_path / "elsewhere"
     other.mkdir()
     monkeypatch.setenv(CORPUS_VAR, str(other))
+    assert expand_path(f"${{{CORPUS_VAR}}}/skills") == other / "skills"
     assert RunConfig.from_toml(variable_config).study.skills == other
     assert build_config(config=variable_config, required=()).study.skills == other
     assert RunConfig.from_toml(variable_config, skills=skill_repo).study.skills == skill_repo

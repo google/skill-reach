@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
-import functools
+import contextlib
+import io
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
@@ -1786,23 +1787,31 @@ ALL_HELP_IDS = ["reach" if not argv else "-".join(argv) for argv in ALL_HELP_COM
 FORMATTED_ARGV = [["overlap"], ["eval"], ["diff"]]
 
 
-@functools.cache
-def _help_output(argv: tuple[str, ...]) -> tuple[int, str, str]:
-    """Execute main([*argv, '--help']) once per unique argv tuple and capture output."""
-    import contextlib
-    import io
+@pytest.fixture(scope="module")
+def help_output() -> Callable[[Sequence[str]], tuple[int, str, str]]:
+    """Provide a module-scoped cached runner for main([*argv, '--help'])."""
+    cache: dict[tuple[str, ...], tuple[int, str, str]] = {}
 
-    out_buf = io.StringIO()
-    err_buf = io.StringIO()
-    with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-        code = main([*argv, "--help"])
-    return code, out_buf.getvalue(), err_buf.getvalue()
+    def _run(argv: Sequence[str] = ()) -> tuple[int, str, str]:
+        key = tuple(argv)
+        if key not in cache:
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                code = main([*key, "--help"])
+            cache[key] = (code, out_buf.getvalue(), err_buf.getvalue())
+        return cache[key]
+
+    return _run
 
 
 @pytest.mark.parametrize("argv", ALL_HELP_COMMANDS, ids=ALL_HELP_IDS)
-def test_every_verb_gets_the_styled_help(argv: list[str]) -> None:
+def test_every_verb_gets_the_styled_help(
+    argv: list[str],
+    help_output: Callable[[Sequence[str]], tuple[int, str, str]],
+) -> None:
     """Verify --help writes styled usage to stdout with no stderr or default-False noise."""
-    code, out, err = _help_output(tuple(argv))
+    code, out, err = help_output(argv)
     assert code == 0
     assert out.startswith("Usage:")
     assert "╭─" in out
@@ -1818,18 +1827,23 @@ def test_every_verb_gets_the_styled_help(argv: list[str]) -> None:
 
 
 @pytest.mark.parametrize("argv", FORMATTED_ARGV, ids=" ".join)
-def test_every_format_flag_says_what_it_renders(argv: list[str], snapshot) -> None:
+def test_every_format_flag_says_what_it_renders(
+    argv: list[str],
+    help_output: Callable[[Sequence[str]], tuple[int, str, str]],
+    snapshot: Any,
+) -> None:
     """Verify --format flag help line explains rendered output format."""
-    code, out, _ = _help_output(tuple(argv))
+    code, out, _ = help_output(argv)
     assert code == 0
     assert _flag_line(out, "--format") == snapshot
 
 
 def test_a_runtime_that_probes_nothing_is_not_offered_as_though_it_did(
-    snapshot,
+    help_output: Callable[[Sequence[str]], tuple[int, str, str]],
+    snapshot: Any,
 ) -> None:
     """Verify eval --help --agent choices exclude non-probing internal runtimes."""
-    code, out, _ = _help_output(("eval",))
+    code, out, _ = help_output(("eval",))
     assert code == 0
     assert _flag_line(out, "--agent") == snapshot
 
@@ -1866,11 +1880,14 @@ SETUP_VERBS = {"clean", "completion", "doctor", "init"}
 ALL_VERBS = LOOP_VERBS | SETUP_VERBS
 
 
-def test_the_verbs_are_listed_under_one_heading(snapshot) -> None:
+def test_the_verbs_are_listed_under_one_heading(
+    help_output: Callable[[Sequence[str]], tuple[int, str, str]],
+    snapshot: Any,
+) -> None:
     """Verify main help usage header, registered verb sets, and command grouping match snapshot."""
     assert set(registered_verbs()) == ALL_VERBS
     assert not set(registered_verbs()) & {"run", "findings", "difficulty", "taxonomy"}
-    code, out, _ = _help_output(())
+    code, out, _ = help_output(())
     assert code == 0
     assert out.splitlines()[0] == "Usage: reach COMMAND"
     assert "TOKENS" not in out

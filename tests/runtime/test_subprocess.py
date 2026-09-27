@@ -117,7 +117,7 @@ def _sleep_cmd(seconds: int = 10, *, emit_ping: bool = False) -> list[str]:
     """Return a cross-platform command that sleeps for the given duration."""
     if os.name != "nt":
         return (
-            ["sh", "-c", f"printf 'ping\\n'; sleep {seconds}"]
+            ["sh", "-c", f"printf 'ping\\n'; exec sleep {seconds}"]
             if emit_ping
             else ["sleep", str(seconds)]
         )
@@ -125,24 +125,17 @@ def _sleep_cmd(seconds: int = 10, *, emit_ping: bool = False) -> list[str]:
     return [sys.executable, "-c", f"import time; {prefix}time.sleep({seconds})"]
 
 
-@pytest.mark.parametrize(
-    ("emit_ping", "timeout_s"),
-    [
-        pytest.param(False, 0.015, id="silent-hang"),
-        pytest.param(True, 0.001, id="streaming-hang"),
-    ],
-)
+@pytest.mark.parametrize("emit_ping", [False, True], ids=["silent-hang", "streaming-hang"])
 def test_run_subprocess_probe_watchdog_terminates_hung_process(
     tmp_path: Path,
     emit_ping: bool,
-    timeout_s: float,
 ) -> None:
     """Verify watchdog terminates both silent and streaming hung subprocesses on timeout."""
     start = time.monotonic()
     completed, err = run_subprocess_probe(
         _sleep_cmd(10, emit_ping=emit_ping),
         tmp_path,
-        timeout_s=timeout_s,
+        timeout_s=0.02,
     )
     elapsed = time.monotonic() - start
 
