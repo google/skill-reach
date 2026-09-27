@@ -304,7 +304,7 @@ def test_interval_alternative_constructors() -> None:
     assert iv_tup.confidence == DEFAULT_CONFIDENCE
 
     with pytest.raises(ValueError, match="expected 2 elements"):
-        Interval.from_tuple((0.2,))  # type: ignore[arg-type]
+        Interval.from_tuple((0.2,))
 
 
 def test_interval_strictness() -> None:

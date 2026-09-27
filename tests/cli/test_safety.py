@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
+from reach.cli.app import app
 from reach.cli.safety import (
     catalog_summary,
     confirm_skill_execution,
@@ -31,6 +32,20 @@ from reach.models import Skill
 from reach.views import Console
 
 
+def test_yes_flag_registered_on_target_commands() -> None:
+    """Verify --yes and -y flags are registered on eval, sweep, check, and optimize."""
+    for cmd_name in ("eval", "sweep", "check", "optimize"):
+        cmd = app[cmd_name]
+        arg_names = {
+            name
+            for arg in cmd.assemble_argument_collection()
+            if arg.parameter.name
+            for name in arg.parameter.name
+        }
+        assert "--yes" in arg_names, f"--yes missing from 'reach {cmd_name}'"
+        assert "-y" in arg_names, f"-y missing from 'reach {cmd_name}'"
+
+
 @pytest.fixture
 def test_console() -> Console:
     """Provide a capture-enabled Console instance for testing."""
@@ -38,32 +53,34 @@ def test_console() -> Console:
 
 
 @pytest.fixture
-def sample_skills() -> list[Skill]:
+def sample_skills(tmp_path: Path) -> list[Skill]:
     """Provide sample skills across multiple directories for testing."""
+    proj_skills = tmp_path / "workspace" / "project" / ".agents" / "skills"
+    home_skills = tmp_path / "home" / "user" / ".claude" / "skills"
     return [
         Skill(
             name="skill-a",
             description="First test skill.",
-            path=Path("/workspace/project/.agents/skills/skill-a"),
+            path=proj_skills / "skill-a",
         ),
         Skill(
             name="skill-b",
             description="Second test skill.",
-            path=Path("/workspace/project/.agents/skills/skill-b"),
+            path=proj_skills / "skill-b",
         ),
         Skill(
             name="skill-c",
             description="Third test skill.",
-            path=Path("/home/user/.claude/skills/skill-c"),
+            path=home_skills / "skill-c",
         ),
     ]
 
 
-def test_catalog_summary_multi_root(sample_skills: list[Skill]) -> None:
+def test_catalog_summary_multi_root(sample_skills: list[Skill], tmp_path: Path) -> None:
     """Verify catalog summary formats counts across distinct directory roots."""
     roots = [
-        Path("/workspace/project/.agents/skills"),
-        Path("/home/user/.claude/skills"),
+        tmp_path / "workspace" / "project" / ".agents" / "skills",
+        tmp_path / "home" / "user" / ".claude" / "skills",
     ]
     headline, bullets = catalog_summary(sample_skills, roots=roots)
     assert headline == "3 skills resolved from 2 locations:"

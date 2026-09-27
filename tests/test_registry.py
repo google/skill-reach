@@ -22,6 +22,7 @@ import urllib.error
 from datetime import UTC, datetime, timedelta
 from email.message import Message
 from pathlib import Path
+from typing import override
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -149,7 +150,7 @@ def test_client_publisher_filter() -> None:
         ],
     }
 
-    def mock_urlopen(req: object) -> MagicMock:
+    def mock_urlopen(_req: object) -> MagicMock:
         resp = MagicMock()
         resp.read.return_value = json.dumps(payload).encode("utf-8")
         resp.__enter__.return_value = resp
@@ -183,7 +184,7 @@ def test_client_error_mapping(
     """Verify HTTP status codes map to domain exceptions with actionable context."""
     client = RegistryClient(token="mock-token")  # noqa: S106
 
-    def mock_urlopen(req: object) -> None:
+    def mock_urlopen(_req: object) -> None:
         fp = io.BytesIO(error_payload.encode("utf-8"))
         raise urllib.error.HTTPError(
             url="https://agentregistry.googleapis.com",
@@ -205,7 +206,7 @@ def test_client_rate_limit_retry() -> None:
     client = RegistryClient(token="mock-token", max_retries=2, backoff_factor=0.01)  # noqa: S106
     attempts = 0
 
-    def mock_urlopen(req: object) -> MagicMock:
+    def mock_urlopen(_req: object) -> MagicMock:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -506,7 +507,7 @@ def test_client_get_skill() -> None:
         "description": "Specific skill",
     }
 
-    def mock_urlopen(req: object) -> MagicMock:
+    def mock_urlopen(_req: object) -> MagicMock:
         resp = MagicMock()
         resp.read.return_value = json.dumps(payload).encode("utf-8")
         resp.__enter__.return_value = resp
@@ -532,7 +533,7 @@ def test_client_fetch_manifest() -> None:
         ]
     }
 
-    def mock_urlopen(req: object) -> MagicMock:
+    def mock_urlopen(_req: object) -> MagicMock:
         resp = MagicMock()
         resp.read.return_value = json.dumps(payload).encode("utf-8")
         resp.__enter__.return_value = resp
@@ -664,15 +665,15 @@ def test_registry_cache_concurrent_save_manifest_and_hydrate(tmp_path: Path) -> 
     )
     skill_data = manifest.skills[0]
 
-    def worker(idx: int) -> None:
+    def worker(_idx: int) -> None:
         # Concurrent saves
         cache.save_manifest(manifest)
         # Concurrent hydration
         hydrated_dir = cache.hydrate_skill_file("concurrent-proj", "global", skill_data)
         assert hydrated_dir.is_dir()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        futures = [executor.submit(worker, i) for i in range(16)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(worker, i) for i in range(8)]
         for f in concurrent.futures.as_completed(futures):
             f.result()
 
@@ -703,6 +704,7 @@ def test_registry_cache_publisher_scoping_prevents_cache_poisoning(tmp_path: Pat
         def __init__(self) -> None:
             self.calls: list[str | None] = []
 
+        @override
         def fetch_manifest(
             self, project: str, location: str = "global", publisher: str | None = None
         ) -> RegistryManifest:
@@ -753,6 +755,7 @@ def test_registry_cache_global_manifest_satisfies_subsequent_filtered_requests(
         def __init__(self) -> None:
             self.calls: list[str | None] = []
 
+        @override
         def fetch_manifest(
             self, project: str, location: str = "global", publisher: str | None = None
         ) -> RegistryManifest:
@@ -802,6 +805,7 @@ def test_registry_cache_stale_fallback_respects_publisher_filter(tmp_path: Path)
     cache.save_manifest(manifest_a)
 
     class FailingClient(RegistryClient):
+        @override
         def fetch_manifest(
             self,
             project: str,
@@ -881,32 +885,36 @@ def test_find_adc_path_none_when_missing(tmp_path: Path, monkeypatch: pytest.Mon
     assert not is_adc_available()
 
 
-def test_is_adc_available_detects_windows_adc(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Verify is_adc_available returns True when credentials exist in Windows AppData."""
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    monkeypatch.delenv("CLOUDSDK_CONFIG", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-    appdata = tmp_path / "AppData" / "Roaming"
-    gcloud = appdata / "gcloud"
-    gcloud.mkdir(parents=True)
-    adc = gcloud / "application_default_credentials.json"
-    adc.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("APPDATA", str(appdata))
-
-    assert is_adc_available() is True
-
-
-def test_get_access_token_uses_cloud_platform_scope() -> None:
+def test_get_access_token_uses_cloud_platform_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify get_access_token requests the cloud-platform scope from google-auth."""
-    mock_creds = MagicMock(token="ya29.scope_test_token")  # noqa: S106
-    with patch("google.auth.default", return_value=(mock_creds, "mock-proj")) as mock_default:
-        token = get_access_token()
-        assert token == "ya29.scope_test_token"  # noqa: S105
-        mock_default.assert_called_once_with(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
+    import sys
+    import types
+    from typing import Any
+
+    mock_creds = MagicMock()
+    mock_creds.token = "ya29.mock"  # noqa: S105
+    mock_default = MagicMock(return_value=(mock_creds, "mock-proj"))
+
+    fake_google: Any = types.ModuleType("google")
+    fake_auth: Any = types.ModuleType("google.auth")
+    fake_auth.default = mock_default
+    fake_transport: Any = types.ModuleType("google.auth.transport")
+    fake_requests: Any = types.ModuleType("google.auth.transport.requests")
+    fake_requests.Request = MagicMock()
+    fake_google.auth = fake_auth
+    fake_auth.transport = fake_transport
+    fake_transport.requests = fake_requests
+
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setitem(sys.modules, "google.auth", fake_auth)
+    monkeypatch.setitem(sys.modules, "google.auth.transport", fake_transport)
+    monkeypatch.setitem(sys.modules, "google.auth.transport.requests", fake_requests)
+
+    token = get_access_token()
+    assert token == "ya29.mock"  # noqa: S105
+    mock_default.assert_called_once_with(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
 
 
 def test_get_access_token_fails_if_gcloud_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

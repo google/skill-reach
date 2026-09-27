@@ -232,26 +232,6 @@ def test_cli_overlap_explain_json_format(
     assert data["rival_skill"] == "skill-b"
 
 
-def test_cli_overlap_explain_flag(attributed_skills_dir: Path) -> None:
-    """Verify reach overlap explain subcommand runs attribution."""
-    from reach.cli.app import app
-
-    code = app(
-        [
-            "overlap",
-            "explain",
-            "Set retention policy to delete logs",
-            "--skill",
-            "skill-a",
-            "--rival",
-            "skill-b",
-            "--skills",
-            str(attributed_skills_dir),
-        ],
-    )
-    assert code == 0
-
-
 def test_attribute_query_empty_string(scorer: Bm25Scorer) -> None:
     """Verify empty or whitespace-only query produces empty attribution with 0 net bias."""
     attribution = attribute_query(

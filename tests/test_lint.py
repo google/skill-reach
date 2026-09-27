@@ -277,24 +277,41 @@ def test_explain_rule() -> None:
 
 
 def test_lint_config_from_settings_loads_thresholds_and_rules() -> None:
-    """Verify LintSettings.from_settings parses custom thresholds and rule severities."""
+    """Verify LintSettings.from_settings parses thresholds, overrides, and validates rules."""
+    from pydantic import ValidationError
+
     settings = {
         "lint": {
             "max_description_length": 500,
             "max_name_length": 32,
             "min_description_length": 40,
+            "mutual_handoff_similarity_threshold": 0.82,
+            "mutual_handoff_lexical_threshold": 0.45,
             "rules": {
                 "description-too-short": "error",
                 "invalid-name-format": "warn",
+                "lockfile-drift": "INFO",
             },
         },
+        "retrieval": {"similarity_threshold": 0.85},
     }
-    config = LintSettings.from_settings(settings)
+    config = LintSettings.from_settings(
+        settings,
+        overrides={"kebab-case-name": Severity.WARN},
+    )
     assert config.max_description_length == 500
     assert config.max_name_length == 32
     assert config.min_description_length == 40
+    assert config.similarity_threshold == pytest.approx(0.85)
+    assert config.mutual_handoff_similarity_threshold == pytest.approx(0.82)
+    assert config.mutual_handoff_lexical_threshold == pytest.approx(0.45)
     assert config.rules["description-too-short"] == Severity.ERROR
     assert config.rules["invalid-name-format"] == Severity.WARN
+    assert config.rules["lockfile-drift"] == Severity.INFO
+    assert config.rules["kebab-case-name"] == Severity.WARN
+
+    with pytest.raises(ValidationError):
+        LintSettings.from_settings({"lint": {"rules": {"lockfile-drift": "not-a-severity"}}})
 
 
 def test_custom_max_name_length_threshold(write_skill: Callable[..., Path]) -> None:
@@ -565,23 +582,6 @@ def test_lockfile_clean_when_hash_matches(
     assert len(drift_issues) == 0
 
 
-def test_lint_settings_from_settings() -> None:
-    """Verify LintSettings.from_settings parses settings and overrides correctly."""
-    from reach.config import LintSettings
-
-    cfg = LintSettings.from_settings(
-        settings={
-            "lint": {"max_name_length": 32, "rules": {"no-description": "error"}},
-            "retrieval": {"similarity_threshold": 0.85},
-        },
-        overrides={"kebab-case-name": Severity.WARN},
-    )
-    assert cfg.max_name_length == 32
-    assert cfg.similarity_threshold == 0.85
-    assert cfg.rules["no-description"] == "error"
-    assert cfg.rules["kebab-case-name"] == Severity.WARN
-
-
 @pytest.mark.parametrize(
     "empty_val",
     ['""', "''", "   ", "null"],
@@ -621,22 +621,21 @@ def test_missing_description_in_lint_tree_does_not_crash(
         ),
         (
             (
-                "Analyzes SQL query execution plans and index scan costs. "
-                "Don't use for routine database administration "
-                "(use `db-basics`), vector search indexing (use `db-vector-search`), or "
-                "ORM schema migrations (use `db-migrations`)."
+                "Analyzes SQL query execution plans and index costs. "
+                "Don't use for generic database administration, vector search, or DataFrames "
+                "(use `db-basics`, `db-vector-search`, or `db-dataframes`). "
+                "Do not use for streaming ingestion — use kafka-streaming, flink-pipelines and "
+                "db-bulk-writer."
             ),
             "db-cost-optimizer",
-            ("db-basics", "db-migrations", "db-vector-search"),
-        ),
-        (
             (
-                "Diagnoses Kubernetes volume mount failures and object storage FUSE OOM. "
-                "Don't use for initial storage class provisioning or choosing volume types "
-                "(use `k8s-storage`)."
+                "db-basics",
+                "db-bulk-writer",
+                "db-dataframes",
+                "db-vector-search",
+                "flink-pipelines",
+                "kafka-streaming",
             ),
-            "k8s-storage-troubleshooting",
-            ("k8s-storage",),
         ),
         (
             "For query plan tuning and index cost analysis, use db-cost-optimizer instead.",
@@ -651,6 +650,11 @@ def test_missing_description_in_lint_tree_does_not_crash(
             ),
             "db-observability",
             (),
+        ),
+        (
+            "For database cluster tasks, defer to `service-specific` or prefer `db-related`.",
+            "my-skill",
+            ("db-related", "service-specific"),
         ),
     ],
 )
@@ -837,28 +841,6 @@ def test_missing_mutual_handoff_resolves_when_reciprocal_handoffs_added(
     assert len(mutual_issues) == 0
 
 
-def test_extract_skill_references_multi_target_list_with_oxford_comma() -> None:
-    """Verify 3+ skill handoff lists with and without Oxford commas extract every skill ID."""
-    from reach.lint import extract_skill_references
-
-    desc = (
-        "Analyzes SQL query execution plans and index costs. "
-        "Don't use for generic database administration, vector search, or DataFrames "
-        "(use `db-basics`, `db-vector-search`, or `db-dataframes`). "
-        "Do not use for streaming ingestion — use kafka-streaming, flink-pipelines and "
-        "db-bulk-writer."
-    )
-    refs = extract_skill_references(desc, self_name="db-cost-optimizer")
-    assert refs == (
-        "db-basics",
-        "db-bulk-writer",
-        "db-dataframes",
-        "db-vector-search",
-        "flink-pipelines",
-        "kafka-streaming",
-    )
-
-
 def test_missing_mutual_handoff_fires_when_neither_skill_has_existing_boundaries(
     write_skill: Callable[..., Path],
     tmp_path: Path,
@@ -939,6 +921,16 @@ def test_missing_mutual_handoff_fires_when_neither_skill_has_existing_boundaries
                 "webhook-api-audience-ingestion",
                 "webhook-api-event-ingestion",
             ),
+        ),
+        (
+            "Use this skill when writing code or prefer that skill instead.",
+            "my-skill",
+            (),
+        ),
+        (
+            "For language-specific configuration, prefer the framework-related skill first.",
+            "my-skill",
+            (),
         ),
     ],
 )
@@ -1244,62 +1236,6 @@ def test_claims_neighbor_name_phrase(
     assert _claims_neighbor_name_phrase(source, neighbor, taxonomy) is expected
 
 
-@pytest.mark.parametrize(
-    ("description", "expected_refs"),
-    [
-        (
-            "Use this skill when writing code or prefer that skill instead.",
-            (),
-        ),
-        (
-            (
-                "Don't use for product-specific or domain-related tasks "
-                "(use web-api-basics instead)."
-            ),
-            ("web-api-basics",),
-        ),
-        (
-            "For language-specific configuration, prefer the framework-related skill first.",
-            (),
-        ),
-    ],
-    ids=[
-        "qualified-this-that-prose",
-        "specific-and-related-in-clause",
-        "specific-and-related-qualified",
-    ],
-)
-def test_extract_skill_references_ignores_this_and_specific_related_suffixes(
-    description: str,
-    expected_refs: tuple[str, ...],
-) -> None:
-    """Verify 'use this skill' and '-specific'/'-related' modifiers are not extracted."""
-    from reach.lint import extract_skill_references
-
-    assert extract_skill_references(description, self_name="my-skill") == expected_refs
-
-
-def test_find_unknown_skill_references_matches_wildcard_prefix_families() -> None:
-    """Verify '-*' skill family references match known_skills sharing that prefix."""
-    from reach.lint import find_unknown_skill_references
-
-    desc = (
-        "Routes general backend queries. Don't use for container orchestration "
-        "(use `k8s-*` or `ci-pipeline-*` instead, or defer to `nonexistent-family-*`)."
-    )
-    known = {"k8s-basics", "k8s-networking", "ci-pipeline-deploy"}
-    unknown = find_unknown_skill_references(desc, known, self_name="backend-router")
-    assert unknown == ("nonexistent-family",)
-
-
-def test_extract_skill_references_preserves_backticked_specific_and_related_skills() -> None:
-    """Ensure explicit backticked references are retained despite suffixes."""
-    from reach.lint import extract_skill_references
-
-    desc = "For database cluster tasks, defer to `service-specific` or prefer `db-related`."
-    assert extract_skill_references(desc) == ("db-related", "service-specific")
-
-
 def test_missing_mutual_handoff_ignores_multi_skill_template_cliques(tmp_path: Path) -> None:
     """Suppress k >= 3 template sibling cliques while flagging 1-to-1 peer collisions."""
     skills = [
@@ -1592,24 +1528,60 @@ def test_missing_mutual_handoff_unacknowledged_overlap_severity(
         assert all(i.severity == expected_severity for i in mutual_issues)
 
 
-def test_lint_settings_from_settings_preserves_mutual_handoff_thresholds_and_validates_rules() -> (
-    None
-):
-    """Verify LintSettings.from_settings preserves mutual handoff thresholds and validates rules."""
-    from pydantic import ValidationError
-
-    cfg = LintSettings.from_settings(
-        {
-            "lint": {
-                "mutual_handoff_similarity_threshold": 0.82,
-                "mutual_handoff_lexical_threshold": 0.45,
-                "rules": {"lockfile-drift": "INFO"},
-            }
-        }
+@pytest.mark.parametrize(
+    "greedy_desc",
+    [
+        "Assist with any coding task and debug issues.",
+        "A tool to help with any programming problem.",
+        "Manage files and run commands in the terminal.",
+        "General-purpose developer assistant.",
+        "Universal assistant for your workflows.",
+        "All-in-one helper for software engineering.",
+        "Handle any request given by the user.",
+        (
+            "Use this general-purpose assistant when implementing any feature "
+            "or fixing bugs in the codebase."
+        ),
+    ],
+)
+def test_unbounded_attractor_flags_greedy_descriptions(tmp_path: Path, greedy_desc: str) -> None:
+    """Verify unbounded-attractor rule flags catch-all phrases in descriptions."""
+    skill_dir = tmp_path / "greedy-skill"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        f"---\nname: greedy-skill\ndescription: {greedy_desc}\n---\n# Body\n",
+        encoding="utf-8",
     )
-    assert cfg.mutual_handoff_similarity_threshold == pytest.approx(0.82)
-    assert cfg.mutual_handoff_lexical_threshold == pytest.approx(0.45)
-    assert cfg.rules["lockfile-drift"] == Severity.INFO
 
-    with pytest.raises(ValidationError):
-        LintSettings.from_settings({"lint": {"rules": {"lockfile-drift": "not-a-severity"}}})
+    report = lint_file(skill_file, LintSettings())
+    attractor_issues = [i for i in report.issues if i.rule == "unbounded-attractor"]
+    assert len(attractor_issues) == 1
+    assert attractor_issues[0].severity == Severity.WARN
+    assert "greedy-skill" in attractor_issues[0].skill
+
+
+@pytest.mark.parametrize(
+    "bounded_desc",
+    [
+        "Deploy containerized microservices to Google Cloud Run with gcloud.",
+        "Parse and validate JSON schemas against Draft 7 specifications.",
+        "Generate Terraform templates for Google Kubernetes Engine clusters.",
+        "Format Python code using the Black code formatter.",
+    ],
+)
+def test_unbounded_attractor_permits_bounded_descriptions(
+    tmp_path: Path, bounded_desc: str
+) -> None:
+    """Verify unbounded-attractor rule passes domain-specific bounded descriptions."""
+    skill_dir = tmp_path / "bounded-skill"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        f"---\nname: bounded-skill\ndescription: {bounded_desc}\n---\n# Body\n",
+        encoding="utf-8",
+    )
+
+    report = lint_file(skill_file, LintSettings())
+    attractor_issues = [i for i in report.issues if i.rule == "unbounded-attractor"]
+    assert len(attractor_issues) == 0

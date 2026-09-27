@@ -17,11 +17,11 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from reach.models import Catalog, CatalogMode, Query
+from reach.models import Catalog, CatalogMode, ProbeResult, Query
 from reach.run import (
     ProbeHarness,
     append_result,
@@ -54,8 +54,8 @@ def drive(
     tmp_path: Path,
     runtime: FakeRuntime,
     sleep=None,
-    **kwargs,
-) -> list:
+    **kwargs: Any,
+) -> list[ProbeResult]:
     """Run probe set synchronously with optional sleep callback."""
     workers = kwargs.pop("workers", 1)
     retries = kwargs.pop("retries", 2)
@@ -452,10 +452,7 @@ def test_a_resumed_run_appends_rather_than_truncating(
 
 
 def test_append_is_line_delimited(
-    queries: list[Query],
-    catalog: Catalog,
     tmp_path: Path,
-    answering_runtime,
     make_result,
 ) -> None:
     """Verify append_result writes one JSON object per newline-delimited row."""
@@ -465,7 +462,7 @@ def test_append_is_line_delimited(
     assert len(out.read_text(encoding="utf-8").strip().splitlines()) == 2
 
 
-def record(path: Path, make_result, *rows) -> None:
+def record(path: Path, make_result, *rows: tuple[str, str]) -> None:
     """Append mock results with specified fingerprints."""
     for query_id, fingerprint in rows:
         append_result(

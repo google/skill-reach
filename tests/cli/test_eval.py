@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Never
+from typing import TYPE_CHECKING, Any, Never, override
 
 import pytest
 
@@ -185,7 +185,7 @@ def test_nothing_is_probed_on_the_invocation_that_drafted_the_set(
 ) -> None:
     """Verify eval stops after drafting queries and does not immediately probe."""
 
-    def refuse(*args, **kwargs) -> Never:
+    def refuse(*_args: object, **_kwargs: object) -> Never:
         msg = "eval probed a query set it had just written"
         raise AssertionError(msg)
 
@@ -397,7 +397,6 @@ def test_a_mode_named_on_the_command_line_still_has_to_be_chosen_between(
 def test_the_generator_receives_the_requested_count(
     argv: list[str],
     generator: FakeGenerator,
-    tmp_path: Path,
 ) -> None:
     """Verify --count flag customizes number of queries requested per target in prompt."""
     assert main([*argv, "--skill", "gke-basics", "--count", "1"]) == 0
@@ -435,6 +434,7 @@ def dying(generator: FakeGenerator, monkeypatch: pytest.MonkeyPatch) -> FakeGene
     class OneTargetThenGone(FakeGenerator):
         """Mock generator that answers first prompt and then raises exception."""
 
+        @override
         def complete(self, prompt: str, *args: Any, **kwargs: Any) -> str:
             if self.completions:
                 msg = "the generator went away"
@@ -1000,7 +1000,7 @@ def test_the_plan_an_eval_prints_is_the_run_it_then_conducts(
     """Verify catalog resolution occurs once for both plan preview and execution."""
     real, builds = run_module.build_catalogs, []
 
-    def counted(*args, **kwargs) -> list[Catalog]:
+    def counted(*args: Any, **kwargs: Any) -> list[Catalog]:
         builds.append(args)
         return real(*args, **kwargs)
 
@@ -1444,13 +1444,15 @@ def test_a_quick_run_records_when_it_is_asked_to(
     )
 
 
+@pytest.mark.parametrize("subpath", ["gke-basics", "gke-basics/SKILL.md"])
 def test_a_directory_names_both_the_skill_and_the_corpus_it_sits_in(
     bodied_corpus: Path,
     generator: FakeGenerator,
     capsys,
+    subpath: str,
 ) -> None:
-    """Verify path to skill directory resolves target skill and parent corpus."""
-    assert main(["eval", str(bodied_corpus / "gke-basics"), "--agent", "fake"]) == 0
+    """Verify path to skill directory or SKILL.md resolves target skill and parent corpus."""
+    assert main(["eval", str(bodied_corpus / subpath), "--agent", "fake"]) == 0
 
     shown = capsys.readouterr().err
     assert "neighborhood:gke-basics" in shown
@@ -1460,9 +1462,11 @@ def test_a_directory_names_both_the_skill_and_the_corpus_it_sits_in(
 def test_a_typed_query_is_probed_as_authored_ground_truth_without_drafting(
     bodied_corpus: Path,
     generator: FakeGenerator,
+    tmp_path: Path,
     capsys,
 ) -> None:
     """Verify --query and --expected probe typed question without invoking generator."""
+    saved = tmp_path / "saved_typed"
     assert (
         main(
             [
@@ -1475,6 +1479,8 @@ def test_a_typed_query_is_probed_as_authored_ground_truth_without_drafting(
                 "How do I resize a node pool?",
                 "--expected",
                 "gke-basics",
+                "--save",
+                str(saved),
             ],
         )
         == 0
@@ -1482,6 +1488,7 @@ def test_a_typed_query_is_probed_as_authored_ground_truth_without_drafting(
 
     assert generator.prompts == [], "a typed query was drafted over"
     assert "ground truth the 1 question you typed" in capsys.readouterr().err
+    assert (saved / "queries.json").is_file()
 
 
 def test_several_typed_queries_all_take_the_one_label_they_were_given(
@@ -1579,26 +1586,15 @@ def test_save_promotes_the_query_set_the_citations_and_the_artifact(
     assert main([*quick_argv, "--save", str(kept)]) == 0
 
     assert not scratch.exists(), "the scratch directory itself must still go"
-    assert load_query_set(kept / "queries.json").queries
+    saved_set = load_query_set(kept / "queries.json")
+    assert saved_set.queries
+    assert saved_set.provenance is not None
+    assert saved_set.provenance.reviewed is False
     trail = json.loads((kept / "queries-citations.json").read_text())
     assert trail
     assert read_artifact(kept / "queries.json.artifact.json").catalog_id == (
         "neighborhood:gke-basics"
     )
-
-
-def test_a_saved_set_still_says_nothing_reviewed_it(
-    quick_argv: list[str],
-    generator: FakeGenerator,
-    tmp_path: Path,
-) -> None:
-    """Verify saved quick-mode query set retains reviewed=False in provenance."""
-    kept = tmp_path / "kept"
-    assert main([*quick_argv, "--save", str(kept)]) == 0
-
-    provenance = load_query_set(kept / "queries.json").provenance
-    assert provenance is not None
-    assert provenance.reviewed is False
 
 
 def test_save_needs_a_quick_invocation(tmp_path: Path, capsys) -> None:
@@ -1670,15 +1666,6 @@ def test_query_range_validators_reject_invalid_flags(capsys) -> None:
     assert "Must be >= 1" in capsys.readouterr().err
 
 
-def test_eval_direct_skill_md_path(
-    bodied_corpus: Path,
-    generator: FakeGenerator,
-) -> None:
-    """Verify reach eval succeeds when passed a direct SKILL.md manifest file path."""
-    manifest = bodied_corpus / "gke-basics" / "SKILL.md"
-    assert main(["eval", str(manifest), "--agent", "fake", "--yes"]) == 0
-
-
 def test_eval_nonexistent_path_fails_cleanly() -> None:
     """Verify reach eval exits 2 when given a nonexistent skill path."""
     assert main(["eval", "./nonexistent/path/to/skill", "--agent", "fake"]) == 2
@@ -1709,6 +1696,8 @@ def test_eval_filters_existing_queries_file_by_skill_flag(
                 str(queries_file),
                 "--skill",
                 "gke-basics",
+                "--mode",
+                "all",
                 "--agent",
                 "fake",
                 "--out",

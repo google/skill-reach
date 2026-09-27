@@ -186,7 +186,7 @@ def test_an_empty_run_reports_rather_than_raises(composition: Composition) -> No
 
 
 def test_text_shows_the_accuracy(composition: Composition) -> None:
-    """Verify text rendering displays top-1 accuracy rate."""
+    """Verify text rendering displays top-1 accuracy rate and matches format_run."""
     results = [
         probe("q-lifecycle", "gcs-lifecycle-rules"),
         probe("q-retention", "gcs-lifecycle-rules"),
@@ -194,14 +194,7 @@ def test_text_shows_the_accuracy(composition: Composition) -> None:
     text = render_text(build_report(composition, results))
     assert "top-1 accuracy" in text
     assert "50.0%" in text
-
-
-def test_collisions_in_report(report: Artifact) -> None:
-    """Verify collision reports capture misrouted skill matches."""
-    collisions = [p for p in report.confusion if p.collisions]
-    pairs = [(p.expected, p.invoked, p.collisions) for p in collisions]
-    assert pairs == [("gcs-retention-policy", "gcs-lifecycle-rules", 1)]
-    assert "gcs-retention-policy -> gcs-lifecycle-rules  x1" in format_pairs(pairs, "Collisions")
+    assert format_run(composition, results) == text
 
 
 def test_collisions_name_the_offending_pair(composition: Composition) -> None:
@@ -299,7 +292,7 @@ def test_csv_has_one_row_per_query(report: Artifact) -> None:
     assert rows[0]["clean"] == "yes"
 
 
-def test_difficulty_is_absent_when_no_corpus_was_supplied(report: Artifact) -> None:
+def test_difficulty_is_absent_when_no_corpus_supplied(report: Artifact) -> None:
     """Verify lexical rank columns are empty when difficulty mapping is omitted."""
     assert [q.difficulty_rank for q in report.queries] == [None, None]
     rows = list(csv.DictReader(io.StringIO(render_csv(report))))
@@ -326,37 +319,12 @@ def test_unknown_format_names_the_alternatives(report: Artifact) -> None:
         render(report, "xml")
 
 
-def test_raw_rows_can_be_rendered_without_building_a_report_first(
-    composition: Composition,
-    report: Artifact,
-) -> None:
-    """Verify format_run produces identical text rendering to render_text with build_report."""
-    results = [
-        probe("q-lifecycle", "gcs-lifecycle-rules"),
-        probe("q-retention", "gcs-lifecycle-rules"),
-    ]
-    assert format_run(composition, results) == render_text(report)
-
-
-def test_csv_document_writes_a_header_and_its_rows() -> None:
-    """Verify csv_document serializes header columns and row data separated by commas."""
-    assert csv_document(["a", "b"], [[1, 2], [3, 4]]) == "a,b\n1,2\n3,4\n"
-
-
-def test_csv_document_uses_a_bare_newline_not_csvs_default() -> None:
-    """Verify csv_document terminates lines with LF without CRLF carriage returns."""
-    document = csv_document(["a"], [["x"], ["y"]])
+def test_csv_document_formatting() -> None:
+    """Verify csv_document serializes headers, rows, LF newlines, empty bodies, and quotes."""
+    document = csv_document(["a", "b"], [[1, 2], [3, 4]])
     assert "\r" not in document
-    assert document == "a\nx\ny\n"
-
-
-def test_csv_document_with_no_rows_is_the_header_alone() -> None:
-    """Verify csv_document returns only the header row when row list is empty."""
+    assert document == "a,b\n1,2\n3,4\n"
     assert csv_document(["a", "b"], []) == "a,b\n"
-
-
-def test_csv_document_quotes_a_value_containing_the_delimiter() -> None:
-    """Verify csv_document encloses values containing commas in quotation marks."""
     assert csv_document(["note"], [["a, b"]]) == 'note\n"a, b"\n'
 
 

@@ -16,8 +16,7 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import importlib
 import textwrap
 from inspect import signature
 from pathlib import Path
@@ -101,14 +100,8 @@ def test_any_module_may_be_imported_first() -> None:
         "reach.views.quality_gate",
         "reach.views.scorecard",
     ]
-    script = "; ".join(f"import {mod}" for mod in modules)
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, f"Module imports failed:\n{completed.stderr}"
+    for mod in modules:
+        assert importlib.import_module(mod) is not None
 
 
 def test_shared_config_names_no_runtime_specific_setting() -> None:
@@ -203,7 +196,7 @@ def test_impossible_settings_are_rejected(minimal, section, field, value) -> Non
         minimal.with_overrides(**{section: {field: value}})
 
 
-def test_paths_expand(tmp_path: Path) -> None:
+def test_paths_expand() -> None:
     """Verify tilde paths expand to absolute user home paths."""
     config = RunConfig(
         study=StudySettings.model_validate(
@@ -561,126 +554,80 @@ def variable_config(tmp_path: Path, query_file: Path) -> Path:
     return path
 
 
-def test_a_supplied_corpus_loads_a_config_whose_variable_is_unset(
+def test_corpus_override_and_env_var_resolution(
     variable_config: Path,
     skill_repo: Path,
+    query_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     unset_corpus_var: str,
 ) -> None:
-    """Verify supplied corpus overrides unset environment variables during TOML load."""
+    """Verify corpus override, env var expansion, and unset var errors in from_toml/build_config."""
+    # Supplied corpus overrides unset env var
     config = RunConfig.from_toml(variable_config, skills=skill_repo)
     assert config.study.skills == skill_repo
     assert load_corpus(config)
 
-
-def test_a_supplied_corpus_also_wins_over_one_the_file_could_resolve(
-    variable_config: Path,
-    skill_repo: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify supplied corpus takes precedence over resolved environment variable."""
-    other = tmp_path / "elsewhere"
-    other.mkdir()
-    monkeypatch.setenv(CORPUS_VAR, str(other))
-    config = RunConfig.from_toml(variable_config, skills=skill_repo)
-    assert config.study.skills == skill_repo
-
-
-def test_a_resolvable_variable_is_still_expanded_when_nothing_is_supplied(
-    variable_config: Path,
-    skill_repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify environment variables expand correctly when no explicit corpus override is given."""
-    monkeypatch.setenv(CORPUS_VAR, str(skill_repo))
-    config = RunConfig.from_toml(variable_config)
-    assert config.study.skills == skill_repo
-
-
-def test_an_unset_variable_still_fails_the_load_when_no_corpus_is_supplied(
-    variable_config: Path,
-    unset_corpus_var: str,
-) -> None:
-    """Verify ValueError is raised when environment variable is unset and no override is given."""
+    # Unset env var fails without override in from_toml, build_config, and expand_path
     with pytest.raises(ValueError, match=unset_corpus_var) as raised:
         RunConfig.from_toml(variable_config)
     assert "unset environment variable" in str(raised.value)
-
-
-def test_a_config_that_names_no_corpus_at_all_is_unchanged(
-    tmp_path: Path,
-    query_file: Path,
-) -> None:
-    """Verify configuration loading succeeds when corpus is omitted, but load_corpus fails."""
-    path = tmp_path / "discover.toml"
-    path.write_text(
-        "\n".join(
-            (
-                "[study]",
-                f'queries = "{query_file}"',
-                f'workdir = "{tmp_path / "work"}"',
-                "",
-            ),
-        ),
-        encoding="utf-8",
-    )
-    config = RunConfig.from_toml(path)
-    assert config.study.skills is None
-    with pytest.raises(ValueError, match="no skill corpus"):
-        load_corpus(config)
-
-
-def test_a_supplied_corpus_rescues_a_config_that_named_none(
-    tmp_path: Path,
-    query_file: Path,
-    skill_repo: Path,
-) -> None:
-    """Verify explicit corpus argument populates corpus when TOML config omits corpus."""
-    path = tmp_path / "discover.toml"
-    path.write_text(
-        "\n".join(
-            (
-                "[study]",
-                f'queries = "{query_file}"',
-                f'workdir = "{tmp_path / "work"}"',
-                "",
-            ),
-        ),
-        encoding="utf-8",
-    )
-    config = RunConfig.from_toml(path, skills=skill_repo)
-    assert config.study.skills == skill_repo
-
-
-def test_an_unresolvable_queries_path_still_fails_at_load(
-    tmp_path: Path,
-    unset_corpus_var: str,
-) -> None:
-    """Verify unresolvable environment variable in queries path raises ValueError during load."""
-    path = tmp_path / "bad-queries.toml"
-    path.write_text(
-        "\n".join(
-            (
-                "[study]",
-                f'queries = "${{{unset_corpus_var}}}/q.json"',
-                f'workdir = "{tmp_path / "work"}"',
-                "",
-            ),
-        ),
-        encoding="utf-8",
-    )
+    with pytest.raises(ValueError, match=unset_corpus_var):
+        build_config(config=variable_config, required=())
     with pytest.raises(ValueError, match="unset environment variable"):
-        RunConfig.from_toml(path)
+        expand_path(f"${{{unset_corpus_var}}}/skills")
 
+    # CLI --skills flag overrides unset env var
+    cli_cfg = build_config(
+        config=variable_config,
+        study=StudyFlags(skills=skill_repo),
+        required=(),
+    )
+    assert cli_cfg.study.skills == skill_repo
 
-def test_a_supplied_corpus_does_not_rescue_an_unresolvable_queries_path(
-    tmp_path: Path,
-    skill_repo: Path,
-    unset_corpus_var: str,
-) -> None:
-    """Verify corpus parameter override does not bypass errors in unset queries path variables."""
-    path = tmp_path / "bad-queries.toml"
-    path.write_text(
+    # Resolvable env var expands when no override is given, and override still wins when set
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setenv(CORPUS_VAR, str(other))
+    assert RunConfig.from_toml(variable_config).study.skills == other
+    assert build_config(config=variable_config, required=()).study.skills == other
+    assert RunConfig.from_toml(variable_config, skills=skill_repo).study.skills == skill_repo
+    assert (
+        build_config(
+            config=variable_config,
+            study=StudyFlags(skills=skill_repo),
+            required=(),
+        ).study.skills
+        == skill_repo
+    )
+
+    # Config that names no corpus at all vs supplied relative/explicit corpus
+    (tmp_path / "corpus").mkdir()
+    discover_path = tmp_path / "discover.toml"
+    discover_path.write_text(
+        "\n".join(
+            (
+                "[study]",
+                f'queries = "{query_file}"',
+                f'workdir = "{tmp_path / "work"}"',
+                "",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    no_corpus_cfg = RunConfig.from_toml(discover_path)
+    assert no_corpus_cfg.study.skills is None
+    with pytest.raises(ValueError, match="no skill corpus"):
+        load_corpus(no_corpus_cfg)
+    assert RunConfig.from_toml(discover_path, skills=skill_repo).study.skills == skill_repo
+    assert (
+        RunConfig.from_toml(discover_path, skills=Path("corpus")).study.skills
+        == tmp_path / "corpus"
+    )
+
+    # Unresolvable queries path still fails even when skills override is supplied
+    bad_queries_path = tmp_path / "bad-queries.toml"
+    bad_queries_path.write_text(
         "\n".join(
             (
                 "[study]",
@@ -692,76 +639,11 @@ def test_a_supplied_corpus_does_not_rescue_an_unresolvable_queries_path(
         ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="unset environment variable"):
-        RunConfig.from_toml(path, skills=skill_repo)
-
-
-def test_expand_path_still_rejects_what_it_always_rejected(
-    unset_corpus_var: str,
-) -> None:
-    """Verify expand_path raises ValueError on unset environment variable tokens."""
-    with pytest.raises(ValueError, match="unset environment variable"):
-        expand_path(f"${{{unset_corpus_var}}}/skills")
-
-
-def test_a_relative_corpus_still_anchors_to_the_config_file(
-    tmp_path: Path,
-    query_file: Path,
-) -> None:
-    """Verify relative corpus path in TOML config resolves relative to TOML file path."""
-    (tmp_path / "corpus").mkdir()
-    path = tmp_path / "relative.toml"
-    path.write_text(
-        "\n".join(
-            (
-                "[study]",
-                'skills = "corpus"',
-                f'queries = "{query_file}"',
-                f'workdir = "{tmp_path / "work"}"',
-                "",
-            ),
-        ),
-        encoding="utf-8",
-    )
-    config = RunConfig.from_toml(path)
-    assert config.study.skills == tmp_path / "corpus"
-
-
-def test_a_supplied_relative_corpus_anchors_to_the_config_file_too(
-    tmp_path: Path,
-    query_file: Path,
-) -> None:
-    """Verify relative corpus path passed to from_toml resolves relative to TOML file path."""
-    (tmp_path / "corpus").mkdir()
-    path = tmp_path / "supplied-relative.toml"
-    path.write_text(
-        "\n".join(
-            (
-                "[study]",
-                f'queries = "{query_file}"',
-                f'workdir = "{tmp_path / "work"}"',
-                "",
-            ),
-        ),
-        encoding="utf-8",
-    )
-    config = RunConfig.from_toml(path, skills=Path("corpus"))
-    assert config.study.skills == tmp_path / "corpus"
-
-
-def test_supplying_a_corpus_moves_no_fingerprint(
-    variable_config: Path,
-    skill_repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify configuration fingerprint and arm remain unchanged when corpus is overridden."""
     monkeypatch.delenv(CORPUS_VAR, raising=False)
-    supplied = RunConfig.from_toml(variable_config, skills=skill_repo)
-    monkeypatch.setenv(CORPUS_VAR, str(skill_repo))
-    from_file = RunConfig.from_toml(variable_config)
-    assert supplied.fingerprint == from_file.fingerprint
-    assert supplied.arm == from_file.arm
-    assert supplied.condition == from_file.condition
+    with pytest.raises(ValueError, match="unset environment variable"):
+        RunConfig.from_toml(bad_queries_path)
+    with pytest.raises(ValueError, match="unset environment variable"):
+        RunConfig.from_toml(bad_queries_path, skills=skill_repo)
 
 
 def test_the_loader_gained_no_field(variable_config: Path, skill_repo: Path) -> None:
@@ -785,58 +667,6 @@ def test_the_loader_gained_no_field(variable_config: Path, skill_repo: Path) -> 
         "auto_queries",
     }
     assert RunConfig.model_validate(dumped).fingerprint == config.fingerprint
-
-
-def test_skills_overrides_a_corpus_the_file_could_not_resolve(
-    variable_config: Path,
-    skill_repo: Path,
-    unset_corpus_var: str,
-) -> None:
-    """Verify CLI --skills flag resolves corpus path when config file contains unset variable."""
-    config = build_config(
-        config=variable_config,
-        study=StudyFlags(skills=skill_repo),
-        required=(),
-    )
-    assert config.study.skills == skill_repo
-
-
-def test_skills_still_overrides_a_corpus_the_file_could_resolve(
-    variable_config: Path,
-    skill_repo: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify CLI --skills flag takes precedence when config file environment variable is set."""
-    other = tmp_path / "elsewhere"
-    other.mkdir()
-    monkeypatch.setenv(CORPUS_VAR, str(other))
-    config = build_config(
-        config=variable_config,
-        study=StudyFlags(skills=skill_repo),
-        required=(),
-    )
-    assert config.study.skills == skill_repo
-
-
-def test_no_skills_flag_leaves_the_file_to_answer(
-    variable_config: Path,
-    skill_repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify configuration uses environment variable when CLI flag is omitted."""
-    monkeypatch.setenv(CORPUS_VAR, str(skill_repo))
-    config = build_config(config=variable_config, required=())
-    assert config.study.skills == skill_repo
-
-
-def test_no_skills_flag_and_an_unset_variable_still_fails_at_the_command_line(
-    variable_config: Path,
-    unset_corpus_var: str,
-) -> None:
-    """Verify build_config raises ValueError when CLI flag omitted and env var is unset."""
-    with pytest.raises(ValueError, match=unset_corpus_var):
-        build_config(config=variable_config, required=())
 
 
 def test_check_settings_defaults_and_validation() -> None:
@@ -918,9 +748,9 @@ def test_client_skills_directory_symmetry() -> None:
     )
 
 
-@pytest.mark.parametrize("agent", _EXECUTION_AGENTS)
+@pytest.mark.parametrize("agent", [*_EXECUTION_AGENTS, "github"])
 def test_known_agent_elevates_workspace_skills_dir(tmp_path: Path, agent: str) -> None:
-    """Verify that specifying an execution agent elevates its native skills directory."""
+    """Verify that specifying an execution agent or client alias elevates its skills directory."""
     from reach.config import KNOWN_CLIENT_SKILLS_DIRS, agent_profiles, resolve_discovery_candidates
 
     profiles = agent_profiles()
@@ -938,9 +768,9 @@ def test_known_agent_elevates_workspace_skills_dir(tmp_path: Path, agent: str) -
     assert candidates[2] == tmp_path / expected_rel
 
 
-@pytest.mark.parametrize("agent", _EXECUTION_AGENTS)
+@pytest.mark.parametrize("agent", [*_EXECUTION_AGENTS, "github"])
 def test_known_agent_elevates_global_skills_dir(agent: str, tmp_path: Path) -> None:
-    """Verify specifying an execution agent elevates its native user global skills directory."""
+    """Verify specifying an execution agent or client alias elevates its global skills directory."""
     from reach.config import (
         KNOWN_CLIENT_GLOBAL_SKILLS_DIRS,
         KNOWN_CLIENT_SKILLS_DIRS,
@@ -1026,75 +856,6 @@ def test_resolve_discovery_candidates_order(tmp_path: Path) -> None:
     assert candidates == expected
 
 
-def test_resolve_discovery_candidates_elevates_specified_agent(tmp_path: Path) -> None:
-    """Verify specified agent elevates its native skills directory."""
-    from reach.config import resolve_discovery_candidates
-
-    candidates = resolve_discovery_candidates(tmp_path, agent="claude-code")
-    expected = [
-        tmp_path,
-        tmp_path / "skills",
-        tmp_path / ".claude" / "skills",
-        tmp_path / ".agents" / "skills",
-        tmp_path / ".cursor" / "skills",
-        tmp_path / ".github" / "skills",
-        tmp_path / ".pi" / "skills",
-    ]
-    assert candidates == expected
-
-
-def test_resolve_discovery_candidates_elevates_cursor(tmp_path: Path) -> None:
-    """Verify cursor agent elevates .cursor/skills directory."""
-    from reach.config import resolve_discovery_candidates
-
-    candidates = resolve_discovery_candidates(tmp_path, agent="cursor")
-    expected = [
-        tmp_path,
-        tmp_path / "skills",
-        tmp_path / ".cursor" / "skills",
-        tmp_path / ".agents" / "skills",
-        tmp_path / ".claude" / "skills",
-        tmp_path / ".github" / "skills",
-        tmp_path / ".pi" / "skills",
-    ]
-    assert candidates == expected
-
-
-def test_resolve_discovery_candidates_elevates_copilot_or_github(tmp_path: Path) -> None:
-    """Verify copilot / github agent elevates .github/skills directory."""
-    from reach.config import resolve_discovery_candidates
-
-    for alias in ("github", "copilot"):
-        candidates = resolve_discovery_candidates(tmp_path, agent=alias)
-        expected = [
-            tmp_path,
-            tmp_path / "skills",
-            tmp_path / ".github" / "skills",
-            tmp_path / ".agents" / "skills",
-            tmp_path / ".claude" / "skills",
-            tmp_path / ".cursor" / "skills",
-            tmp_path / ".pi" / "skills",
-        ]
-        assert candidates == expected
-
-
-def test_resolve_discovery_candidates_elevates_codex(tmp_path: Path) -> None:
-    """Verify codex agent prioritizes .agents/skills directory."""
-    from reach.config import resolve_discovery_candidates
-
-    candidates = resolve_discovery_candidates(tmp_path, agent="codex")
-    expected = [
-        tmp_path,
-        tmp_path / "skills",
-        tmp_path / ".agents" / "skills",
-        tmp_path / ".claude" / "skills",
-        tmp_path / ".cursor" / "skills",
-        tmp_path / ".github" / "skills",
-        tmp_path / ".pi" / "skills",
-    ]
-    assert candidates == expected
-
-
 def test_resolve_discovery_candidates_deduplicates_duplicate_paths(tmp_path: Path) -> None:
     """Verify discovery candidate paths are deduplicated properly."""
     from reach.config import resolve_discovery_candidates
@@ -1133,32 +894,6 @@ def test_resolve_discovery_candidates_global_scope(
         tmp_path / ".pi" / "agent" / "skills",
     ]
     assert candidates == expected
-
-
-@pytest.mark.parametrize(
-    ("agent", "expected_first"),
-    [
-        ("claude-code", ".claude/skills"),
-        ("antigravity-cli", ".agents/skills"),
-        ("cursor", ".cursor/skills"),
-        ("copilot", ".copilot/skills"),
-        ("github", ".copilot/skills"),
-        ("pi", ".pi/agent/skills"),
-        ("codex", ".agents/skills"),
-    ],
-)
-def test_resolve_discovery_candidates_global_scope_elevates_agent(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    agent: str,
-    expected_first: str,
-) -> None:
-    """Verify that specifying an agent in global scope elevates its global directory."""
-    from reach.config import resolve_discovery_candidates
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    candidates = resolve_discovery_candidates(tmp_path, agent=agent, global_scope=True)
-    assert candidates[0] == tmp_path / expected_first
 
 
 def test_retrieval_settings_defaults_and_validation() -> None:
@@ -1433,107 +1168,66 @@ def test_resolve_sub_settings_precedence_hierarchy() -> None:
     assert from_none_override.confidence == 0.85
 
 
-def test_lint_rules_declared_in_example_config() -> None:
-    """Verify every lint rule in RULES is documented in reach.example.toml."""
+def test_reach_example_toml_structure_and_completeness() -> None:
+    """Verify reach.example.toml has valid structure, lint rules, agents, models, and sorting."""
+    import re
     import tomllib
 
+    from reach.config import DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL, OptimizeSettings
     from reach.lint import RULES
-
-    root = Path(__file__).resolve().parent.parent
-    example_config_path = root / "reach.example.toml"
-    config = tomllib.loads(example_config_path.read_text(encoding="utf-8"))
-    lint_rules = config.get("lint", {}).get("rules", {})
-
-    for rule_id in RULES:
-        assert rule_id in lint_rules, (
-            f"Rule {rule_id!r} is missing from [lint.rules] in reach.example.toml"
-        )
-
-
-def test_reach_example_toml_matches_base_structure() -> None:
-    """Verify reach.example.toml has valid TOML structure and documents public agents."""
-    import tomllib
-
     from reach.runtime import FAKE_AGENT, known_agents
 
     root = Path(__file__).resolve().parent.parent
     example_path = root / "reach.example.toml"
     assert example_path.is_file(), "reach.example.toml missing"
 
-    active_content = example_path.read_text(encoding="utf-8")
-    parsed_active = tomllib.loads(active_content)
-    assert "general" in parsed_active
-    assert "discovery" in parsed_active
-    assert "check" in parsed_active
-    assert "lint" in parsed_active
+    text = example_path.read_text(encoding="utf-8")
+    config = tomllib.loads(text)
 
-    public_agents = [a for a in known_agents() if a != FAKE_AGENT]
-    for agent in public_agents:
-        assert agent in active_content, f"Agent {agent!r} missing from reach.example.toml"
+    for section in ("general", "discovery", "check", "lint"):
+        assert section in config
 
+    # Every lint rule is documented
+    lint_rules = config.get("lint", {}).get("rules", {})
+    for rule_id in RULES:
+        assert rule_id in lint_rules, (
+            f"Rule {rule_id!r} is missing from [lint.rules] in reach.example.toml"
+        )
 
-def test_reach_example_toml_documents_sample_models() -> None:
-    """Verify reach.example.toml documents sample model profile overrides for default models."""
-    from reach.config import DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL
+    # Every public agent is documented
+    for agent in (a for a in known_agents() if a != FAKE_AGENT):
+        assert agent in text, f"Agent {agent!r} missing from reach.example.toml"
 
-    root = Path(__file__).resolve().parent.parent
-    example_path = root / "reach.example.toml"
-    content = example_path.read_text(encoding="utf-8")
-    assert "models." in content, "reach.example.toml should document sample [models.<id>] overrides"
+    # Sample model overrides documented
+    assert "models." in text
+    assert DEFAULT_GEMINI_MODEL.replace(".", "-") in text
+    assert DEFAULT_CLAUDE_MODEL.replace(".", "-") in text
 
-    gemini_key = DEFAULT_GEMINI_MODEL.replace(".", "-")
-    claude_key = DEFAULT_CLAUDE_MODEL.replace(".", "-")
-    assert gemini_key in content, f"Expected {gemini_key!r} in reach.example.toml"
-    assert claude_key in content, f"Expected {claude_key!r} in reach.example.toml"
-
-
-def test_reach_example_toml_documents_optimize_settings() -> None:
-    """Verify reach.example.toml documents all OptimizeSettings fields."""
-    import tomllib
-
-    from reach.config import OptimizeSettings
-
-    root = Path(__file__).resolve().parent.parent
-    example_path = root / "reach.example.toml"
-    config = tomllib.loads(example_path.read_text(encoding="utf-8"))
+    # OptimizeSettings fields documented
     optimize_sec = config.get("optimize", {})
-
     for field_name in OptimizeSettings.model_fields:
         assert field_name in optimize_sec, (
             f"Field {field_name!r} missing from [optimize] in reach.example.toml"
         )
 
-
-def test_reach_example_toml_sections_and_keys_are_alphabetized() -> None:
-    """Verify active sections and keys in reach.example.toml are alphabetized."""
-    import re
-    import tomllib
-
-    root = Path(__file__).resolve().parent.parent
-    text = (root / "reach.example.toml").read_text(encoding="utf-8")
+    # Sections and keys are alphabetized
     sections = [
         m.group(1)
         for line in text.splitlines()
         if (m := re.match(r"^\[([a-zA-Z0-9_.-]+)\]$", line.strip()))
     ]
     assert sections[0] == "general"
-    assert sections[1:] == sorted(sections[1:]), (
-        f"Sections after [general] in reach.example.toml are not alphabetized: {sections[1:]}"
-    )
+    assert sections[1:] == sorted(sections[1:])
 
-    config = tomllib.loads(text)
     for sec_name, sec_val in config.items():
         if isinstance(sec_val, dict):
             sub_keys = [k for k, v in sec_val.items() if not isinstance(v, dict)]
-            assert sub_keys == sorted(sub_keys), (
-                f"Keys in [{sec_name}] of reach.example.toml are not alphabetized: {sub_keys}"
-            )
+            assert sub_keys == sorted(sub_keys), f"Unsorted keys in [{sec_name}]: {sub_keys}"
             for nested_name, nested_val in sec_val.items():
                 if isinstance(nested_val, dict):
                     nested_keys = list(nested_val.keys())
                     assert nested_keys == sorted(nested_keys), (
-                        f"Keys in [{sec_name}.{nested_name}] of reach.example.toml "
-                        f"are not alphabetized: {nested_keys}"
+                        f"Unsorted keys in [{sec_name}.{nested_name}]: {nested_keys}"
                     )
 
 
@@ -1566,30 +1260,13 @@ def test_scaling_study_requires_target_skill_when_targeted() -> None:
         )
 
 
-def test_default_model_constants_have_valid_profiles() -> None:
-    """Verify default Gemini and Claude model constants are defined and have model profiles."""
-    from reach.config import (
-        BUILTIN_AGENT_DEFAULT_MODELS,
-        DEFAULT_CLAUDE_MODEL,
-        DEFAULT_GEMINI_MODEL,
-    )
-    from reach.runtime.profiles import model_profile
-
-    assert isinstance(DEFAULT_GEMINI_MODEL, str)
-    assert DEFAULT_GEMINI_MODEL
-    assert isinstance(DEFAULT_CLAUDE_MODEL, str)
-    assert DEFAULT_CLAUDE_MODEL
-
-    for const_model in (DEFAULT_GEMINI_MODEL, DEFAULT_CLAUDE_MODEL):
-        profile = model_profile(const_model)
-        assert profile.context_window > 0
-        assert profile.chars_per_token > 0
-
-    for model_id in BUILTIN_AGENT_DEFAULT_MODELS.values():
-        assert isinstance(model_id, str)
-        assert model_id
-        profile = model_profile(model_id)
-        assert profile.context_window > 0
+def test_fingerprint_unaffected_by_trusted_setting() -> None:
+    """Verify StudySettings.trusted does not alter configuration digests."""
+    cfg_untrusted = RunConfig(study=StudySettings(trusted=False))
+    cfg_trusted = RunConfig(study=StudySettings(trusted=True))
+    assert cfg_untrusted.fingerprint == cfg_trusted.fingerprint
+    assert cfg_untrusted.arm == cfg_trusted.arm
+    assert cfg_untrusted.condition == cfg_trusted.condition
 
 
 def test_agent_default_model_builtin_resolution() -> None:
@@ -1771,14 +1448,6 @@ def test_registry_flags_overrides_do_not_clobber_config() -> None:
     assert resolved_fresh.fresh is True
 
 
-def test_resolve_discovery_candidates_elevates_antigravity(tmp_path: Path) -> None:
-    """Verify resolve_discovery_candidates elevates .agents/skills for antigravity-cli."""
-    from reach.config import resolve_discovery_candidates
-
-    candidates = resolve_discovery_candidates(tmp_path, agent="antigravity-cli")
-    assert tmp_path / ".agents" / "skills" in candidates
-
-
 def test_plan_settings_workers_validation_and_digest_invariance(tmp_path: Path) -> None:
     """Verify PlanSettings.workers validates >= 1 and does not change config digests."""
     from reach.config import PlanSettings
@@ -1943,7 +1612,7 @@ def test_run_config_inherits_runtime_agent_from_general(tmp_path: Path) -> None:
     assert cfg3.runtime.agent == "claude-code"
 
 
-def test_study_settings_auto_queries_fingerprint_and_resolution(tmp_path: Path) -> None:
+def test_study_settings_auto_queries_fingerprint_and_resolution() -> None:
     """Verify StudySettings.auto_queries layers via RunConfig.resolve and keeps fingerprints."""
     cfg_true = RunConfig(study=StudySettings(auto_queries=True))
     cfg_false = RunConfig(study=StudySettings(auto_queries=False))

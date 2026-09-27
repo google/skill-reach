@@ -23,6 +23,9 @@ from typing import Annotated, Literal
 import attrs
 from cyclopts import App, ArgumentCollection, Parameter
 from cyclopts.completion import _base as _cyclopts_completion_base
+from cyclopts.completion import bash as _cyclopts_bash
+from cyclopts.completion import fish as _cyclopts_fish
+from cyclopts.completion import zsh as _cyclopts_zsh
 from cyclopts.completion._base import CompletionData
 
 from reach.views import build_console
@@ -81,7 +84,8 @@ def _cached_extract_completion_data(app: App) -> dict[tuple[str, ...], Completio
     return _completion_data_cache[key]
 
 
-_cyclopts_completion_base.extract_completion_data = _cached_extract_completion_data  # type: ignore  # noqa: PGH003
+for _mod in (_cyclopts_completion_base, _cyclopts_zsh, _cyclopts_bash, _cyclopts_fish):
+    _mod.extract_completion_data = _cached_extract_completion_data  # type: ignore  # noqa: PGH003
 
 
 @functools.lru_cache(maxsize=4)

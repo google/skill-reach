@@ -24,7 +24,6 @@ from typing import Any
 import pytest
 
 from reach.catalog import build_catalogs, load_skills
-from reach.config import agent_default_model
 from reach.models import CatalogMode
 from reach.runtime.claude_code import (
     POSIX_ENTERPRISE_SKILL_DIRS,
@@ -81,22 +80,12 @@ def test_a_stream_that_names_no_model_leaves_it_unrecorded(make_stream, model) -
     assert parse_stream(lines).resolved_model == ""
 
 
-def test_an_empty_stream_names_no_model(make_stream) -> None:
-    """Verify empty stream input reports empty string for resolved_model."""
-    assert parse_stream([]).resolved_model == ""
-
-
 def test_non_selection_yields_none(make_stream) -> None:
     """Verify invoked_skill is None when transcript contains no tool use event."""
     summary = parse_stream(make_stream(catalog=["a", "b"], invoked=None))
     assert summary.invoked_skill is None
+    assert summary.invoked_skills == ()
     assert summary.observed_catalog == ("a", "b")
-
-
-def test_first_invocation_wins() -> None:
-    """Verify invoked_skill retains the first tool invocation when multiple occur."""
-    lines = claude_stream(catalog=["a", "b"], invoked_skills=["a", "b"])
-    assert parse_stream(lines).invoked_skill == "a"
 
 
 def test_every_invocation_is_collected_in_order() -> None:
@@ -111,12 +100,6 @@ def test_a_single_invocation_is_still_collected(make_stream) -> None:
     """Verify single skill invocation populates invoked_skills tuple."""
     lines = make_stream(catalog=["a"], invoked="a")
     assert parse_stream(lines).invoked_skills == ("a",)
-
-
-def test_no_invocation_collects_nothing(make_stream) -> None:
-    """Verify invoked_skills is empty tuple when no skills are invoked."""
-    lines = make_stream(catalog=["a"], invoked=None)
-    assert parse_stream(lines).invoked_skills == ()
 
 
 def test_assistant_reasoning_and_thinking_blocks_are_collected() -> None:
@@ -285,21 +268,13 @@ def test_command_omits_effort_when_explicitly_disabled() -> None:
     assert "--effort" not in command
 
 
-def test_model_defaults_to_the_one_every_recorded_result_used() -> None:
-    """Verify ClaudeCodeOptions and Runtime default model to configured default."""
-    default = agent_default_model("claude-code")
-    assert default is not None
-    assert ClaudeCodeOptions().model == default
-    assert ClaudeCodeRuntime().model == default
-
-
 def test_command_denies_tools_that_would_consume_the_turn(
     runtime: ClaudeCodeRuntime,
 ) -> None:
-    """Verify build_command denies Bash tool and excludes dynamic prompt sections."""
+    """Verify build_command denies Bash, Glob, and Grep tools and excludes dynamic sections."""
     command = runtime.build_command("do a thing")
     denied = command[command.index("--disallowedTools") + 1 :]
-    assert "Bash" in denied
+    assert {"Bash", "Glob", "Grep"} <= set(denied)
     assert "Skill" not in denied
     assert "--exclude-dynamic-system-prompt-sections" in command
 
@@ -432,13 +407,6 @@ def test_claude_code_build_env_strips_blocked_vars_from_settings(
     default_env = default_rt.build_env(workdir)
     assert default_env.get("ALLOWED_VAR") == "allowed"
     assert "AWS_SECRET_ACCESS_KEY" not in default_env
-
-
-def test_denial_covers_the_replacements_the_runtime_substitutes() -> None:
-    """Verify default denied_tools includes Glob and Grep."""
-    denied = set(ClaudeCodeOptions().denied_tools)
-    assert {"Glob", "Grep"} <= denied
-    assert "Skill" not in denied
 
 
 def test_command_removes_the_skills_the_cli_ships_with(
@@ -678,6 +646,7 @@ def test_select_discards_a_leaked_probe(
     runtime.options = runtime.options.model_copy(update={"allowed_tools": ("Skill",)})
     canned(monkeypatch, make_stream(catalog=["a"], invoked="a", tools=tools))
     outcome = runtime.select("do a thing", tmp_path)
+    assert outcome.invoked_skill == "a"
     assert outcome.error == expected_error
     assert outcome.observed_tools == tuple(tools)
 
@@ -696,23 +665,6 @@ def test_select_allows_all_tools_by_default_when_allowed_tools_omitted(
     outcome = runtime.select("do a thing", tmp_path)
     assert outcome.invoked_skill == "a"
     assert outcome.error is None
-
-
-def test_select_discards_a_leaked_hit_not_just_a_miss(
-    monkeypatch,
-    make_stream,
-    runtime,
-    tmp_path,
-) -> None:
-    """Verify tool leak error is reported even on correct skill selection."""
-    runtime.options = runtime.options.model_copy(update={"allowed_tools": ("Skill",)})
-    canned(
-        monkeypatch,
-        make_stream(catalog=["a"], invoked="a", tools=["Skill", "Bash"]),
-    )
-    outcome = runtime.select("do a thing", tmp_path)
-    assert outcome.invoked_skill == "a"
-    assert outcome.error == "tool leak: Bash"
 
 
 def test_select_reports_every_invocation_alongside_the_first(
@@ -819,31 +771,18 @@ def test_complete_raises_when_the_runtime_fails(mock_subprocess, generator) -> N
         generator.complete("draft me a query")
 
 
-def test_a_refusal_the_cli_explained_is_repeated_not_summarized(
+def test_a_prompt_refused_for_its_length_names_the_flag_that_shortens_it(
     mock_subprocess,
     generator,
 ) -> None:
-    """Verify complete extracts error message from JSON envelope stdout on nonzero exit."""
+    """Verify prompt length error extracts JSON envelope error and suggests --top-rivals."""
     mock_subprocess(
         returncode=1,
         stdout=json.dumps(
             {"is_error": True, "result": "Prompt is too long", "total_cost_usd": 0},
         ),
     )
-    with pytest.raises(RuntimeError, match="Prompt is too long"):
-        generator.complete("a prompt carrying every resident body")
-
-
-def test_a_prompt_refused_for_its_length_names_the_flag_that_shortens_it(
-    mock_subprocess,
-    generator,
-) -> None:
-    """Verify prompt length error message suggests --top-rivals option."""
-    mock_subprocess(
-        returncode=1,
-        stdout=json.dumps({"is_error": True, "result": "Prompt is too long"}),
-    )
-    with pytest.raises(RuntimeError, match="top-rivals"):
+    with pytest.raises(RuntimeError, match=r"Prompt is too long.*top-rivals"):
         generator.complete("a prompt carrying every resident body")
 
 

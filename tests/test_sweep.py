@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import pytest
 
@@ -54,25 +54,120 @@ def _create_mock_skills(root: Path, count: int) -> list[Skill]:
     return skills
 
 
-def test_find_kneedle_knee_sharp_drop() -> None:
-    """Verify log-scale knee curvature identifies inflection point k*."""
-    scales = (1, 5, 10, 20, 50, 100)
-    pass_rates = (1.0, 0.95, 0.60, 0.55, 0.52, 0.50)
-    knee = find_kneedle_knee(scales, pass_rates, noise_floor=0.05)
-    assert knee == 10
-
-
-def test_find_kneedle_knee_flat_returns_none() -> None:
-    """Verify flat or within-noise curves return None."""
-    scales = (1, 5, 10, 20)
-    pass_rates = (0.95, 0.94, 0.95, 0.93)
-    knee = find_kneedle_knee(scales, pass_rates, noise_floor=0.05)
-    assert knee is None
-
-
-def test_find_kneedle_knee_too_few_points() -> None:
-    """Verify fewer than 3 points returns None."""
-    assert find_kneedle_knee((1, 5), (1.0, 0.5)) is None
+@pytest.mark.parametrize(
+    ("scales", "rates", "noise_floor", "auto_smooth", "weights", "expected_knee"),
+    [
+        pytest.param(
+            (1, 5, 10, 20, 50, 100),
+            (1.0, 0.95, 0.60, 0.55, 0.52, 0.50),
+            0.05,
+            False,
+            None,
+            10,
+            id="sharp-drop",
+        ),
+        pytest.param(
+            (1, 5, 10, 20),
+            (0.95, 0.94, 0.95, 0.93),
+            0.05,
+            False,
+            None,
+            None,
+            id="flat-within-noise",
+        ),
+        pytest.param(
+            (1, 5),
+            (1.0, 0.5),
+            0.05,
+            False,
+            None,
+            None,
+            id="too-few-points",
+        ),
+        pytest.param(
+            (10, 25, 50, 100, 147),
+            (0.96, 0.98, 0.96, 0.70, 0.50),
+            0.05,
+            True,
+            None,
+            50,
+            id="upward-bump-auto-smooth",
+        ),
+        pytest.param(
+            (10, 25, 50, 100, 147),
+            (1.0, 0.95, 0.90, 0.50, 0.20),
+            0.05,
+            False,
+            None,
+            50,
+            id="monotone-raw",
+        ),
+        pytest.param(
+            (1, 10, 100),
+            (0.50, 0.80, 0.95),
+            0.10,
+            False,
+            None,
+            None,
+            id="rising-curve",
+        ),
+        pytest.param(
+            (1, 10, 100),
+            (1.0, 0.749, 0.50),
+            0.10,
+            False,
+            None,
+            None,
+            id="straight-log-linear-wiggle",
+        ),
+        pytest.param(
+            (1, 10, 100),
+            (0.95, 0.92, 0.88),
+            0.10,
+            False,
+            None,
+            None,
+            id="drop-below-0.10-noise-floor",
+        ),
+        pytest.param(
+            (1, 10, 100),
+            (1.0, 0.96, 0.60),
+            0.10,
+            False,
+            None,
+            10,
+            id="genuine-knee-above-0.10-drop",
+        ),
+        pytest.param(
+            (10, 25, 50, 100),
+            (0.95, 0.70, 0.85, 0.50),
+            0.05,
+            True,
+            (1.0, 100.0, 1.0, 1.0),
+            25,
+            id="weighted-pava-smooth",
+        ),
+    ],
+)
+def test_find_kneedle_knee(
+    scales: tuple[int, ...],
+    rates: tuple[float, ...],
+    noise_floor: float,
+    auto_smooth: bool,
+    weights: tuple[float, ...] | None,
+    expected_knee: int | None,
+) -> None:
+    """Verify log-scale knee curvature detection across raw, smoothed, and weighted curves."""
+    assert (
+        find_kneedle_knee(
+            scales,
+            rates,
+            noise_floor=noise_floor,
+            auto_smooth=auto_smooth,
+            weights=weights,
+        )
+        == expected_knee
+    )
 
 
 def test_compute_scaling_noise_floor_reuses_diff() -> None:
@@ -96,7 +191,7 @@ def test_paired_trial_outcomes_validation() -> None:
         PairedTrialOutcomes(n10=6, n01=5, total_paired=10)
 
     with pytest.raises(ValidationError):
-        PairedTrialOutcomes(n10=0, n01=0, total_paired=-1)  # type: ignore[arg-type]
+        PairedTrialOutcomes(n10=0, n01=0, total_paired=-1)
 
 
 @pytest.mark.parametrize(
@@ -205,26 +300,6 @@ def test_pava_block_invariants() -> None:
     assert merged.size == 5
     assert merged.weight == 5.0
     assert merged.mean == round((0.80 * 2.0 + 0.90 * 3.0) / 5.0, 4)
-
-
-@pytest.mark.parametrize(
-    ("scales", "rates", "auto_smooth", "expected_knee"),
-    [
-        ((10, 25, 50, 100, 147), (0.96, 0.98, 0.96, 0.70, 0.50), True, 50),
-        ((10, 25, 50, 100, 147), (1.0, 0.95, 0.90, 0.50, 0.20), False, 50),
-    ],
-    ids=["upward-bump-auto-smooth", "monotone-raw"],
-)
-def test_find_kneedle_knee_auto_smooth(
-    scales: tuple[int, ...],
-    rates: tuple[float, ...],
-    auto_smooth: bool,
-    expected_knee: int | None,
-) -> None:
-    """Verify find_kneedle_knee supports opt-in auto_smooth behavior."""
-    assert (
-        find_kneedle_knee(scales, rates, noise_floor=0.05, auto_smooth=auto_smooth) == expected_knee
-    )
 
 
 def test_run_scaling_sweep_insufficient_corpus(tmp_path: Path) -> None:
@@ -666,106 +741,6 @@ def test_bootstrap_f1_ci() -> None:
     assert 0.0 <= ci_low <= ci_high <= 1.0
 
 
-def test_build_scaling_point_abstention_none_when_no_negatives() -> None:
-    """Verify abstention_rate is None when there are no negative probes in evaluation."""
-    from reach.models import CatalogMode, ProbeResult, Query, QueryKind
-    from reach.queries import Origin, QuerySet, QuerySetProvenance
-    from reach.sweep import _build_scaling_point
-
-    queries = [
-        Query(id="q1", text="q1", expected_skill="s1", kind=QueryKind.IMPLICIT),
-        Query(id="q2", text="q2", expected_skill="s2", kind=QueryKind.IMPLICIT),
-    ]
-    query_set = QuerySet(
-        catalog_id="c",
-        queries=tuple(queries),
-        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-    )
-    results = [
-        ProbeResult(
-            query_id="q1",
-            catalog_id="c",
-            invoked_skills=("s1",),
-            catalog_mode=CatalogMode.SWEEP,
-            catalog_size=2,
-            model="mock",
-            runtime="mock",
-        ),
-        ProbeResult(
-            query_id="q2",
-            catalog_id="c",
-            invoked_skills=("s2",),
-            catalog_mode=CatalogMode.SWEEP,
-            catalog_size=2,
-            model="mock",
-            runtime="mock",
-        ),
-    ]
-    pt, _decomp = _build_scaling_point(
-        scale=2,
-        catalog_id="c",
-        results=tuple(results),
-        resolved_query_set=query_set,
-        baseline_results=(),
-        installed_skills={"s1", "s2"},
-    )
-    assert pt.in_scope_probes == 2
-    assert pt.negative_probes == 0
-    assert pt.abstention_rate is None
-    assert pt.abstention_interval is None
-    assert pt.prompt_tokens_mean is None
-
-
-def test_build_scaling_point_abstention_calculated_when_negatives_present() -> None:
-    """Verify abstention_rate is calculated when negative probes are present in evaluation."""
-    from reach.models import CatalogMode, ProbeResult, Query, QueryKind
-    from reach.queries import Origin, QuerySet, QuerySetProvenance
-    from reach.sweep import _build_scaling_point
-
-    queries = [
-        Query(id="q1", text="in-scope", expected_skill="s1", kind=QueryKind.IMPLICIT),
-        Query(id="q2", text="out-of-scope", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
-    ]
-    query_set = QuerySet(
-        catalog_id="c",
-        queries=tuple(queries),
-        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-    )
-    results = [
-        ProbeResult(
-            query_id="q1",
-            catalog_id="c",
-            invoked_skills=("s1",),
-            catalog_mode=CatalogMode.SWEEP,
-            catalog_size=2,
-            model="mock",
-            runtime="mock",
-        ),
-        ProbeResult(
-            query_id="q2",
-            catalog_id="c",
-            invoked_skills=(),
-            catalog_mode=CatalogMode.SWEEP,
-            catalog_size=2,
-            model="mock",
-            runtime="mock",
-        ),
-    ]
-    pt, _decomp = _build_scaling_point(
-        scale=2,
-        catalog_id="c",
-        results=tuple(results),
-        resolved_query_set=query_set,
-        baseline_results=(),
-        installed_skills={"s1", "s2"},
-    )
-    assert pt.in_scope_probes == 1
-    assert pt.negative_probes == 1
-    assert pt.abstention_rate == 1.0
-    assert pt.abstention_interval is not None
-    assert pt.abstention_interval[0] > 0.0
-
-
 def test_scaling_sweep_does_not_skip_probes_when_out_path_configured(tmp_path: Path) -> None:
     """Verify scaling sweep evaluates all probes across scales even when study.out is configured."""
     skills_dir = tmp_path / "skills"
@@ -810,24 +785,6 @@ def test_scaling_sweep_does_not_skip_probes_when_out_path_configured(tmp_path: P
     assert study.points[1].probes_executed == 2
 
 
-@pytest.mark.parametrize(
-    ("scales", "rates", "expected_knee"),
-    [
-        pytest.param((1, 10, 100), (0.50, 0.80, 0.95), None, id="rising-curve"),
-        pytest.param((1, 10, 100), (1.0, 0.749, 0.50), None, id="straight-log-linear-wiggle"),
-        pytest.param((1, 10, 100), (0.95, 0.92, 0.88), None, id="drop-below-0.10-noise-floor"),
-        pytest.param((1, 10, 100), (1.0, 0.96, 0.60), 10, id="genuine-knee-above-0.10-drop"),
-    ],
-)
-def test_find_kneedle_knee_behavior(
-    scales: tuple[int, ...],
-    rates: tuple[float, ...],
-    expected_knee: int | None,
-) -> None:
-    """Verify find_kneedle_knee enforces MIN_KNEE_DROP=0.10 and rejects non-falling curves."""
-    assert find_kneedle_knee(scales, rates) == expected_knee
-
-
 def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
     tmp_path: Path,
 ) -> None:
@@ -860,6 +817,7 @@ def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
     select_calls = 0
 
     class CountingKeywordRuntime(KeywordRuntime):
+        @override
         def select(
             self, query_text: str, workdir: Path, target_skill: str | None = None
         ) -> SelectionOutcome:
@@ -871,7 +829,7 @@ def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
     from reach.models import Catalog
     from reach.run import ProbeHarness
 
-    shared_cache: dict = {}
+    shared_cache: dict[Any, Any] = {}
     cat_a = Catalog(
         id="scale-3a",
         mode=CatalogMode.SWEEP,
@@ -1290,7 +1248,7 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
     observed_workers: list[tuple[int, int]] = []
     orig_conduct = sweep_mod.conduct
 
-    def spy_conduct(*args, **kwargs) -> RunOutcome:
+    def spy_conduct(*args: Any, **kwargs: Any) -> RunOutcome:
         composed = kwargs["composed"]
         observed_workers.append((len(composed.catalog.skills), kwargs["workers"]))
         return orig_conduct(*args, **kwargs)
@@ -1334,13 +1292,13 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
     interrupted_workdirs: list[Path] = []
 
     def fail_on_second_step(
-        step: int, total: int, point: ScalingPoint, partial: ScalingStudy
+        step: int, _total: int, _point: ScalingPoint, _partial: ScalingStudy
     ) -> None:
         if step == 2:
             err_msg = "Simulated mid-sweep interruption"
             raise RuntimeError(err_msg)
 
-    def capture_workdir(*args, **kwargs) -> RunOutcome:
+    def capture_workdir(*args: Any, **kwargs: Any) -> RunOutcome:
         cfg_arg = kwargs["config"]
         interrupted_workdirs.append(cfg_arg.study.workdir)
         return orig_conduct(*args, **kwargs)
@@ -1534,9 +1492,11 @@ def test_run_scaling_sweep_listing_budget_guard(tmp_path: Path) -> None:
 
     class RationingFakeRuntime(FakeRuntime):
         @property
+        @override
         def rations_catalog(self) -> bool:
             return True
 
+        @override
         def fit(self, catalog, skills) -> CatalogFit:
             return CatalogFit(
                 truncated=1,
@@ -1635,6 +1595,12 @@ def test_resolve_anchor_skills_filters_to_queried_skills_and_warns_missing_corpu
     assert anchors is not None
     assert set(anchors) == {"skill-00", "skill-01"}
 
+    # Clamps to queried skills when initial scale (4) exceeds queried skill count (2)
+    clamped_anchors = _resolve_anchor_skills(None, skills, (4, 5), query_set=partial_qs)
+    assert clamped_anchors is not None
+    assert len(clamped_anchors) == 2
+    assert set(clamped_anchors) == {"skill-00", "skill-01"}
+
     q_path = tmp_path / "queries.json"
     save_query_set(partial_qs, q_path)
     buf = StringIO()
@@ -1652,33 +1618,6 @@ def test_resolve_anchor_skills_filters_to_queried_skills_and_warns_missing_corpu
     assert "3 of 5 corpus skill(s) have 0 queries" in out
     assert "reach query draft --sync" in out
     assert "2/2 anchor skills" in out
-
-
-def test_resolve_anchor_skills_clamps_to_queried_skills_when_fewer_than_scale(
-    tmp_path: Path,
-) -> None:
-    """Verify _resolve_anchor_skills clamps to queried skills when fewer than initial scale."""
-    from reach.models import Query, QueryKind, Skill
-    from reach.queries import Origin, QuerySet, QuerySetProvenance
-    from reach.sweep import _resolve_anchor_skills
-
-    skills = [
-        Skill(name=f"skill-{i:02d}", description=f"Skill {i}", path=tmp_path / f"s{i}")
-        for i in range(6)
-    ]
-    partial_qs = QuerySet(
-        catalog_id="partial",
-        queries=(
-            Query(id="q0", text="use s0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
-            Query(id="q1", text="use s1", kind=QueryKind.IMPLICIT, expected_skill="skill-01"),
-        ),
-        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-    )
-    # Requested medoid count is 4 (actual_scales[0] == 4), but only 2 skills have queries
-    anchors = _resolve_anchor_skills(None, skills, (4, 6), query_set=partial_qs)
-    assert anchors is not None
-    assert len(anchors) == 2
-    assert set(anchors) == {"skill-00", "skill-01"}
 
 
 def test_render_ascii_curve_auto_scales_high_accuracy_band() -> None:
@@ -2030,29 +1969,6 @@ def test_bootstrap_f1_ci_clusters_by_query_maintaining_correlated_attempts() -> 
     assert ci_rep_high == pytest.approx(ci_single_high, abs=0.05)
 
 
-def test_find_kneedle_knee_weighted_pava() -> None:
-    """Verify passing weights to find_kneedle_knee influences isotonic smoothing."""
-    from reach.sweep import find_kneedle_knee
-
-    scales = [10, 25, 50, 100]
-    # Raw pass rates with a non-monotone noise bump at scale 25
-    pass_rates = [0.95, 0.70, 0.85, 0.50]
-
-    # Without weights, unweighted PAVA averages points equally
-    knee_unweighted = find_kneedle_knee(scales, pass_rates, noise_floor=0.05, auto_smooth=True)
-
-    # Heavily weight scale 25 so its drop dominates the smoothed curve
-    knee_weighted = find_kneedle_knee(
-        scales,
-        pass_rates,
-        noise_floor=0.05,
-        weights=[1.0, 100.0, 1.0, 1.0],
-        auto_smooth=True,
-    )
-    assert knee_weighted is not None
-    assert knee_unweighted is not None
-
-
 def test_scaling_point_records_step_efficiency_and_skill_f1() -> None:
     """Verify _build_scaling_point calculates step_efficiency_mean and skill_f1_mean."""
     from reach.models import CatalogMode, ProbeResult, Query, QueryKind
@@ -2106,66 +2022,42 @@ def test_scaling_point_records_step_efficiency_and_skill_f1() -> None:
     assert 0.0 < point.skill_f1_mean <= 1.0
 
 
-def test_scaling_study_records_knee_interval() -> None:
-    """Verify _assemble_scaling_study computes uncertainty interval for knee scale."""
-    from reach.sweep import ScalingPoint, _assemble_scaling_study
+@pytest.fixture
+def sample_four_scale_points() -> list[Any]:
+    """Provide a 4-scale ScalingPoint sequence for knee interval tests."""
+    from reach.sweep import ScalingPoint
 
-    points = [
+    return [
         ScalingPoint(
-            scale=10,
+            scale=scale,
             catalog_id="c",
-            pass_rate=0.96,
-            pass_rate_interval=(0.92, 0.99),
-            f1_score=0.96,
-            f1_interval=(0.92, 0.99),
-            delta_vs_baseline=0.0,
+            pass_rate=rate,
+            pass_rate_interval=ci,
+            f1_score=rate,
+            f1_interval=ci,
+            delta_vs_baseline=round(0.96 - rate, 2),
             delta_context=0.0,
-            delta_shadowing=0.0,
+            delta_shadowing=round(0.96 - rate, 2),
             probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=25,
-            catalog_id="c",
-            pass_rate=0.91,
-            pass_rate_interval=(0.85, 0.96),
-            f1_score=0.91,
-            f1_interval=(0.85, 0.96),
-            delta_vs_baseline=0.05,
-            delta_context=0.0,
-            delta_shadowing=0.05,
-            probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=50,
-            catalog_id="c",
-            pass_rate=0.82,
-            pass_rate_interval=(0.74, 0.89),
-            f1_score=0.82,
-            f1_interval=(0.74, 0.89),
-            delta_vs_baseline=0.14,
-            delta_context=0.0,
-            delta_shadowing=0.14,
-            probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=100,
-            catalog_id="c",
-            pass_rate=0.60,
-            pass_rate_interval=(0.50, 0.70),
-            f1_score=0.60,
-            f1_interval=(0.50, 0.70),
-            delta_vs_baseline=0.36,
-            delta_context=0.0,
-            delta_shadowing=0.36,
-            probes_executed=20,
-        ),
+        )
+        for scale, rate, ci in (
+            (10, 0.96, (0.92, 0.99)),
+            (25, 0.91, (0.85, 0.96)),
+            (50, 0.82, (0.74, 0.89)),
+            (100, 0.60, (0.50, 0.70)),
+        )
     ]
+
+
+def test_scaling_study_records_knee_interval(sample_four_scale_points: list[Any]) -> None:
+    """Verify _assemble_scaling_study computes uncertainty interval for knee scale."""
+    from reach.sweep import _assemble_scaling_study
 
     study = _assemble_scaling_study(
         target=None,
         is_corpus=True,
         actual_scales=(10, 25, 50, 100),
-        points=points,
+        points=sample_four_scale_points,
         noise_floor=0.05,
         baseline_count=20,
         total_skills=100,
@@ -2178,61 +2070,11 @@ def test_scaling_study_records_knee_interval() -> None:
     assert study.knee_scale_interval[0] <= study.knee_scale_interval[1]
 
 
-def test_bootstrap_knee_interval_cluster_resampling() -> None:
+def test_bootstrap_knee_interval_cluster_resampling(sample_four_scale_points: list[Any]) -> None:
     """Verify _bootstrap_knee_interval calculates interval via non-parametric cluster bootstrap."""
-    from reach.sweep import ScalingPoint, _bootstrap_knee_interval
+    from reach.sweep import _bootstrap_knee_interval
 
     scales = [10, 25, 50, 100]
-    points = [
-        ScalingPoint(
-            scale=10,
-            catalog_id="c",
-            pass_rate=0.96,
-            pass_rate_interval=(0.92, 0.99),
-            f1_score=0.96,
-            f1_interval=(0.92, 0.99),
-            delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
-            probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=25,
-            catalog_id="c",
-            pass_rate=0.91,
-            pass_rate_interval=(0.85, 0.96),
-            f1_score=0.91,
-            f1_interval=(0.85, 0.96),
-            delta_vs_baseline=0.05,
-            delta_context=0.0,
-            delta_shadowing=0.05,
-            probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=50,
-            catalog_id="c",
-            pass_rate=0.82,
-            pass_rate_interval=(0.74, 0.89),
-            f1_score=0.82,
-            f1_interval=(0.74, 0.89),
-            delta_vs_baseline=0.14,
-            delta_context=0.0,
-            delta_shadowing=0.14,
-            probes_executed=20,
-        ),
-        ScalingPoint(
-            scale=100,
-            catalog_id="c",
-            pass_rate=0.60,
-            pass_rate_interval=(0.50, 0.70),
-            f1_score=0.60,
-            f1_interval=(0.50, 0.70),
-            delta_vs_baseline=0.36,
-            delta_context=0.0,
-            delta_shadowing=0.36,
-            probes_executed=20,
-        ),
-    ]
     scale_query_sums = {
         s: {f"q{i}": (1, 0, 0) if (s <= 25 or i % (s // 25) == 0) else (0, 1, 1) for i in range(20)}
         for s in scales
@@ -2240,7 +2082,7 @@ def test_bootstrap_knee_interval_cluster_resampling() -> None:
 
     interval = _bootstrap_knee_interval(
         scales=scales,
-        points=points,
+        points=sample_four_scale_points,
         noise_floor=0.05,
         iterations=50,
         seed=42,
@@ -2368,17 +2210,28 @@ def test_paired_trial_outcomes_calculates_effective_paired() -> None:
     assert paired.effective_paired >= 2
 
 
-def test_corpus_capacity_sweep_hints_when_fewer_than_three_scales(
+@pytest.mark.parametrize(
+    ("target_skill", "is_corpus_sweep"),
+    [
+        (None, True),
+        ("skill-a", False),
+    ],
+    ids=["corpus-sweep", "single-skill-sweep"],
+)
+def test_sweep_hints_when_fewer_than_three_scales(
     sample_two_scale_points: list[Any],
+    target_skill: str | None,
+    is_corpus_sweep: bool,
 ) -> None:
-    """Verify capacity panel displays hint when evaluated with fewer than 3 scales."""
+    """Verify sweep displays knee detection hint when evaluated with fewer than 3 scales."""
     from rich.console import Console
 
     from reach.sweep import ScalingStudy
     from reach.views.sweep import print_sweep
 
     study = ScalingStudy(
-        is_corpus_sweep=True,
+        target_skill=target_skill,
+        is_corpus_sweep=is_corpus_sweep,
         scales=(10, 25),
         points=tuple(sample_two_scale_points),
         knee_scale=None,
@@ -2394,31 +2247,3 @@ def test_corpus_capacity_sweep_hints_when_fewer_than_three_scales(
     text = console.export_text()
     assert "requires ≥ 3 scale steps to detect" in text
     assert "evaluated" in text
-
-
-def test_single_skill_sweep_hints_when_fewer_than_three_scales(
-    sample_two_scale_points: list[Any],
-) -> None:
-    """Verify single skill sweep displays hint when evaluated with fewer than 3 scales."""
-    from rich.console import Console
-
-    from reach.sweep import ScalingStudy
-    from reach.views.sweep import print_sweep
-
-    study = ScalingStudy(
-        target_skill="skill-a",
-        is_corpus_sweep=False,
-        scales=(10, 25),
-        points=tuple(sample_two_scale_points),
-        knee_scale=None,
-        baseline_pass_rate=1.0,
-        final_pass_rate=0.5,
-        total_delta=0.5,
-        total_context_loss=0.1,
-        total_shadowing_loss=0.4,
-        total_corpus_skills=100,
-    )
-    console = Console(record=True)
-    print_sweep(console, study)
-    text = console.export_text()
-    assert "requires ≥ 3 scale steps to detect (evaluated 2)" in text

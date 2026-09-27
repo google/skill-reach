@@ -18,9 +18,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cyclopts
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from rich.console import Console
 
 import reach
 import reach.views
@@ -484,7 +490,7 @@ def test_a_verbose_plan_line_says_the_badge_and_the_hex_behind_it(make_console, 
     assert buffer.getvalue().rstrip("\n").endswith(stamp)
 
 
-def opening_escape(console, name: str) -> str:
+def opening_escape(console: Console, name: str) -> str:
     """Extract opening ANSI escape sequence for specified style name."""
     return console.get_style(name).render("|").split("|")[0]
 
@@ -553,14 +559,14 @@ def test_help_is_never_muted() -> None:
 
 
 @pytest.fixture
-def card(make_console, rendered, artifact):
+def card(make_console, rendered: Callable[..., str], artifact) -> Callable[..., str]:
     """Provide helper rendering Artifact scorecards into test string buffers."""
 
     def _card(
         shown: Artifact | None = None,
         *,
         verbose: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         console, buffer = make_console(**kwargs)
         print_scorecard(
@@ -573,17 +579,32 @@ def card(make_console, rendered, artifact):
     return _card
 
 
-def test_the_scorecard_leads_with_per_skill_reach(card) -> None:
-    """Verify scorecard displays per-skill reach metrics before overall consistency."""
+def test_scorecard_skill_table_layout_and_metrics(card, artifact) -> None:
+    """Verify scorecard skill table ordering, headers, intervals, and unprobed rows."""
     shown = card()
     assert "reach" in shown
     assert shown.index("gcs-retention-policy") < shown.index("consistency")
-
-
-def test_an_unreached_skill_sorts_above_a_well_served_one(card) -> None:
-    """Verify lower-performing skills sort above higher-performing skills in scorecard."""
-    shown = card()
     assert shown.index("gcs-retention-policy") < shown.index("gcs-lifecycle-rules")
+    assert re.search(r"1/3\s+33%\s+6-79%", shown)
+
+    measured = next(s for s in artifact.skills if s.skill == "gcs-retention-policy")
+    assert measured.recall_interval is not None
+    low = f"{measured.recall_interval.low * 100:.0f}"
+    high = f"{measured.recall_interval.high * 100:.0f}"
+    assert f"{low}-{high}%" in shown
+
+    header = next(line for line in shown.splitlines() if "precision" in line)
+    columns = header.split()
+    assert "recall" in columns
+    assert "reach" not in columns
+    assert "F1" not in columns
+    assert "95% CI" in shown
+
+    # Unprobed skills render without CI or 0% reach, but appear if they absorbed traffic
+    row = next(line for line in shown.splitlines() if "gke-basics" in line)
+    assert not re.search(r"\d+-\d+%", row)
+    assert re.search(r"gke-basics\s+1\s+0%", shown)
+    assert not re.search(r"gke-basics\s+0%", shown)
 
 
 def test_an_attractor_skill_sorts_above_a_well_served_one() -> None:
@@ -611,43 +632,6 @@ def test_an_attractor_skill_sorts_above_a_well_served_one() -> None:
     assert sorted_skills[1].skill == "well-served"
 
 
-def test_reach_is_shown_with_its_interval_and_the_counts_behind_it(card) -> None:
-    """Verify scorecard displays percentage, confidence interval, and hit ratio."""
-    assert re.search(r"1/3\s+33%\s+6-79%", card())
-
-
-def test_the_recall_interval_is_the_one_the_artifact_carries(card, artifact) -> None:
-    """Verify scorecard renders exact recall intervals stored in artifact."""
-    measured = next(s for s in artifact.skills if s.skill == "gcs-retention-policy")
-    assert measured.recall_interval is not None
-    low = f"{measured.recall_interval.low * 100:.0f}"
-    high = f"{measured.recall_interval.high * 100:.0f}"
-    assert f"{low}-{high}%" in card()
-
-
-def test_the_scorecard_names_the_metric_and_not_the_instrument(card) -> None:
-    """Verify scorecard column header is labeled recall."""
-    header = next(line for line in card().splitlines() if "precision" in line)
-    columns = header.split()
-
-    assert "recall" in columns
-    assert "reach" not in columns
-
-
-def test_the_scorecard_table_focuses_on_precision_and_recall(card) -> None:
-    """Verify scorecard table omits redundant per-skill F1 but reports macro-F1 in summary."""
-    header = next(line for line in card().splitlines() if "precision" in line)
-    columns = header.split()
-
-    assert "F1" not in columns
-    assert "macro-F1" in card()
-
-
-def test_the_interval_column_names_the_confidence_it_was_taken_at(card) -> None:
-    """Verify interval header states 95% CI."""
-    assert "95% CI" in card()
-
-
 def _rename_skill(artifact: Artifact, old_name: str, new_name: str) -> Artifact:
     """Return artifact copy with named skill renamed to new_name."""
     skills = tuple(
@@ -670,77 +654,32 @@ def test_a_name_too_long_for_the_row_gives_way_before_a_figure_does(card, artifa
     assert len(row) <= 100
 
 
-def test_a_skill_with_no_probes_is_left_unbounded_rather_than_bounded_wide(
-    card,
-) -> None:
-    """Verify unprobed skills render without confidence intervals."""
-    shown = card()
-    row = next(line for line in shown.splitlines() if "gke-basics" in line)
-    assert not re.search(r"\d+-\d+%", row)
-
-
-def test_a_skill_nobody_asked_for_still_appears_when_it_took_traffic(card) -> None:
-    """Verify skills receiving misrouted traffic appear in scorecard."""
-    shown = card()
-    assert "gke-basics" in shown
-    assert re.search(r"gke-basics\s+1\s+0%", shown)
-
-
-def test_an_unmeasured_skill_shows_no_reach_rather_than_zero(card) -> None:
-    """Verify unmeasured skills omit reach percentage."""
-    assert not re.search(r"gke-basics\s+0%", card())
-
-
-def test_the_scorecard_reports_its_own_stability_beside_the_headline(card) -> None:
-    """Verify scorecard outputs top-1 accuracy spread alongside consistency."""
+def test_scorecard_headline_and_summary_metrics(card) -> None:
+    """Verify scorecard headline stability, pp standard error, intervals, and macro-F1."""
     shown = card()
     assert "consistency" in shown
     assert re.search(r"top-1 66\.7% ± 16\.9pp", shown)
-
-
-def test_the_standard_error_is_labeled_in_points_not_percent(card) -> None:
-    """Verify standard error margin is labeled with percentage points pp."""
-    assert "± 16.9pp" in card()
-    assert "± 16.9%" not in card()
-
-
-def test_the_headline_rates_carry_the_bounds_the_artifact_took_them_over(card) -> None:
-    """Verify consistency and abstention rates include bracketed intervals."""
-    shown = card()
+    assert "± 16.9pp" in shown
+    assert "± 16.9%" not in shown
     assert re.search(r"consistency 50% \[9-91%\]", shown)
     assert re.search(r"abstention 17% \[3-56%\]", shown)
 
-
-def test_top_1_states_one_uncertainty_and_not_two(card) -> None:
-    """Verify top-1 accuracy displays single standard error bounds."""
-    figures = next(line for line in card().splitlines() if "top-1" in line)
+    figures = next(line for line in shown.splitlines() if "top-1" in line)
     assert "± 16.9pp" in figures
     assert figures.count("[") == 2
 
-
-def test_macro_f1_is_present_but_never_headlined(card) -> None:
-    """Verify macro-F1 metric is rendered in secondary summary section."""
-    shown = card()
     assert "macro-F1" in shown
     assert shown.index("consistency") < shown.index("macro-F1")
 
 
-def test_the_collision_table_names_where_the_missing_traffic_went(card) -> None:
-    """Verify collision table identifies misrouted skill targets."""
+def test_scorecard_collision_table_and_provenance_footer(card, artifact) -> None:
+    """Verify collision table entries, excluded non-collisions, quoted queries, and footer."""
     shown = card()
     assert re.search(r"gcs-retention-policy\s+gke-basics\s+1", shown)
-
-
-def test_a_pair_that_is_not_a_collision_is_left_out_of_the_collision_table(
-    card,
-) -> None:
-    """Verify correctly routed skills are excluded from the collision table."""
-    assert card().count("gcs-lifecycle-rules") == 1
-
-
-def test_the_collision_table_quotes_the_query_rather_than_naming_it(card) -> None:
-    """Verify collision table includes query text for misrouted queries."""
-    assert "Keep audit logs for seven years" in card()
+    assert shown.count("gcs-lifecycle-rules") == 1
+    assert "Keep audit logs for seven years" in shown
+    assert badge(artifact.digests.corpus_digest) in shown
+    assert badge(artifact.provenance.arm) in shown
 
 
 def test_the_collision_table_displays_reasoning_traces(artifact: Artifact) -> None:
@@ -803,13 +742,6 @@ def test_the_collision_table_suppresses_reasoning_when_disabled(artifact: Artifa
     assert "thought:" not in rendered
 
 
-def test_the_scorecard_stamps_the_figures_with_their_provenance(card, artifact) -> None:
-    """Verify scorecard footer displays corpus digest and arm badge."""
-    shown = card()
-    assert badge(artifact.digests.corpus_digest) in shown
-    assert badge(artifact.provenance.arm) in shown
-
-
 def test_the_scorecard_keeps_the_hex_off_the_stamp_until_it_is_asked_for(
     card,
     artifact,
@@ -838,7 +770,7 @@ def test_the_scorecard_renders_without_a_terminal_to_render_into(card) -> None:
 
 
 def test_a_run_that_probed_nothing_still_renders(card, artifact) -> None:
-    """Verify scorecard renders without error when probe count is zero."""
+    """Verify scorecard renders without error or floating table header when probe count is zero."""
     empty = artifact.model_copy(
         update={
             "skills": (),
@@ -849,6 +781,13 @@ def test_a_run_that_probed_nothing_still_renders(card, artifact) -> None:
         },
     )
     assert "consistency" in card(empty)
+
+    unprobed_skills = tuple(
+        SkillScore(skill=s.skill, probes=0, reached=0, absorbed=0) for s in artifact.skills
+    )
+    shown_unprobed = card(empty.model_copy(update={"skills": unprobed_skills}))
+    assert "3 resident skills had no query and took no traffic" in shown_unprobed
+    assert "95% CI" not in shown_unprobed
 
 
 def test_the_unshown_residents_are_counted_rather_than_listed(card, artifact) -> None:
@@ -867,10 +806,10 @@ def test_the_unshown_residents_are_counted_rather_than_listed(card, artifact) ->
 
 
 @pytest.fixture
-def listing(make_console, rendered, artifact):
+def listing(make_console, rendered: Callable[..., str], artifact) -> Callable[..., str]:
     """Provide helper rendering query record listings into test string buffers."""
 
-    def _listing(shown: Artifact | None = None, **kwargs) -> str:
+    def _listing(shown: Artifact | None = None, **kwargs: object) -> str:
         console, buffer = make_console(**kwargs)
         print_query_records(console, shown if shown is not None else artifact)
         return rendered(buffer)
@@ -915,7 +854,7 @@ def test_a_rank_is_shown_over_the_field_it_was_taken_in(listing, artifact) -> No
     assert "3/111" in listing(artifact.model_copy(update={"catalog_size": 111}))
 
 
-def _painted(console, name: str) -> str:
+def _painted(console: Console, name: str) -> str:
     """Return opening escape sequence for theme style."""
     return console.get_style(name).render("|").partition("|")[0]
 
@@ -1215,6 +1154,8 @@ def test_a_quick_run_states_the_three_defaults_that_produced_its_answer(
     assert "20 of 111 skills resident" in shown
     assert "3 attempts per query" in shown
     assert "drafted here and probed unreviewed, against 19 rivals" in shown
+    assert "ground truth drafted here" in shown
+    assert "ground truth  drafted here" not in shown
 
 
 def test_a_typed_question_is_not_reported_as_unreviewed_ground_truth(
@@ -1617,26 +1558,6 @@ def test_probe_progress_prints_resident_catalog_header_once(
     assert shown.count("probing  neighborhood:gcs-lifecycle-rules") == 1
 
 
-def test_print_quick_scope_uses_single_space_after_ground_truth_label(
-    make_console,
-    rendered,
-) -> None:
-    """Verify print_quick_scope separates 'ground truth' and its value with a single space."""
-    console, buffer = make_console(width=200)
-    print_quick_scope(
-        console,
-        catalog_id="neighborhood:widget-rollout",
-        residents=20,
-        corpus=111,
-        attempts=1,
-        rivals=19,
-        authored=0,
-    )
-    shown = rendered(buffer)
-    assert "ground truth drafted here" in shown
-    assert "ground truth  drafted here" not in shown
-
-
 def test_print_query_set_omits_floating_table_header_when_empty(
     make_console,
     rendered,
@@ -1661,28 +1582,6 @@ def test_print_query_set_omits_floating_table_header_when_empty(
     shown = rendered(buffer)
     assert "0 queries drafted" in shown
     assert "expects" not in shown
-
-
-def test_scorecard_omits_floating_skill_table_header_when_unprobed(
-    card,
-    artifact: Artifact,
-) -> None:
-    """Verify print_scorecard omits the floating skill table header when no skills were probed."""
-    unprobed_skills = tuple(
-        SkillScore(skill=s.skill, probes=0, reached=0, absorbed=0) for s in artifact.skills
-    )
-    empty = artifact.model_copy(
-        update={
-            "skills": unprobed_skills,
-            "confusion": (),
-            "queries": (),
-            "probes": 0,
-            "spread": Spread(),
-        },
-    )
-    shown = card(empty)
-    assert "3 resident skills had no query and took no traffic" in shown
-    assert "95% CI" not in shown
 
 
 def test_scorecard_renders_consistency_dash_when_no_repeated_queries(

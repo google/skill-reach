@@ -353,16 +353,6 @@ def test_goose_parse_stream_whitespace_and_early_exit(runtime: GooseRuntime) -> 
     assert early_exit_summary.status == "SUCCESS"
 
 
-def test_goose_build_completion_command() -> None:
-    """Verify build_completion_command constructs arguments correctly without CLI prompt."""
-    gen = GooseGenerator()
-    cmd = gen.build_completion_command("test prompt")
-    assert cmd[:6] == ["goose", "run", "-q", "-i", "-", "--no-session"]
-    assert "-t" not in cmd
-    assert "test prompt" not in cmd
-    assert "--no-profile" in cmd
-
-
 def test_goose_build_env_defaults_and_isolation(tmp_path: Path) -> None:
     """Verify build_env sets telemetry suppression, isolated home, and XDG directories."""
     rt = GooseRuntime()
@@ -480,6 +470,7 @@ def test_goose_runtime_initializes_base_attributes() -> None:
 
 def test_goose_generator_command_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify GooseGenerator command line assembly, environment, and schema formatting."""
+    assert GooseGenerator().build_completion_command("x")[:2] == ["goose", "run"]
     opts = GooseOptions(
         model="gemini-3.8-flash",
         provider="google",
@@ -491,6 +482,7 @@ def test_goose_generator_command_and_env(monkeypatch: pytest.MonkeyPatch) -> Non
     cmd = generator.build_completion_command("test prompt")
     assert cmd[:6] == ["goose", "run", "-q", "-i", "-", "--no-session"]
     assert "-t" not in cmd
+    assert "test prompt" not in cmd
     assert "--no-profile" in cmd
     assert "--model" in cmd
     assert cmd[cmd.index("--model") + 1] == "gemini-3.8-flash"

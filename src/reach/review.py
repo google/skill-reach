@@ -34,6 +34,15 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Self, cast, override
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
 from reach.models import Query, QueryKind, Skill
 from reach.queries import QuerySet, QuerySetProvenance
 from reach.static import get_review_css, get_review_js, get_review_template
@@ -44,28 +53,12 @@ if TYPE_CHECKING:
     import socket
     from collections.abc import Sequence
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    StringConstraints,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
-
 __all__ = [
     "ReviewSentinel",
     "ReviewServerHandler",
     "launch_query_review",
     "render_query_review_html",
 ]
-
-
-class ReviewSentinel(StrEnum):
-    """Sentinel values used across the interactive review interface."""
-
-    OUT_OF_SCOPE = "__OUT_OF_SCOPE__"
-
 
 #: Inlined CSS styling for the split territory boundary curation interface.
 _REVIEW_STYLE = get_review_css()
@@ -75,6 +68,18 @@ _REVIEW_SCRIPT = get_review_js()
 
 #: Allowed hostnames for loopback / local review server validation.
 _ALLOWED_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "testserver", "::1"})
+
+#: Poll interval (in seconds) for the background HTTP review server thread.
+_SERVER_POLL_INTERVAL: float = 0.05
+
+#: Poll timeout (in seconds) when checking terminal stdin for Enter confirmation.
+_TERMINAL_POLL_TIMEOUT: float = 0.02
+
+
+class ReviewSentinel(StrEnum):
+    """Sentinel values used across the interactive review interface."""
+
+    OUT_OF_SCOPE = "__OUT_OF_SCOPE__"
 
 
 def render_query_review_html(
@@ -425,7 +430,7 @@ def _convert_saved_queries(
     return updated_queries
 
 
-def _poll_terminal_enter(timeout: float = 0.2) -> bool:
+def _poll_terminal_enter(timeout: float = _TERMINAL_POLL_TIMEOUT) -> bool:
     """Poll terminal stdin for an Enter keypress across Windows and POSIX."""
     with contextlib.suppress(Exception):
         if os.name == "nt":
@@ -440,6 +445,18 @@ def _poll_terminal_enter(timeout: float = 0.2) -> bool:
             line = sys.stdin.readline()
             return bool(line)
     return False
+
+
+class _LocalThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer for 127.0.0.1 that skips blocking reverse DNS in server_bind."""
+
+    @override
+    def server_bind(self) -> None:
+        """Bind socket without calling socket.getfqdn on loopback."""
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
 
 def launch_query_review(
@@ -475,14 +492,18 @@ def launch_query_review(
     )
 
     handler = functools.partial(ReviewServerHandler, session=session)
-    server = http.server.ThreadingHTTPServer(
+    server = _LocalThreadingHTTPServer(
         ("127.0.0.1", 0),
         cast(type[http.server.BaseHTTPRequestHandler], handler),
     )
     server_port = server.server_port
     url = f"http://127.0.0.1:{server_port}/?token={session.auth_token}"
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": _SERVER_POLL_INTERVAL},
+        daemon=True,
+    )
     server_thread.start()
 
     console.print(
@@ -506,11 +527,11 @@ def launch_query_review(
                 )
                 break
 
-            if _poll_terminal_enter(timeout=0.2):
+            if _poll_terminal_enter(timeout=_TERMINAL_POLL_TIMEOUT):
                 console.print("\n[dim]Proceeding from terminal approval...[/dim]")
                 break
 
-            time.sleep(0.1)
+            session.done_event.wait(timeout=0.02)
     finally:
         server.shutdown()
         server_thread.join(timeout=2.0)

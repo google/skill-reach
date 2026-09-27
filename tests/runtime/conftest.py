@@ -20,7 +20,7 @@ import json
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
@@ -72,7 +72,7 @@ MINIMAL_OPTIONS: dict[str, dict[str, object]] = {
 }
 
 
-def build_agent(agent: str, tmp_path: Path, **extra_options: object) -> AgentRuntime:
+def build_agent(agent: str, tmp_path: Path, **extra_options: object) -> AgentRuntime[Any]:
     """Instantiate a runtime instance configured for test execution."""
     if not agent_dependencies_met(agent):
         pytest.skip(f"Optional dependencies for agent {agent!r} are not installed")
@@ -120,10 +120,8 @@ def canned(
     returncode: int = 0,
 ) -> None:
     """Mock subprocess.run with canned transcript output lines."""
-    if callable(mock) and not hasattr(mock, "setattr"):
-        mock(lines=lines, returncode=returncode)
-    else:
-        cast("pytest.MonkeyPatch", mock).setattr(
+    if isinstance(mock, pytest.MonkeyPatch):
+        mock.setattr(
             subprocess,
             "run",
             lambda *a, **_kw: subprocess.CompletedProcess(
@@ -133,9 +131,11 @@ def canned(
                 stderr="",
             ),
         )
+    else:
+        mock(lines=lines, returncode=returncode)
 
 
-def install_one(runtime: AgentRuntime, skill_repo: Path, workdir: Path) -> str:
+def install_one(runtime: AgentRuntime[Any], skill_repo: Path, workdir: Path) -> str:
     """Install single skill singleton catalog and return resident skill name."""
     all_skills = load_skills(skill_repo)
     cat = build_catalogs(all_skills, CatalogMode.SINGLETON)[0]
@@ -533,7 +533,7 @@ class FakeSdkResponse:
     ) -> None:
         """Initialize mock response with structured output and tool calls."""
         if stop_reason is None:
-            stop_reason = ag_types.StopReason.UNSPECIFIED if ag_types is not None else "UNSPECIFIED"
+            stop_reason = ag_types.StopReason.UNSPECIFIED if HAS_ANTIGRAVITY else "UNSPECIFIED"
         self._structured = structured
         self._tool_calls = tool_calls
         self.stop_reason = stop_reason

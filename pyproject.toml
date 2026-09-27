@@ -170,18 +170,13 @@ ignore = []
     "PLC0415",  # optional / deferred imports (model2vec, exchange, etc.)
 ]
 "tests/*" = [
-    "ANN",      # type annotations optional in tests
-    "ARG001",   # pytest fixtures as unused parameters
-    "ARG002",   # fixture methods as unused arguments
+    "ANN001",   # pytest fixture argument type annotations optional
+    "ANN401",   # Any allowed in test mock/monkeypatch signatures
+    "ARG001",   # pytest fixtures evaluated for side effects
     "INP",      # test directory package hierarchy
     "PLC0415",  # in-function fixture/mock imports in test functions
-    "PLR0913",  # multi-argument test helper functions
-    "PLR0917",  # multi-argument test helper functions
     "PLR2004",  # literal comparisons in test assertions
     "S101",     # assert allowed in tests
-    "S311",     # pseudo-random benchmark seeds allowed in tests
-    "S603",     # subprocess in tests
-    "S607",     # partial executable paths in tests
     "SLF001",   # private member access for unit testing internals
     "TC001",    # test fixture types
     "TC003",    # test fixture types

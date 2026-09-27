@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import ValidationError
@@ -67,24 +67,16 @@ def test_partial_allows_a_set_targeting_one_boundary(
     validate_query_coverage(query_set, ["s1", "s2"], partial=True)
 
 
-def test_partial_still_rejects_stray_ground_truth(
-    write_queries: Callable[..., Path],
-) -> None:
-    """Verify partial=True still raises ValueError for expected skills absent from catalog."""
-    rows = [{"id": "q", "text": "a", "kind": "implicit", "expected_skill": "ghost"}]
-    query_set = load_query_set(write_queries(queries=rows, catalog_id="c"))
-    with pytest.raises(ValueError, match="outside the catalog"):
-        validate_query_coverage(query_set, ["s1"], partial=True)
-
-
+@pytest.mark.parametrize("partial", [False, True])
 def test_coverage_reports_stray_ground_truth(
     write_queries: Callable[..., Path],
+    partial: bool,
 ) -> None:
     """Verify validate_query_coverage raises ValueError if query expects a non-resident skill."""
     rows = [{"id": "q", "text": "a", "kind": "implicit", "expected_skill": "ghost"}]
     query_set = load_query_set(write_queries(queries=rows, catalog_id="c"))
     with pytest.raises(ValueError, match="outside the catalog"):
-        validate_query_coverage(query_set, ["s1"])
+        validate_query_coverage(query_set, ["s1"], partial=partial)
 
 
 def test_out_of_scope_queries_cover_nothing(
@@ -298,7 +290,7 @@ def test_workers_reaches_conduct_without_changing_the_fingerprint(
     observed_workers: list[int] = []
     orig_harness = run_mod.ProbeHarness
 
-    def spy_harness(*args, **kwargs) -> ProbeHarness:
+    def spy_harness(*args: Any, **kwargs: Any) -> ProbeHarness:
         observed_workers.append(kwargs.get("workers", 1))
         return orig_harness(*args, **kwargs)
 
@@ -367,7 +359,6 @@ def test_editing_ground_truth_makes_a_run_a_different_measurement(
     make_config,
     answering_runtime,
     query_file,
-    tmp_path,
 ) -> None:
     """Verify queries_digest changes when query ground truth is modified."""
     config = make_config()
@@ -831,18 +822,6 @@ def test_a_sidecar_forbids_legacy_or_extra_keys(
     sidecar.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValidationError, match="extra_forbidden"):
         read_sidecar(sidecar)
-
-
-def test_a_query_set_round_trips_into_a_run(tmp_path: Path, queries) -> None:
-    """Verify QuerySet serializes to JSON and loads with full query records."""
-    path = tmp_path / "generated.json"
-    payload = QuerySet(
-        catalog_id="c",
-        queries=tuple(queries),
-        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-    )
-    path.write_text(payload.model_dump_json(), encoding="utf-8")
-    assert len(load_query_set(path).queries) == 2
 
 
 @pytest.fixture

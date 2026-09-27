@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 import pytest
 
@@ -135,6 +135,7 @@ def test_the_row_records_what_answered_beside_what_was_asked_for(
     class Named(FakeRuntime):
         """Mock runtime returning a specific resolved_model string."""
 
+        @override
         def select(
             self,
             query_text: str,

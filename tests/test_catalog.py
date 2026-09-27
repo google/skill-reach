@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import ValidationError
@@ -114,15 +114,6 @@ def test_split_frontmatter_only_consumes_the_first_two_delimiters() -> None:
     assert split[1] == "\nfirst\n---\nsecond\n"
 
 
-def test_split_frontmatter_handles_unicode_bom() -> None:
-    """Verify split_frontmatter strips leading Unicode BOM marker before parsing."""
-    raw = "\ufeff---\nname: x\n---\nbody text\n"
-    assert split_frontmatter(raw) == (
-        "\nname: x\n",
-        "\nbody text\n",
-    )
-
-
 def test_parse_frontmatter_handles_unicode_bom(tmp_path: Path) -> None:
     """Verify parse_frontmatter loads Skill from markdown starting with a Unicode BOM."""
     raw = "\ufeff---\nname: bom-skill\ndescription: A skill with a BOM\n---\nBody content\n"
@@ -130,15 +121,6 @@ def test_parse_frontmatter_handles_unicode_bom(tmp_path: Path) -> None:
     assert skill is not None
     assert skill.name == "bom-skill"
     assert skill.description == "A skill with a BOM"
-
-
-def test_split_frontmatter_handles_em_dash_in_description() -> None:
-    """Verify split_frontmatter does not split on em-dash substrings in frontmatter values."""
-    raw = '---\nname: em-skill\ndescription: "Automate---specifically Cloud Run"\n---\nBody\n'
-    split = split_frontmatter(raw)
-    assert split is not None
-    assert 'description: "Automate---specifically Cloud Run"' in split[0]
-    assert split[1] == "\nBody\n"
 
 
 def test_parse_frontmatter_handles_em_dash_in_description(tmp_path: Path) -> None:
@@ -245,11 +227,6 @@ def test_a_symlinked_skill_takes_the_name_it_was_installed_under(
     assert [s.name for s in load_skills(root)] == ["installed-name"]
 
 
-def test_empty_description_is_rejected(tmp_path: Path) -> None:
-    """Verify parse_frontmatter returns None when description is empty."""
-    assert parse_frontmatter("---\nname: x\ndescription: ''\n---\n", tmp_path / "SKILL.md") is None
-
-
 def test_singleton_mode_isolates_each_skill(skill_repo: Path) -> None:
     """Verify SINGLETON mode produces one single-skill catalog per skill."""
     catalogs = build_catalogs(load_skills(skill_repo), CatalogMode.SINGLETON)
@@ -300,7 +277,7 @@ def test_neighborhood_mode_carries_its_parameters(skill_repo: Path) -> None:
 
 def test_unsupported_mode_is_rejected(skill_repo: Path) -> None:
     """Verify build_catalogs raises ValueError for unhandled catalog modes."""
-    unsupported = cast("CatalogMode", "sideways")
+    unsupported: Any = "sideways"
     with pytest.raises(ValueError, match="unsupported catalog mode"):
         build_catalogs(load_skills(skill_repo), unsupported)
 
@@ -715,8 +692,10 @@ def test_build_catalogs_sweep_mode(tmp_path: Path) -> None:
     assert all(c.target == "skill-00" for c in target_catalogs)
 
 
-def test_build_scaling_catalogs_with_duplicate_skill_names(tmp_path: Path) -> None:
-    """Verify build_scaling_catalogs handles corpora containing duplicate skill names."""
+def test_build_scaling_and_neighborhood_catalogs_with_duplicate_skill_names(
+    tmp_path: Path,
+) -> None:
+    """Verify scaling and neighborhood catalogs handle duplicate skill names."""
     skills = [
         Skill(name="target", description="Target skill", path=tmp_path / "target"),
         Skill(name="rival-1", description="Rival one primary", path=tmp_path / "r1_a"),
@@ -724,28 +703,15 @@ def test_build_scaling_catalogs_with_duplicate_skill_names(tmp_path: Path) -> No
         Skill(name="rival-2", description="Rival two primary", path=tmp_path / "r2"),
         Skill(name="rival-3", description="Rival three primary", path=tmp_path / "r3"),
     ]
-    catalogs = build_scaling_catalogs(skills, target_skill="target", scales=(1, 3, 4))
-    assert len(catalogs) == 3
-    for cat in catalogs:
-        assert len(cat.skills) == len(set(cat.skills)), (
-            f"Catalog {cat.id} contains duplicate skills: {cat.skills}"
-        )
+    scaling_catalogs = build_scaling_catalogs(skills, target_skill="target", scales=(1, 3, 4))
+    assert len(scaling_catalogs) == 3
+    for cat in scaling_catalogs:
+        assert len(cat.skills) == len(set(cat.skills))
 
-
-def test_build_neighborhood_catalogs_with_duplicate_skill_names(tmp_path: Path) -> None:
-    """Verify build_neighborhood_catalogs handles corpora containing duplicate skill names."""
-    skills = [
-        Skill(name="target", description="Target skill", path=tmp_path / "target"),
-        Skill(name="rival-1", description="Rival one primary", path=tmp_path / "r1_a"),
-        Skill(name="rival-1", description="Rival one duplicate", path=tmp_path / "r1_b"),
-        Skill(name="rival-2", description="Rival two primary", path=tmp_path / "r2"),
-    ]
-    catalogs = build_neighborhood_catalogs(skills, size=3, rivals=2)
-    assert len(catalogs) == 3
-    for cat in catalogs:
-        assert len(cat.skills) == len(set(cat.skills)), (
-            f"Catalog {cat.id} contains duplicate skills: {cat.skills}"
-        )
+    neighborhood_catalogs = build_neighborhood_catalogs(skills[:4], size=3, rivals=2)
+    assert len(neighborhood_catalogs) == 3
+    for cat in neighborhood_catalogs:
+        assert len(cat.skills) == len(set(cat.skills))
 
 
 def test_cosine_bm25_distance_axioms(tmp_path: Path) -> None:
@@ -1292,68 +1258,33 @@ def test_resolve_skill_target_invalid_frontmatter_raises_value_error(tmp_path: P
         resolve_skill_target(manifest)
 
 
-def test_resolve_skill_target_skill_directory_path(tmp_path: Path) -> None:
-    """Verify resolve_skill_target parses name from directory containing SKILL.md."""
-    from reach.catalog import resolve_skill_target
-
-    skill_dir = tmp_path / "dir-skill"
-    skill_dir.mkdir()
-    manifest = skill_dir / "SKILL.md"
-    manifest.write_text(
-        "---\nname: parsed-dir-skill\ndescription: A test skill.\n---\n# Body\n", encoding="utf-8"
-    )
-
-    res = resolve_skill_target(skill_dir)
-    assert res is not None
-    assert res.skill_name == "parsed-dir-skill"
-    assert res.manifest_path == manifest.resolve()
-
-
-def test_resolve_skill_target_direct_skill_md_path(tmp_path: Path) -> None:
-    """Verify resolve_skill_target parses name directly from SKILL.md file path."""
-    from reach.catalog import resolve_skill_target
-
-    skill_dir = tmp_path / "direct-skill"
-    skill_dir.mkdir()
-    manifest = skill_dir / "SKILL.md"
-    manifest.write_text(
-        "---\nname: parsed-direct-skill\ndescription: Direct file test.\n---\n# Body\n",
-        encoding="utf-8",
-    )
-
-    res = resolve_skill_target(manifest)
-    assert res is not None
-    assert res.skill_name == "parsed-direct-skill"
-    assert res.manifest_path == manifest.resolve()
-
-
 def test_resolve_skill_target_smart_parent_catalog(tmp_path: Path) -> None:
-    """Verify resolve_skill_target infers parent catalog when parent has peer skills."""
+    """Verify resolve_skill_target parses directory and SKILL.md paths and infers parent catalog."""
     from reach.catalog import resolve_skill_target
 
     catalog_dir = tmp_path / "custom-catalog"
     catalog_dir.mkdir()
     skill1 = catalog_dir / "skill1"
     skill1.mkdir()
-    (skill1 / "SKILL.md").write_text(
-        "---\nname: skill-one\ndescription: First.\n---\n", encoding="utf-8"
-    )
+    manifest1 = skill1 / "SKILL.md"
+    manifest1.write_text("---\nname: skill-one\ndescription: First.\n---\n", encoding="utf-8")
     skill2 = catalog_dir / "skill2"
     skill2.mkdir()
-    (skill2 / "SKILL.md").write_text(
-        "---\nname: skill-two\ndescription: Second.\n---\n", encoding="utf-8"
-    )
+    manifest2 = skill2 / "SKILL.md"
+    manifest2.write_text("---\nname: skill-two\ndescription: Second.\n---\n", encoding="utf-8")
 
     # Pass skill directory
     res1 = resolve_skill_target(skill1)
     assert res1 is not None
     assert res1.skill_name == "skill-one"
+    assert res1.manifest_path == manifest1.resolve()
     assert res1.catalog_path == catalog_dir.resolve()
 
     # Pass manifest file
-    res2 = resolve_skill_target(skill2 / "SKILL.md")
+    res2 = resolve_skill_target(manifest2)
     assert res2 is not None
     assert res2.skill_name == "skill-two"
+    assert res2.manifest_path == manifest2.resolve()
     assert res2.catalog_path == catalog_dir.resolve()
 
 

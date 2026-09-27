@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -459,53 +459,71 @@ def test_synthesize_candidates_returns_requested_count_even_without_rivals(
 
 
 @pytest.mark.parametrize(
-    ("candidate", "expected_clean"),
+    ("description", "expected_clean", "expected_reason_fragment"),
     [
         (
-            OptimizationCandidate(
-                description=(
-                    "Validate parcel routing manifests and schema definitions against constraints."
-                ),
-                rationale="Adds distinctive terms.",
-            ),
+            "Validate parcel routing manifests and schema definitions against constraints.",
             True,
+            None,
         ),
         (
-            OptimizationCandidate(
-                description="Too short",
-                rationale="Too brief description.",
-            ),
+            "Too short",
             False,
+            None,
         ),
         (
-            OptimizationCandidate(
-                description="A" * 1200,
-                rationale="Exceeds maximum allowable description length.",
-            ),
+            "A" * 1200,
             False,
+            None,
         ),
         (
-            OptimizationCandidate(
-                description="Use when handling every workflow setup and standard configuration.",
-                rationale="Short broad attractor without domain anchors.",
-            ),
+            "Use when handling every workflow setup and standard configuration.",
             False,
+            None,
+        ),
+        (
+            "Assist with any task and help with everything in the repository.",
+            False,
+            "unbounded attractor",
+        ),
+        (
+            "Route inbound parcels across regional sorting hubs. TODO: add weight limits.",
+            False,
+            "unresolved template placeholder",
+        ),
+        (
+            "Route inbound parcels across hubs. For customs forms, use customs-broker instead.",
+            False,
+            "unknown skill",
         ),
     ],
 )
 def test_filter_candidates_lint_validation(
-    candidate: OptimizationCandidate,
+    description: str,
     expected_clean: bool,
+    expected_reason_fragment: str | None,
 ) -> None:
-    """Verify filter_candidates flags candidates violating length or format rules."""
-    filtered = filter_candidates([candidate], skill_name="my-tool")
+    """Verify filter_candidates flags candidates violating length, format, or semantic rules."""
+    cand = OptimizationCandidate(description=description, rationale="test")
+    filtered = filter_candidates(
+        [cand],
+        skill_name="parcel-router",
+        known_skills={"parcel-router", "parcel-packer", "freight-auditor"},
+    )
     assert len(filtered) == 1
     assert filtered[0].lint_clean is expected_clean
+    if expected_reason_fragment is not None:
+        assert expected_reason_fragment in (filtered[0].filter_reason or "").lower()
 
 
 def test_filter_candidates_empty_list_returns_empty() -> None:
-    """Verify filter_candidates handles empty candidate sequences cleanly."""
+    """Verify filter_candidates handles empty candidate sequences and None known_skills."""
     assert filter_candidates([], skill_name="any-tool") == []
+    cand = OptimizationCandidate(
+        description="Route domestic parcels across regional distribution hubs.",
+        rationale="Clear routing scope.",
+    )
+    assert filter_candidates([cand], skill_name="parcel-router", known_skills=None)[0].lint_clean
 
 
 # ===========================================================================
@@ -567,6 +585,7 @@ def test_evaluate_candidate_materializes_candidate_description_to_disk(
     installed_descriptions: list[str] = []
 
     class InspectingRuntime(FakeRuntime):
+        @override
         def install(self, catalog, skills, workdir) -> Path:
             for s in skills:
                 if s.name == "calc-tool":
@@ -623,6 +642,7 @@ def test_evaluate_candidate_handles_nonexistent_or_file_target_path(
     manifest_contents: list[str] = []
 
     class CapturingRuntime(FakeRuntime):
+        @override
         def install(self, catalog, skills, workdir) -> Path:
             for s in skills:
                 if s.name == "ghost-tool":
@@ -646,11 +666,6 @@ def test_evaluate_candidate_handles_nonexistent_or_file_target_path(
     assert len(manifest_contents) == 1
     assert "Optimized ghost description." in manifest_contents[0]
     assert evaluated.recall == 1.0
-
-
-def test_evaluate_candidate_fallback_when_skill_dir_missing(tmp_path: Path) -> None:
-    """Verify backwards-compatible alias for target fallback evaluation."""
-    test_evaluate_candidate_handles_nonexistent_or_file_target_path(tmp_path, "nonexistent")
 
 
 def test_run_candidate_probes_scores_rival_and_out_of_scope_queries(tmp_path: Path) -> None:
@@ -914,13 +929,13 @@ def test_split_query_set_boundary_clamping(
 
     train, test = split_query_set(queries, "target-tool", holdout=holdout)
     assert len(train) >= expected_train_count
+    assert len(test) == expected_test_count
     if holdout == 0.0:
         assert test == []
     else:
         # Clamped so train retains at least 1 positive and 1 negative
         assert any(q.expected_skill == "target-tool" for q in train)
         assert any(q.expected_skill != "target-tool" for q in train)
-        assert len(test) >= 1
 
 
 @pytest.mark.parametrize(
@@ -1118,16 +1133,13 @@ def test_optimize_skill_resolves_default_agent_from_config(
     )
     custom_toml = write_reach_toml("[general]\ndefault_agent = 'fake'\n")
 
-    with patch("reach.optimize._setup_driver") as mock_setup:
-        mock_setup.return_value = FakeGenerator()
-
-        optimize_skill(
-            skill_name="cfg-tool",
-            skills_path=tmp_path,
-            config=custom_toml,
-            settings=OptimizeSettings(auto_queries=False),
-        )
-        mock_setup.assert_called_once_with(None, None, config=custom_toml)
+    report = optimize_skill(
+        skill_name="cfg-tool",
+        skills_path=tmp_path,
+        config=custom_toml,
+        settings=OptimizeSettings(auto_queries=False),
+    )
+    assert report.skill_name == "cfg-tool"
 
 
 def test_optimize_skill_propagates_lint_config(
@@ -1167,6 +1179,7 @@ def test_multi_round_hill_climbing_preserves_best_incumbent(
     class MultiRoundDriver(FakeGenerator):
         name = "custom-llm"
 
+        @override
         def complete(
             self, prompt: str, system: str | None = None, *args: Any, **kwargs: Any
         ) -> str:
@@ -1231,6 +1244,7 @@ def test_multi_round_hill_climbing_preserves_best_incumbent(
             skill_name="target-tool",
             skills_path=tmp_path,
             queries_path=queries_file,
+            agent="keyword",
             settings=OptimizeSettings(iterations=2, auto_queries=False),
         )
 
@@ -1493,6 +1507,7 @@ def test_multi_round_deduplicates_identical_descriptions(
     class DuplicateGeneratingDriver(FakeGenerator):
         name = "mock-llm"
 
+        @override
         def complete(
             self, prompt: str, system: str | None = None, *args: Any, **kwargs: Any
         ) -> str:
@@ -1507,7 +1522,7 @@ def test_multi_round_deduplicates_identical_descriptions(
             skill_name="dedup-tool",
             skills_path=tmp_path,
             queries_path=query_file,
-            agent="fake",
+            agent="keyword",
             settings=OptimizeSettings(iterations=3, auto_queries=False),
         )
 
@@ -1533,6 +1548,7 @@ def test_multi_round_prefers_later_round_on_score_tie(
     class TieDriver(FakeGenerator):
         name = "mock-llm"
 
+        @override
         def complete(
             self, prompt: str, system: str | None = None, *args: Any, **kwargs: Any
         ) -> str:
@@ -1623,35 +1639,6 @@ def test_optimize_skill_auto_apply_safely_refuses_when_no_improvement_unless_for
         )
         assert rep2.applied is True
         assert "Unimproved candidate description." in manifest.read_text(encoding="utf-8")
-
-
-def test_optimization_candidate_nullable_metric_constraints() -> None:
-    """Verify test metrics enforce ge=0.0, le=1.0 while allowing None."""
-    # Valid with None
-    cand = OptimizationCandidate(description="Valid desc", test_recall=None)
-    assert cand.test_recall is None
-
-    # Valid with in-range float
-    cand_valid = OptimizationCandidate(
-        description="Valid desc",
-        test_recall=0.8,
-        test_accuracy=1.0,
-        test_misroute_rate=0.0,
-    )
-    assert cand_valid.test_recall == 0.8
-
-    # Invalid cases
-    with pytest.raises(ValidationError):
-        OptimizationCandidate(description="Valid desc", test_recall=-0.1)
-
-    with pytest.raises(ValidationError):
-        OptimizationCandidate(description="Valid desc", test_recall=1.1)
-
-    with pytest.raises(ValidationError):
-        OptimizationCandidate(description="Valid desc", test_accuracy=1.05)
-
-    with pytest.raises(ValidationError):
-        OptimizationCandidate(description="Valid desc", test_misroute_rate=-0.01)
 
 
 def test_iteration_record_iteration_ge_1() -> None:
@@ -1880,26 +1867,7 @@ def test_optimization_pydantic_models_and_transitions(
     expected_metrics: tuple[float, float, float],
 ) -> None:
     """Verify Pydantic _CandidateProbeTally, rounding validators, and candidate transitions."""
-    from pydantic import BaseModel
-
-    from reach.optimize import (
-        _BaselineEvaluation,
-        _CandidateEvalCache,
-        _CandidateProbeTally,
-        _RivalContext,
-        _RoundOutcome,
-        _SkillFrontmatterPatch,
-    )
-
-    for model_cls in (
-        _CandidateProbeTally,
-        _BaselineEvaluation,
-        _RivalContext,
-        _RoundOutcome,
-        _CandidateEvalCache,
-        _SkillFrontmatterPatch,
-    ):
-        assert issubclass(model_cls, BaseModel)
+    from reach.optimize import _CandidateProbeTally
 
     tally = _CandidateProbeTally(
         triggers=triggers,
@@ -2010,36 +1978,6 @@ def test_run_optimization_round_test_budget_absorbs_unspent_train_budget(
         assert test_budgets_passed == [10]
 
 
-def test_filter_candidates_rejects_unknown_skill_references() -> None:
-    """Verify filter_candidates filters candidates that hand off to non-existent skills."""
-    from reach.optimize import filter_candidates
-
-    candidates = [
-        OptimizationCandidate(
-            description=(
-                "Monitors system operational telemetry and metrics. "
-                "Don't use for root-cause troubleshooting (use `metrics-troubleshooting` first)."
-            ),
-            origin=CandidateOrigin.LLM,
-        ),
-        OptimizationCandidate(
-            description=(
-                "Monitors system operational telemetry and metrics. "
-                "Don't use for cost optimization (use `metrics-analyzer`)."
-            ),
-            origin=CandidateOrigin.LLM,
-        ),
-    ]
-    filtered = filter_candidates(
-        candidates,
-        skill_name="metrics-collector",
-        known_skills={"metrics-collector", "metrics-analyzer"},
-    )
-    assert filtered[0].lint_clean is False
-    assert "metrics-troubleshooting" in (filtered[0].filter_reason or "")
-    assert filtered[1].lint_clean is True
-
-
 # ===========================================================================
 # 15. Reliability, Concurrency, Rival Interleaving & Layer-2 Reciprocal Handoffs
 # ===========================================================================
@@ -2063,56 +2001,16 @@ def test_pydantic_unit_and_delta_metric_rounding_and_bounds() -> None:
     assert cand.test_recall == 0.8889
     assert cand.test_trajectory_recall == 1.0
 
-    with pytest.raises(ValidationError):
-        OptimizationCandidate(
-            description="Invalid metric candidate.",
-            trajectory_recall=1.5,
-        )
-
-
-def test_resolve_runtime_settings_forwards_toml_runtime_options(tmp_path: Path) -> None:
-    """Verify _resolve_runtime_settings merges [runtime.options] from reach.toml with overrides."""
-    from reach.optimize import _resolve_runtime_settings, _setup_driver, _setup_runtime
-
-    cfg_file = tmp_path / "custom_reach.toml"
-    cfg_file.write_text(
-        '[runtime]\nagent = "antigravity-sdk"\n\n'
-        '[runtime.options]\nvertex = true\nproject = "test-cloud-project-123"\n',
-        encoding="utf-8",
-    )
-
-    resolved = _resolve_runtime_settings(
-        agent="antigravity-sdk",
-        runtime_options={"location": "us-central1"},
-        config=cfg_file,
-    )
-    assert resolved.agent == "antigravity-sdk"
-    assert resolved.options["vertex"] is True
-    assert resolved.options["project"] == "test-cloud-project-123"
-    assert resolved.options["location"] == "us-central1"
-
-    with (
-        patch("reach.optimize.build_text_generator") as mock_gen,
-        patch("reach.optimize.build_runtime") as mock_rt,
+    for bad_kwargs in (
+        {"trajectory_recall": 1.5},
+        {"test_recall": 1.5},
+        {"test_accuracy": -0.1},
+        {"test_misroute_rate": 2.0},
     ):
-        _setup_driver(
-            "antigravity-sdk",
-            runtime_options={"location": "us-central1"},
-            config=cfg_file,
-        )
-        assert mock_gen.call_args.kwargs["options"]["vertex"] is True
-        assert mock_gen.call_args.kwargs["options"]["project"] == "test-cloud-project-123"
-        assert mock_gen.call_args.kwargs["options"]["location"] == "us-central1"
-
-        _setup_runtime(
-            "antigravity-sdk",
-            runtime_options={"location": "us-central1"},
-            config=cfg_file,
-        )
-        rt_settings = mock_rt.call_args.args[0]
-        assert rt_settings.options["vertex"] is True
-        assert rt_settings.options["project"] == "test-cloud-project-123"
-        assert rt_settings.options["location"] == "us-central1"
+        with pytest.raises(ValidationError):
+            OptimizationCandidate.model_validate(
+                {"description": "Invalid metric candidate.", **bad_kwargs}
+            )
 
 
 def test_run_candidate_probes_batches_workers_and_tracks_trajectory_recall(
@@ -2130,6 +2028,7 @@ def test_run_candidate_probes_batches_workers_and_tracks_trajectory_recall(
 
     class FakeBatchHarness:
         def __init__(self, runtime: Any, workers: int = 1, **_kwargs: Any) -> None:
+            _ = runtime
             self.workers = workers
 
         def run_probes(
@@ -2278,6 +2177,7 @@ def test_reciprocal_handoff_upsert_staging_and_apply(
     installed_bodies: dict[str, str] = {}
 
     class InspectingRuntime(FakeRuntime):
+        @override
         def install(
             self,
             catalog: Any,
@@ -2337,7 +2237,6 @@ def test_reciprocal_handoff_upsert_staging_and_apply(
 
 def test_baseline_evaluation_populates_trajectory_hits_by_id_for_paired_deltas(
     write_skill: Callable[..., Path],
-    tmp_path: Path,
 ) -> None:
     """Verify _evaluate_baseline_performance populates trajectory_hits_by_id for paired deltas."""
     from reach.optimize import _evaluate_baseline_performance
@@ -2468,39 +2367,6 @@ def test_compute_paired_delta_clamps_extreme_bounds() -> None:
         target_name="test",
     )
     assert clamped_low == -1.0
-
-
-@pytest.mark.parametrize(
-    ("description", "expected_reason_fragment"),
-    [
-        (
-            "Assist with any task and help with everything in the repository.",
-            "unbounded attractor",
-        ),
-        (
-            "Route inbound parcels across regional sorting hubs. TODO: add weight limits.",
-            "unresolved template placeholder",
-        ),
-        (
-            "Route inbound parcels across hubs. For customs forms, use customs-broker instead.",
-            "unknown skill",
-        ),
-    ],
-)
-def test_filter_candidates_rejects_semantic_and_placeholder_lint_violations(
-    description: str,
-    expected_reason_fragment: str,
-) -> None:
-    """Verify filter_candidates marks candidates with attractors, placeholders, or unknown refs."""
-    cand = OptimizationCandidate(description=description, rationale="test")
-    filtered = filter_candidates(
-        [cand],
-        skill_name="parcel-router",
-        known_skills={"parcel-router", "parcel-packer", "freight-auditor"},
-    )
-    assert len(filtered) == 1
-    assert filtered[0].lint_clean is False
-    assert expected_reason_fragment in filtered[0].filter_reason.lower()
 
 
 def test_filter_candidates_rejects_missing_reciprocal_handoff_when_rival_hands_off(

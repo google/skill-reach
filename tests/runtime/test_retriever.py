@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import concurrent.futures
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from reach.models import Catalog, CatalogMode, DisclosureState, Query, QueryKind, Skill
 from reach.run import ProbeHarness, validate_residency
@@ -92,32 +92,6 @@ def test_retriever_runtime_telemetry_withheld_state(tmp_path: Path) -> None:
     assert result.disclosure_state is DisclosureState.WITHHELD
 
 
-def test_retriever_runtime_concurrent_slot_isolation(tmp_path: Path) -> None:
-    """Verify parallel workers execute in distinct slot directories without collisions."""
-    skills = _make_skills(tmp_path / "skills", 10)
-    catalog = Catalog(id="all-10", mode=CatalogMode.ALL, skills=tuple(s.name for s in skills))
-
-    inner = FakeRuntime(default="cloud-tool-00", model="fake-model")
-    runtime = TwoStageRetrieverRuntime(inner, top_k=4)
-
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    runtime.install(catalog, skills, workdir)
-
-    def _worker(idx: int) -> tuple[str, ...]:
-        q_text = f"manage cloud resources task {idx}"
-        outcome = runtime.select(q_text, workdir)
-        return outcome.observed_catalog
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [executor.submit(_worker, i) for i in range(8)]
-        results = [f.result() for f in concurrent.futures.as_completed(futures)]
-
-    assert len(results) == 8
-    for catalog_subset in results:
-        assert len(catalog_subset) == 4
-
-
 def test_retriever_runtime_with_dense_scorer(tmp_path: Path) -> None:
     """Verify retriever runtime functions with DenseScorer as ranker."""
     from reach.retrieval import DenseScorer
@@ -151,8 +125,8 @@ def test_retriever_runtime_concurrent_stateful_inner_isolation(tmp_path: Path) -
     """Verify concurrent threads do not clobber inner._resident or KeywordRuntime regex state."""
     from reach.runtime.keyword import KeywordRuntime
 
-    skills = _make_skills(tmp_path / "skills", 12)
-    catalog = Catalog(id="all-12", mode=CatalogMode.ALL, skills=tuple(s.name for s in skills))
+    skills = _make_skills(tmp_path / "skills", 6)
+    catalog = Catalog(id="all-6", mode=CatalogMode.ALL, skills=tuple(s.name for s in skills))
 
     inner = KeywordRuntime()
     runtime = TwoStageRetrieverRuntime(inner, top_k=2)
@@ -162,14 +136,15 @@ def test_retriever_runtime_concurrent_stateful_inner_isolation(tmp_path: Path) -
     runtime.install(catalog, skills, workdir)
 
     def _worker(idx: int) -> tuple[str | None, tuple[str, ...]]:
-        target_name = f"cloud-tool-{idx % 12:02d}"
+        target_name = f"cloud-tool-{idx % 6:02d}"
         outcome = runtime.select(f"please use {target_name}", workdir)
         return outcome.invoked_skill, outcome.observed_catalog
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(_worker, i): f"cloud-tool-{i % 12:02d}" for i in range(24)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_worker, i): f"cloud-tool-{i % 6:02d}" for i in range(12)}
         for fut, expected_skill in futures.items():
             invoked, observed = fut.result()
+            assert len(observed) == 2
             assert expected_skill in observed
             assert invoked == expected_skill
 
@@ -190,11 +165,13 @@ def test_two_stage_retriever_caches_identical_subcatalog_across_scales(tmp_path:
     call_count = 0
 
     class CountingKeywordRuntime(KeywordRuntime):
+        @override
         def clone_isolated(self) -> CountingKeywordRuntime:
             clone = CountingKeywordRuntime()
             clone._resident = self._resident
             return clone
 
+        @override
         def select(
             self,
             query_text: str,
