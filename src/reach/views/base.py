@@ -29,9 +29,9 @@ from cyclopts.help import DefaultFormatter
 from cyclopts.help.specs import (
     AsteriskColumn,
     ColumnSpec,
-    DescriptionRenderer,
+    DescriptionColumn,
+    NameColumn,
     NameRenderer,
-    PanelSpec,
 )
 from rich import box
 from rich.console import Console
@@ -115,10 +115,14 @@ REACH_THEME = Theme(
         "progress.download": "bold",
         "progress.elapsed": "dim",
         "progress.remaining": "dim",
-        "reach.help.name": "cyan",
-        "reach.help.description": "default",
-        "reach.help.required": "bold",
-        "reach.help.border": "grey23",
+        "cyclopts.name": "cyan",
+        "cyclopts.required_marker": "bold",
+        "cyclopts.choices": "dim",
+        "cyclopts.env_var": "dim",
+        "cyclopts.default": "dim",
+        "cyclopts.required": "bold",
+        "cyclopts.border": "grey23",
+        "cyclopts.usage": "bold",
         "reach.error.border": "red",
         "reach.error.detail": "default",
     },
@@ -231,10 +235,7 @@ NAME_COLUMN_SHARE = 0.35
 
 def help_formatter() -> DefaultFormatter:
     """Construct a custom Cyclopts DefaultFormatter styled using the Reach theme."""
-    return DefaultFormatter(
-        panel_spec=PanelSpec(border_style="reach.help.border"),
-        column_specs=_help_columns,
-    )
+    return DefaultFormatter(column_specs=_help_columns)
 
 
 def _help_columns(
@@ -244,20 +245,13 @@ def _help_columns(
 ) -> tuple[ColumnSpec, ...]:
     """Calculate column layout specs for CLI help parameter panels."""
     cap = math.ceil(console.width * NAME_COLUMN_SHARE)
-    named = ColumnSpec(
+    named = NameColumn.copy(
         renderer=NameRenderer(max_width=cap),
         max_width=cap,
-        style="reach.help.name",
     )
-    described = ColumnSpec(
-        renderer=DescriptionRenderer(),
-        overflow="fold",
-        style="reach.help.description",
-    )
-    marker = AsteriskColumn.copy(style="reach.help.required")  # type: ignore[no-untyped-call]
     if any(entry.required for entry in entries):
-        return (marker, named, described)
-    return (named, described)
+        return (AsteriskColumn, named, DescriptionColumn)
+    return (named, DescriptionColumn)
 
 
 _CONSONANTS = "bdfghjklmnprstvz"

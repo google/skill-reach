@@ -321,7 +321,6 @@ def _doctor(
     path: Annotated[
         Path | None,
         Parameter(
-            name=["path", "--path"],
             help="Target project directory to inspect (defaults to current working directory)",
         ),
     ] = None,
@@ -330,7 +329,7 @@ def _doctor(
         bool,
         SWITCH,
         Parameter(
-            name=["--verbose", "-v"],
+            alias="-v",
             help="Display detailed diagnostics and recommended remediation steps",
         ),
     ] = False,

@@ -35,7 +35,16 @@ from reach.optimize import (
 )
 
 from .app import LOOP, app
-from .flags import POSITIVE_INT, RATE, SWITCH, AgentName, Global, YesFlag, agent_help_text
+from .flags import (
+    POSITIVE_INT,
+    RATE,
+    SWITCH,
+    AgentName,
+    Global,
+    YesFlag,
+    agent_help_text,
+    complete_skill_names,
+)
 
 type OptimizeFormat = Literal["text", "json", "diff"]
 
@@ -98,7 +107,7 @@ def _optimize(
     skill: Annotated[
         str,
         Parameter(
-            name=["skill", "--skill"],
+            completer=complete_skill_names,
             help="Name of the target skill to optimize, or path to skill directory / SKILL.md",
         ),
     ],
@@ -135,7 +144,7 @@ def _optimize(
         int,
         POSITIVE_INT,
         Parameter(
-            name=["--iterations", "-i"],
+            alias="-i",
             help=(
                 f"Number of iterative hill-climbing refinement rounds "
                 f"(default: {DEFAULT_ITERATIONS})"
@@ -146,7 +155,6 @@ def _optimize(
         float,
         RATE,
         Parameter(
-            name="--holdout",
             help="Fraction of queries held out for evaluation (0.0 - 0.9, default: 0.2)",
         ),
     ] = DEFAULT_HOLDOUT,
@@ -154,7 +162,6 @@ def _optimize(
         bool,
         SWITCH,
         Parameter(
-            name="--review",
             help="Launch interactive browser review for generated queries",
         ),
     ] = False,
@@ -167,8 +174,6 @@ def _optimize(
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text(
                 "Agent runtime for candidate empirical probing (default: from reach.toml)",
             ),
@@ -179,7 +184,6 @@ def _optimize(
         bool,
         SWITCH,
         Parameter(
-            name="--auto-apply",
             help="Automatically write the highest-ranking candidate description to SKILL.md",
         ),
     ] = False,
@@ -187,7 +191,7 @@ def _optimize(
         bool,
         SWITCH,
         Parameter(
-            name=["--force", "-f"],
+            alias="-f",
             help="Force apply candidate to SKILL.md even if no empirical improvement is detected",
         ),
     ] = False,
@@ -196,7 +200,7 @@ def _optimize(
         int,
         POSITIVE_INT,
         Parameter(
-            name=["--candidate", "-c"],
+            alias="-c",
             help="1-based candidate rank to inspect diff or apply (default: 1)",
         ),
     ] = 1,
@@ -204,7 +208,7 @@ def _optimize(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name=["--workers", "-j"],
+            alias="-j",
             help="Number of parallel probe workers (default: from reach.toml or 4)",
         ),
     ] = None,
@@ -212,7 +216,6 @@ def _optimize(
         bool,
         SWITCH,
         Parameter(
-            name="--with-handoff",
             help="Synthesize and stage reciprocal Layer-2 SKILL.md Routing Notes",
         ),
     ] = False,
@@ -225,7 +228,6 @@ def _optimize(
     config: Annotated[
         Path | None,
         Parameter(
-            name="--config",
             help="Path to reach.toml configuration file",
         ),
     ] = None,

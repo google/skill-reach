@@ -119,12 +119,7 @@ def _command_valid_flags(verb: str) -> frozenset[str]:
     cmd = app[verb]
     flags: set[str] = {"--help", "--version"}
     for arg in cmd.assemble_argument_collection():
-        if not arg.parameter.name:
-            continue
-        for name in arg.parameter.name:
-            flags.add(name)
-            if name.startswith("--") and arg.hint is bool:
-                flags.add(f"--no-{name.removeprefix('--')}")
+        flags.update(name for name in arg.names if name.startswith("-"))
     return frozenset(flags)
 
 
@@ -292,8 +287,7 @@ def test_all_cli_options_are_documented(verb: str) -> None:
     cli_flags = {
         name
         for arg in cmd.assemble_argument_collection()
-        if arg.parameter.name
-        for name in arg.parameter.name
+        for name in (set(arg.names) - set(arg.negatives))
         if name.startswith("--") and name not in {"--help", "--version"}
     }
 

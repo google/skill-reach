@@ -86,6 +86,7 @@ from .flags import (
     Verbose,
     YesFlag,
     build_config,
+    complete_skill_names,
 )
 from .safety import confirm_skill_execution
 
@@ -647,6 +648,7 @@ def _eval(
     target: Annotated[
         str | None,
         Parameter(
+            completer=complete_skill_names,
             help="One skill to evaluate, by name or by directory. Naming one "
             "asks for a quick run: questions drafted, probed and summarized",
         ),
@@ -662,6 +664,7 @@ def _eval(
     expected: Annotated[
         str | None,
         Parameter(
+            completer=complete_skill_names,
             help="The skill every --query should reach; defaults to the skill named",
         ),
     ] = None,
@@ -694,7 +697,7 @@ def _eval(
     out: Annotated[
         Path | None,
         Parameter(
-            name=["--out", "-o"],
+            alias="-o",
             group=RECORD_GROUP,
             help="Where to write the evaluation artifact (default: .reach/eval.json)",
         ),
@@ -726,7 +729,6 @@ def _eval(
         bool,
         SWITCH,
         Parameter(
-            name="--allow-truncation",
             help="Probe a catalog too wide for the runtime's skill listing, "
             "measuring it with the descriptions it will really show",
         ),
@@ -735,7 +737,6 @@ def _eval(
         bool,
         SWITCH,
         Parameter(
-            name="--auto",
             help="Automatically draft queries for all skills and probe the catalog in one step",
         ),
     ] = False,
@@ -744,7 +745,6 @@ def _eval(
         bool,
         SWITCH,
         Parameter(
-            name="--reasoning",
             help="Display model reasoning / thought traces for misrouted queries",
         ),
     ] = False,

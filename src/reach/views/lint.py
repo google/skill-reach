@@ -168,7 +168,7 @@ def print_rule_explanation(console: Console, rule: RuleDefinition) -> None:
     panel = Panel(
         content,
         title=f"[bold cyan]reach lint --explain {rule.rule}[/]",
-        border_style="reach.help.border",
+        border_style="cyclopts.border",
         box=box.ROUNDED,
     )
     console.print(panel)

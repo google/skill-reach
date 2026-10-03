@@ -51,6 +51,7 @@ from .flags import (
     RegistryFlags,
     YesFlag,
     agent_help_text,
+    complete_skill_names,
 )
 from .safety import confirm_skill_execution
 
@@ -234,7 +235,6 @@ def _sweep(
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help="Path to the skill directory or corpus to sweep (discovered if omitted)",
         ),
     ] = None,
@@ -242,7 +242,7 @@ def _sweep(
     target: Annotated[
         str | None,
         Parameter(
-            name="--target",
+            completer=complete_skill_names,
             help=(
                 "Target skill to evaluate across scaling steps "
                 "(omitted for whole-corpus capacity evaluation)"
@@ -252,21 +252,19 @@ def _sweep(
     queries: Annotated[
         Path | None,
         Parameter(
-            name="--queries",
             help="Path to labeled evaluation queries JSON file",
         ),
     ] = None,
     scales: Annotated[
         str | None,
         Parameter(
-            name="--scales",
+            metavar="N,N,...",
             help="Comma-separated list of catalog sizes to evaluate",
         ),
     ] = None,
     anchor: Annotated[
         str | None,
         Parameter(
-            name="--anchor",
             help=(
                 "Anchor skills cohort evaluated across all scales. "
                 "Defaults to cluster medoids of the initial scale step. "
@@ -279,7 +277,6 @@ def _sweep(
         float,
         RATE,
         Parameter(
-            name="--rivals-share",
             help="Proportion of distractor skills selected as nearest rivals",
         ),
     ] = 0.5,
@@ -287,7 +284,7 @@ def _sweep(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name=["--workers", "-j"],
+            alias="-j",
             help="Number of concurrent probe execution workers",
         ),
     ] = None,
@@ -295,7 +292,7 @@ def _sweep(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name=["--attempts", "-a"],
+            alias="-a",
             help="Number of probe execution attempts per query at each scale step",
         ),
     ] = None,
@@ -303,14 +300,12 @@ def _sweep(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name="--bootstrap-iterations",
             help="Number of bootstrap replicates for confidence intervals",
         ),
     ] = None,
     seed: Annotated[
         int | None,
         Parameter(
-            name="--seed",
             help="Random seed for bootstrap confidence intervals",
         ),
     ] = None,
@@ -318,22 +313,19 @@ def _sweep(
         float,
         RATE,
         Parameter(
-            name="--noise-floor",
             help="Minimum pass rate drop to trigger knee detection",
         ),
     ] = 0.05,
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime to execute scaling probes"),
         ),
     ] = None,
     model: Annotated[
         str | None,
         Parameter(
-            name=["--model", "-m"],
+            alias="-m",
             help="Target model identifier",
         ),
     ] = None,
@@ -346,22 +338,19 @@ def _sweep(
     out: Annotated[
         Path | None,
         Parameter(
-            name=["--out", "-o"],
+            alias="-o",
             help="Where to write sweep output (default: .reach/sweep.json)",
         ),
     ] = None,
     workdir: Annotated[
         Path | None,
         Parameter(
-            name="--workdir",
             help="Working directory for probe execution",
         ),
     ] = None,
     allow_truncation: Annotated[
         bool,
         Parameter(
-            name="--allow-truncation",
-            negative="--no-allow-truncation",
             help=(
                 "Probe scaling steps even if catalogs exceed the runtime listing "
                 "budget (default: True)"
@@ -371,8 +360,6 @@ def _sweep(
     auto_queries: Annotated[
         bool | None,
         Parameter(
-            name="--auto-queries",
-            negative="--no-auto-queries",
             show_default=False,
             help=(
                 "Automatically synthesize and backfill queries for unqueried "

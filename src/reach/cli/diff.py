@@ -39,7 +39,6 @@ def _diff(
     vary: Annotated[
         Factor,
         Parameter(
-            name="--vary",
             help="The experimental factor varied between arms (description, rival, or scope)",
         ),
     ],

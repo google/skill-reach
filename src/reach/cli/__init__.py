@@ -109,8 +109,8 @@ def _verb_index(raw: Sequence[str], verbs: set[str], value_options: frozenset[st
 def _reorder_argv(argv: list[str] | None) -> list[str]:
     """Normalize argv by positioning recognized subcommands before leading options."""
     raw = sys.argv[1:] if argv is None else list(argv)
-    if not raw:
-        return []
+    if not raw or raw[0] == "__complete":
+        return raw
 
     verbs = set(_verbs())
     verb_idx = _verb_index(raw, verbs, frozenset())

@@ -1445,13 +1445,22 @@ def test_eval_range_validators_reject_invalid_flags(quick_argv: list[str], capsy
     assert "greater than or equal" in err
 
 
-def test_query_range_validators_reject_invalid_flags(capsys) -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["query", "--count", "0"],
+        ["query", "draft", "--count", "0"],
+    ],
+)
+def test_query_range_validators_reject_invalid_flags(
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+) -> None:
     """Verify cyclopts range validators reject invalid count in query commands."""
-    assert main(["query", "--count", "0"]) == 2
-    assert "Must be >= 1" in capsys.readouterr().err
-
-    assert main(["query", "draft", "--count", "0"]) == 2
-    assert "Must be >= 1" in capsys.readouterr().err
+    assert main(argv) == 2
+    err = capsys.readouterr().err
+    assert "Invalid value '0' for --count" in err
+    assert "greater than or equal" in err
 
 
 def test_eval_nonexistent_path_fails_cleanly() -> None:

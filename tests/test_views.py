@@ -60,7 +60,7 @@ from reach.views import (
     probe_progress,
 )
 
-STYLE_USE = re.compile(r'[\["](reach\.[a-z][a-z.\-]*)[\]"]')
+STYLE_USE = re.compile(r'[\["]((?:reach|cyclopts)\.[a-z][a-z.\-_]*)[\]"]')
 
 BORROWED_STYLES = {
     "progress.download": "reach.count",
@@ -495,8 +495,27 @@ def opening_escape(console: Console, name: str) -> str:
     return console.get_style(name).render("|").split("|")[0]
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "cyclopts.name",
+        "cyclopts.required_marker",
+        "cyclopts.choices",
+        "cyclopts.env_var",
+        "cyclopts.default",
+        "cyclopts.required",
+        "cyclopts.border",
+        "cyclopts.usage",
+    ],
+)
+def test_a_console_resolves_cyclopts_help_theme_keys(name: str, make_console) -> None:
+    """Verify Console resolves all Cyclopts 5 help theme keys."""
+    console, _ = make_console()
+    assert console.get_style(name) is not None
+
+
 def test_the_help_formatter_carries_the_theme(make_console) -> None:
-    """Verify CLI help formatter applies Reach theme styles."""
+    """Verify CLI help formatter applies Reach theme styles via cyclopts.* keys."""
     console, buffer = make_console()
     app = cyclopts.App(name="reach", help_formatter=help_formatter())
 
@@ -506,8 +525,8 @@ def test_the_help_formatter_carries_the_theme(make_console) -> None:
 
     app.help_print([], console=console)
     shown = buffer.getvalue()
-    assert f"{opening_escape(console, 'reach.help.name')}probe" in shown
-    assert opening_escape(console, "reach.help.border") in shown
+    assert f"{opening_escape(console, 'cyclopts.name')}probe" in shown
+    assert opening_escape(console, "cyclopts.border") in shown
 
 
 def test_the_help_formatter_names_no_style_the_theme_does_not_declare(

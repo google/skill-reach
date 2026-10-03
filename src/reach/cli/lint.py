@@ -55,6 +55,8 @@ from .flags import (
     Global,
     RuleOverrideFlags,
     agent_help_text,
+    complete_lint_rules,
+    complete_skill_names,
 )
 
 if TYPE_CHECKING:
@@ -160,7 +162,6 @@ def _lint(
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help=(
                 "Path to a skill directory, SKILL.md file, or catalog tree "
                 "(discovered from precedence if omitted)"
@@ -172,6 +173,7 @@ def _lint(
         tuple[str, ...],
         LIST,
         Parameter(
+            completer=complete_skill_names,
             help="Filter lint diagnostics to these specific skill names (repeatable)",
         ),
     ] = (),
@@ -179,14 +181,14 @@ def _lint(
         bool,
         SWITCH,
         Parameter(
-            name="--strict",
             help="Fail with exit code 1 if any warnings are detected",
         ),
     ] = False,
     explain: Annotated[
         str | None,
         Parameter(
-            name="--explain",
+            metavar="RULE",
+            completer=complete_lint_rules,
             help="Display detailed explanation and remedy for a specific lint rule and exit",
         ),
     ] = None,
@@ -194,8 +196,6 @@ def _lint(
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime to query for installed skill locations"),
         ),
     ] = None,

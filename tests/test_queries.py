@@ -455,10 +455,11 @@ def test_query_draft_sync_targets_missing_and_stale_skills(
     buf = StringIO()
     console = Console(file=buf, force_terminal=False, width=120)
 
+    from reach.cli.flags import GenerateFlags
+
     rc = _handle_draft_query_generation(
         console,
         target=skills_dir,
-        count=2,
         out=out_file,
         format_opt=None,
         study=None,
@@ -466,7 +467,7 @@ def test_query_draft_sync_targets_missing_and_stale_skills(
         config=None,
         catalog=None,
         runtime=None,
-        generate=None,
+        generate=GenerateFlags(count=2),
         sync=True,
     )
     assert rc == 0
@@ -842,6 +843,7 @@ def _invoke_draft_cli(
     """Run _handle_draft_query_generation with a captured test console."""
     from io import StringIO
 
+    from reach.cli.flags import GenerateFlags
     from reach.cli.query import _handle_draft_query_generation
     from reach.views import build_console
 
@@ -850,7 +852,6 @@ def _invoke_draft_cli(
     rc = _handle_draft_query_generation(
         console,
         target=skills_dir,
-        count=1,
         out=out_file,
         format_opt=None,
         study=None,
@@ -858,7 +859,7 @@ def _invoke_draft_cli(
         config=None,
         catalog=None,
         runtime=None,
-        generate=None,
+        generate=GenerateFlags(count=1),
         force=force,
         sync=sync,
     )

@@ -193,7 +193,7 @@ def _view(
     out: Annotated[
         Path | None,
         Parameter(
-            name=["--out", "-o"],
+            alias="-o",
             help="Where to write the rendered report; defaults to stdout",
         ),
     ] = None,
@@ -201,7 +201,6 @@ def _view(
         bool,
         SWITCH,
         Parameter(
-            name="--show-queries",
             help="Display individual scored query records below the scorecard",
         ),
     ] = False,
@@ -220,7 +219,8 @@ def _view(
         bool,
         SWITCH,
         Parameter(
-            name=["--open", "-O"],
+            name="--open",
+            alias="-O",
             help="Open the rendered HTML report directly in the default web browser",
         ),
     ] = False,

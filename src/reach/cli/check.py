@@ -117,7 +117,6 @@ def _check(
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help="Directory path or manifest file of skills to inspect",
         ),
     ] = None,
@@ -125,7 +124,6 @@ def _check(
     queries: Annotated[
         Path | None,
         Parameter(
-            name="--queries",
             help="Path to labeled evaluation queries JSON file for empirical validation",
         ),
     ] = None,
@@ -145,7 +143,6 @@ def _check(
     strict: Annotated[
         bool | None,
         Parameter(
-            negative="--no-strict",
             show_default=False,
             help="Fail with exit code 1 if static lint warnings are detected",
         ),
@@ -154,7 +151,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-recall",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable target recall threshold (default: 0.80)",
         ),
@@ -163,7 +159,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-accuracy",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable classification accuracy threshold (default: 0.80)",
         ),
@@ -172,7 +167,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--max-misroute",
             group=THRESHOLDS_GROUP,
             help="Maximum acceptable misroute rate threshold (default: 0.10)",
         ),
@@ -181,7 +175,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-entrypoint",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable entrypoint accuracy threshold (0.0 - 1.0)",
         ),
@@ -190,7 +183,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-reachability",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable trajectory reachability threshold (0.0 - 1.0)",
         ),
@@ -199,7 +191,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-efficiency",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable step efficiency MRR threshold (0.0 - 1.0)",
         ),
@@ -208,7 +199,6 @@ def _check(
         float | None,
         RATE,
         Parameter(
-            name="--min-f1",
             group=THRESHOLDS_GROUP,
             help="Minimum acceptable skill selection F1 threshold (0.0 - 1.0)",
         ),
@@ -217,7 +207,6 @@ def _check(
         float | None,
         NON_NEGATIVE,
         Parameter(
-            name="--max-redundancy",
             group=THRESHOLDS_GROUP,
             help="Maximum acceptable skill redundancy threshold (excess invocations)",
         ),
@@ -226,22 +215,18 @@ def _check(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name="--budget",
             help="Maximum empirical probes permitted (default: 50)",
         ),
     ] = None,
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime for empirical probing (default: from reach.toml)"),
         ),
     ] = None,
     format: Annotated[
         CheckFormat,
         Parameter(
-            name="--format",
             help="Output format: auto, github, text, json, concise (default: auto)",
         ),
     ] = "auto",
@@ -257,7 +242,7 @@ def _check(
         tuple[str, ...] | None,
         LIST,
         Parameter(
-            name=["--filter-skill"],
+            metavar="GLOB",
             help="Filter check queries to those expecting specified skills; repeatable",
         ),
     ] = None,
@@ -265,7 +250,7 @@ def _check(
         tuple[str, ...] | None,
         LIST,
         Parameter(
-            name=["--filter-id"],
+            metavar="GLOB",
             help="Filter check queries to specific query identifiers; repeatable",
         ),
     ] = None,

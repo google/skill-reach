@@ -455,7 +455,11 @@ def test_opt_replaces_rather_than_merges_into_a_config_files_options_table(
 )
 def test_a_declared_choice_matches_the_registry_behind_it(declared, registry) -> None:
     """Verify declared CLI enum types match backend registry keys."""
+    from typing import Annotated, get_origin
+
     target = getattr(declared, "__value__", declared)
+    if get_origin(target) is Annotated:
+        target = get_args(target)[0]
     if isinstance(target, type) and issubclass(target, Enum):
         args = tuple(member.value for member in target)
     else:

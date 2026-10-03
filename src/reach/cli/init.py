@@ -88,7 +88,7 @@ def _init(
     path: Annotated[
         Path | None,
         Parameter(
-            name=["path", "--path", "-p"],
+            alias="-p",
             help="Project root directory to initialize (defaults to current working directory)",
         ),
     ] = None,
@@ -96,15 +96,13 @@ def _init(
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Default agent runtime to configure in reach.toml"),
         ),
     ] = None,
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["--skills", "-s"],
+            alias="-s",
             help="Directory path where skills are stored (defaults to .agents/skills)",
         ),
     ] = None,
@@ -112,7 +110,7 @@ def _init(
         bool,
         SWITCH,
         Parameter(
-            name=["--force", "-f"],
+            alias="-f",
             help="Overwrite existing reach.toml configuration if present",
         ),
     ] = False,

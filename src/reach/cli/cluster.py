@@ -49,7 +49,6 @@ def _cluster(
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help="Path to the skill directory or corpus to partition (discovered if omitted)",
         ),
     ] = None,
@@ -65,7 +64,6 @@ def _cluster(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name="--target-size",
             help="Target maximum skills per cluster",
         ),
     ] = None,
@@ -73,15 +71,12 @@ def _cluster(
         int | None,
         POSITIVE_INT,
         Parameter(
-            name="--max-clusters",
             help="Maximum number of clusters",
         ),
     ] = None,
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime to query for installed skill locations"),
         ),
     ] = None,

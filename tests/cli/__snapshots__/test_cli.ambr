@@ -1,15 +1,15 @@
 # serializer version: 1
 # name: test_a_runtime_that_probes_nothing_is_not_offered_as_though_it_did
-  '--agent                       Which agent runtime to drive (antigravity-cli, antigravity-sdk, claude-code, goose, keyword, pi)'
+  '--agent CHOICE                Which agent runtime to drive (antigravity-cli, antigravity-sdk, claude-code, goose, keyword, pi)'
 # ---
 # name: test_every_format_flag_says_what_it_renders[diff]
-  '--format                How to render the comparison [choices: csv, json, jsonl, text] [default: text]'
+  '--format CHOICE          How to render the comparison [choices: csv, json, jsonl, text] [default: text]'
 # ---
 # name: test_every_format_flag_says_what_it_renders[eval]
-  '--format              How to render the finished evaluation [choices: csv, json, jsonl, text] [default: text]'
+  '--format CHOICE       How to render the finished evaluation [choices: csv, json, jsonl, text] [default: text]'
 # ---
 # name: test_every_format_flag_says_what_it_renders[overlap]
-  '--format         How to render the ranking [choices: csv, json, jsonl, text] [default: text]'
+  '--format CHOICE    How to render the ranking [choices: csv, json, jsonl, text] [default: text]'
 # ---
 # name: test_the_verbs_are_listed_under_one_heading
   '''

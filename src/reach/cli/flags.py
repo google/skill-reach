@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self, override
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, override
 
 from cyclopts import Group, Parameter, validators
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +32,14 @@ from reach.lint import Severity
 from reach.models import CatalogMode
 from reach.runtime import options_model
 
+if TYPE_CHECKING:
+    from cyclopts.completion import CompletionContext
+
+    from reach.models import Skill
+
+#: Maximum character length for skill descriptions shown in shell completion hints.
+MAX_COMPLETION_DESCRIPTION_LEN = 80
+
 #: Supported output formats for CLI display.
 type Format = Literal["csv", "json", "jsonl", "text"]
 
@@ -39,15 +47,34 @@ type Format = Literal["csv", "json", "jsonl", "text"]
 Factor = VaryFactor
 type Vary = VaryFactor
 
+
+def _public_agents() -> list[str]:
+    """Return registered agent runtime names excluding internal test doubles."""
+    from reach.runtime import FAKE_AGENT, known_agents
+
+    return [agent for agent in known_agents() if agent != FAKE_AGENT]
+
+
+def complete_public_agents(ctx: CompletionContext) -> list[str]:  # noqa: ARG001
+    """Return public agent runtime names excluding internal test doubles."""
+    return _public_agents()
+
+
 #: Supported agent runtime identifiers.
-type AgentName = Literal[
-    "antigravity-cli",
-    "antigravity-sdk",
-    "claude-code",
-    "fake",
-    "goose",
-    "keyword",
-    "pi",
+type AgentName = Annotated[
+    Literal[
+        "antigravity-cli",
+        "antigravity-sdk",
+        "claude-code",
+        "fake",
+        "goose",
+        "keyword",
+        "pi",
+    ],
+    Parameter(
+        show_choices=False,
+        completer=complete_public_agents,
+    ),
 ]
 
 #: Standard boolean switch configuration for CLI parameters.
@@ -58,7 +85,7 @@ YesFlag = Annotated[
     bool,
     SWITCH,
     Parameter(
-        name=["--yes", "-y"],
+        alias="-y",
         help="Bypass interactive safety confirmation prompts (recommended for CI and scripts)",
     ),
 ]
@@ -74,6 +101,42 @@ NON_NEGATIVE = Parameter(validator=validators.Number(gte=0.0))
 
 #: Positive count constraint requiring int >= 1.
 POSITIVE_INT = Parameter(validator=validators.Number(gte=1))
+
+
+def complete_lint_rules(ctx: CompletionContext) -> dict[str, str]:  # noqa: ARG001
+    """Return registered lint rule codes and summaries for tab completion."""
+    from reach.lint import RULES
+
+    return {code: rule.summary for code, rule in sorted(RULES.items())}
+
+
+def _format_skill_completions(
+    skills: Sequence[Skill],
+    *,
+    max_len: int = MAX_COMPLETION_DESCRIPTION_LEN,
+) -> dict[str, str]:
+    """Format discovered skills into a name-to-truncated-description mapping."""
+    return {s.name: s.description[:max_len] for s in skills}
+
+
+def complete_skill_names(ctx: CompletionContext) -> dict[str, str]:
+    """Return discovered skill names and short descriptions for tab completion."""
+    from reach.catalog import load_skills
+    from reach.config import resolve_discovery_candidates
+
+    skills_arg = ctx.get("skills")
+    if skills_arg is not None and skills_arg.provided and isinstance(skills_arg.value, (str, Path)):
+        candidate = Path(skills_arg.value).expanduser()
+        if candidate.is_dir():
+            return _format_skill_completions(load_skills(candidate))
+        return {}
+
+    for root in resolve_discovery_candidates(workdir=Path.cwd()):
+        if root.is_dir():
+            loaded = load_skills(root)
+            if loaded:
+                return _format_skill_completions(loaded)
+    return {}
 
 
 def build_rule_overrides(
@@ -100,7 +163,7 @@ Quiet = Annotated[
     bool,
     SWITCH,
     Parameter(
-        name=["--quiet", "-q"],
+        alias="-q",
         help="Mute the terminal view; results and errors still print",
     ),
 ]
@@ -128,7 +191,7 @@ Global = Annotated[
 ProjectFlag = Annotated[
     str | None,
     Parameter(
-        name=["--project", "-p"],
+        alias="-p",
         help="Google Cloud project ID hosting the Agent Registry",
     ),
 ]
@@ -137,7 +200,6 @@ ProjectFlag = Annotated[
 LocationFlag = Annotated[
     str | None,
     Parameter(
-        name=["--location"],
         help="Agent Registry location (default: 'global')",
     ),
 ]
@@ -146,7 +208,6 @@ LocationFlag = Annotated[
 PublisherFlag = Annotated[
     str | None,
     Parameter(
-        name=["--publisher"],
         help="Filter skills by publisher identifier (e.g. 'cloud.google.com')",
     ),
 ]
@@ -156,7 +217,6 @@ RegistryFlag = Annotated[
     bool,
     SWITCH,
     Parameter(
-        name=["--registry"],
         help="Target the Google Cloud Agent Registry instead of local workspace",
     ),
 ]
@@ -166,7 +226,6 @@ FreshFlag = Annotated[
     bool,
     SWITCH,
     Parameter(
-        name=["--fresh"],
         help="Bypass cached metadata and fetch latest revision pointers from registry",
     ),
 ]
@@ -176,7 +235,6 @@ NoCacheFlag = Annotated[
     bool,
     SWITCH,
     Parameter(
-        name=["--no-cache"],
         help="Run without reading or persisting local disk cache",
     ),
 ]
@@ -185,7 +243,7 @@ NoCacheFlag = Annotated[
 ConfigFlag = Annotated[
     Path | None,
     Parameter(
-        name=["--config", "-c"],
+        alias="-c",
         help="Path to reach.toml configuration file",
     ),
 ]
@@ -265,21 +323,21 @@ class SliceFlags(Flags):
     queries: Annotated[
         Path | None,
         Parameter(
-            name=["--queries", "-q"],
+            alias="-q",
             help="Subset query set file used to slice recorded evaluation runs",
         ),
     ] = None
     filter_skill: Annotated[
         tuple[str, ...],
         Parameter(
-            name="--filter-skill",
+            metavar="GLOB",
             help="Glob pattern(s) matching target skill names to slice recorded runs",
         ),
     ] = ()
     filter_id: Annotated[
         tuple[str, ...],
         Parameter(
-            name="--filter-id",
+            metavar="GLOB",
             help="Glob pattern(s) matching query IDs to slice recorded runs",
         ),
     ] = ()
@@ -298,7 +356,8 @@ class RuleOverrideFlags(Flags):
         tuple[str, ...],
         LIST,
         Parameter(
-            name="--ignore",
+            metavar="RULE",
+            completer=complete_lint_rules,
             help="Disable specific lint rule(s) (repeatable)",
         ),
     ] = ()
@@ -306,7 +365,8 @@ class RuleOverrideFlags(Flags):
         tuple[str, ...],
         LIST,
         Parameter(
-            name="--info",
+            metavar="RULE",
+            completer=complete_lint_rules,
             help="Treat specific lint rule(s) as info (repeatable)",
         ),
     ] = ()
@@ -314,7 +374,8 @@ class RuleOverrideFlags(Flags):
         tuple[str, ...],
         LIST,
         Parameter(
-            name="--error",
+            metavar="RULE",
+            completer=complete_lint_rules,
             help="Treat specific lint rule(s) as error (repeatable)",
         ),
     ] = ()
@@ -322,7 +383,8 @@ class RuleOverrideFlags(Flags):
         tuple[str, ...],
         LIST,
         Parameter(
-            name="--warn",
+            metavar="RULE",
+            completer=complete_lint_rules,
             help="Treat specific lint rule(s) as warning (repeatable)",
         ),
     ] = ()
@@ -356,10 +418,7 @@ def parse_agent_options(pairs: Sequence[str]) -> dict[str, object]:
 
 def agent_help_text(prefix: str = "Which agent runtime to drive") -> str:
     """Format dynamic runtime agent choices excluding internal test doubles."""
-    from reach.runtime import FAKE_AGENT, known_agents
-
-    public = [a for a in known_agents() if a != FAKE_AGENT]
-    return f"{prefix} ({', '.join(public)})"
+    return f"{prefix} ({', '.join(_public_agents())})"
 
 
 @FLAT
@@ -368,24 +427,20 @@ class RuntimeFlags(Flags):
 
     agent: Annotated[
         AgentName | None,
-        Parameter(
-            name="--agent",
-            show_choices=False,
-            help=agent_help_text(),
-        ),
+        Parameter(help=agent_help_text()),
     ] = None
 
     model: Annotated[
         str | None,
         Parameter(
-            name=["--model", "-m"],
+            alias="-m",
             help="Target model identifier",
         ),
     ] = None
     effort: Annotated[
         str | None,
         Parameter(
-            name=["--effort", "-e"],
+            alias="-e",
             help="Reasoning effort level (e.g. low, medium, high)",
         ),
     ] = None
@@ -400,15 +455,13 @@ class RuntimeFlags(Flags):
         POSITIVE_INT,
         Field(default=None, ge=1),
         Parameter(
-            name=["--max-turns", "-T"],
+            alias="-T",
             help="Maximum conversation turns to execute and evaluate (default: 3)",
         ),
     ] = None
     early_exit: Annotated[
         bool | None,
         Parameter(
-            name=["--early-exit"],
-            negative="--no-early-exit",
             show_default=False,
             help="Terminate multi-turn probe immediately when target skill is invoked",
         ),
@@ -417,7 +470,8 @@ class RuntimeFlags(Flags):
         tuple[str, ...],
         LIST,
         Parameter(
-            name=["--opt", "-O"],
+            alias="-O",
+            metavar="KEY=VALUE",
             help="Agent option as key=value; repeatable",
         ),
     ] = ()
@@ -482,7 +536,7 @@ class PlanFlags(Flags):
         POSITIVE_INT,
         Field(default=None, ge=1),
         Parameter(
-            name=["--workers", "-j"],
+            alias="-j",
             help="Number of concurrent probes to run (defaults to 1 for sequential execution)",
         ),
     ] = None
@@ -495,7 +549,7 @@ class StudyFlags(Flags):
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["--skills", "-s"],
+            alias="-s",
             help="Root of the skill directory",
         ),
     ] = None
@@ -538,7 +592,7 @@ class RecordFlags(Flags):
     records: Annotated[
         Path | None,
         Field(default=None, serialization_alias="out"),
-        Parameter(name=["--records"], help="JSONL file to append raw probe results to"),
+        Parameter(help="JSONL file to append raw probe results to"),
     ] = None
 
 
@@ -553,6 +607,7 @@ class GenerateFlags(BaseModel):
         LIST,
         Parameter(
             name=["--skill"],
+            completer=complete_skill_names,
             help="Draft queries for these skills only; repeatable. "
             "Narrows what is asked, never what is resident",
         ),
@@ -570,7 +625,11 @@ class GenerateFlags(BaseModel):
     ] = DEFAULT_GEMINI_MODEL
     generator_agent: Annotated[
         str | None,
-        Parameter(help="Agent driver that drafts the queries, overriding the probe agent"),
+        Parameter(
+            metavar="CHOICE",
+            completer=complete_public_agents,
+            help="Agent driver that drafts the queries, overriding the probe agent",
+        ),
     ] = None
 
     generator_arm: Annotated[
