@@ -219,6 +219,7 @@ def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
     assert math.isclose(res.delta_context, 0.0, abs_tol=1e-9)
     assert math.isclose(res.delta_truncated, 0.2, abs_tol=1e-9)
     assert math.isclose(res.delta_shadowing, 0.2, abs_tol=1e-9)
+    assert res.delta_truncated_ci[0] <= res.delta_truncated <= res.delta_truncated_ci[1]
     assert math.isclose(
         res.delta_total,
         res.delta_context + res.delta_truncated + res.delta_shadowing,

@@ -102,7 +102,10 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         decision_lines.append(("\n", ""))
 
     if len(study.scales) >= _MIN_SCALES_FOR_LOSS_DECOMPOSITION and (
-        study.total_delta != 0 or study.total_shadowing_loss != 0 or study.total_context_loss != 0
+        study.total_delta != 0
+        or study.total_shadowing_loss != 0
+        or study.total_context_loss != 0
+        or study.total_truncated_loss != 0
     ):
         loss_text = (
             f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}, "
@@ -263,19 +266,40 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             )
         )
 
+    if study.total_truncated_loss > 0:
+        console.print(
+            Text(
+                f"Budget Truncation Loss: {study.total_truncated_loss * 100:+.1f}% "
+                "(elided/withheld probes)",
+                style="yellow",
+            )
+        )
+
+    has_truncation = any(pt.delta_truncated != 0 for pt in study.points)
+    compact_cols = has_truncation
     table = Table(
         box=box.SIMPLE,
         show_header=True,
+        pad_edge=not compact_cols,
+        padding=(0, 0) if compact_cols else (0, 1),
         title="Reachability Decay Across Catalog Scales",
     )
-    table.add_column("Scale (N)", justify="right", no_wrap=True)
+    table.add_column("Scale" if compact_cols else "Scale (N)", justify="right", no_wrap=True)
     table.add_column("Pass Rate", justify="right", no_wrap=True)
     table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
     table.add_column("Δ Total", justify="right", no_wrap=True)
-    table.add_column("Δ Context", justify="right", style="cyan", no_wrap=True)
-    table.add_column("Δ Shadowing", justify="right", style="red", no_wrap=True)
+    table.add_column(
+        "Δ Ctx" if compact_cols else "Δ Context", justify="right", style="cyan", no_wrap=True
+    )
+    if has_truncation:
+        table.add_column("Δ Trunc", justify="right", style="yellow", no_wrap=True)
+    table.add_column(
+        "Δ Shadow" if compact_cols else "Δ Shadowing", justify="right", style="red", no_wrap=True
+    )
     table.add_column("Probes", justify="right", no_wrap=True)
-    table.add_column("Duration", justify="right", style="dim", no_wrap=True)
+    table.add_column(
+        "Time" if compact_cols else "Duration", justify="right", style="dim", no_wrap=True
+    )
 
     for pt in study.points:
         pct = f"{pt.pass_rate * 100:.1f}%"
@@ -284,7 +308,9 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             if pt.pass_rate >= _PASS_RATE_HIGH
             else ("yellow" if pt.pass_rate >= _PASS_RATE_MID else "bold red")
         )
-        ci = Interval.from_tuple(pt.pass_rate_interval).format_percent()
+        ci = Interval.from_tuple(pt.pass_rate_interval).format_percent(
+            separator="-" if compact_cols else " - "
+        )
 
         tot_str = f"{pt.delta_vs_baseline * 100:+.1f}%" if pt.delta_vs_baseline != 0 else "0.0%"
         ctx_str = f"{pt.delta_context * 100:+.1f}%" if pt.delta_context != 0 else "0.0%"
@@ -293,16 +319,18 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         probes_cell = _format_probes_cell(probes_str, pt.probes_errored)
         dur_str = f"{pt.duration_ms_mean:.0f}ms" if pt.duration_ms_mean > 0 else "—"
 
-        table.add_row(
+        row: list[str | Text] = [
             str(pt.scale),
             Text(pct, style=rate_style),
             ci,
             tot_str,
             ctx_str,
-            shd_str,
-            probes_cell,
-            dur_str,
-        )
+        ]
+        if has_truncation:
+            trunc_str = f"{pt.delta_truncated * 100:+.1f}%" if pt.delta_truncated != 0 else "0.0%"
+            row.append(trunc_str)
+        row.extend([shd_str, probes_cell, dur_str])
+        table.add_row(*row)
 
     console.print(table)
     sparkline_parts = [f"N={pt.scale}: {pt.pass_rate * 100:.0f}%" for pt in study.points]

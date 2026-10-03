@@ -539,6 +539,7 @@ class DecompositionResult(BaseModel):
     delta_total_ci: tuple[float, float] = (0.0, 0.0)
     delta_context_ci: tuple[float, float] = (0.0, 0.0)
     delta_shadowing_ci: tuple[float, float] = (0.0, 0.0)
+    delta_truncated_ci: tuple[float, float] = (0.0, 0.0)
     sample_size: Annotated[int, Field(ge=0)] = 0
     baseline_ci: tuple[float, float] = (0.0, 0.0)
     scaled_ci: tuple[float, float] = (0.0, 0.0)
@@ -570,45 +571,6 @@ def _probe_is_truncated(result: ProbeResult) -> bool:
     return state is not None and state is not DisclosureState.FULL
 
 
-def _bootstrap_decomposition_ci(
-    q_deltas: Sequence[float],
-    q_ctx_deltas: Sequence[float],
-    q_shd_deltas: Sequence[float],
-    iterations: int,
-    seed: int,
-    confidence: float = DEFAULT_CONFIDENCE,
-) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
-    """Compute empirical bootstrap confidence intervals for loss components."""
-    m = len(q_deltas)
-    if m <= 0 or iterations <= 0:
-        return (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)
-
-    # Standard pseudo-random generator is appropriate for Monte Carlo bootstrap
-    rng = random.Random(seed)  # noqa: S311
-    boot_deltas: list[float] = []
-    boot_ctx: list[float] = []
-    boot_shd: list[float] = []
-    indices = list(range(m))
-
-    for _ in range(iterations):
-        sample_idx = [rng.choice(indices) for _ in range(m)]
-        boot_deltas.append(statistics.fmean([q_deltas[i] for i in sample_idx]))
-        boot_ctx.append(statistics.fmean([q_ctx_deltas[i] for i in sample_idx]))
-        boot_shd.append(statistics.fmean([q_shd_deltas[i] for i in sample_idx]))
-
-    boot_deltas.sort()
-    boot_ctx.sort()
-    boot_shd.sort()
-
-    q_low, q_high = bootstrap_quantiles(confidence)
-    low_idx = max(0, int(iterations * q_low))
-    high_idx = min(int(iterations * q_high), iterations - 1)
-    delta_ci = (round(boot_deltas[low_idx], 4), round(boot_deltas[high_idx], 4))
-    ctx_ci = (round(boot_ctx[low_idx], 4), round(boot_ctx[high_idx], 4))
-    shd_ci = (round(boot_shd[low_idx], 4), round(boot_shd[high_idx], 4))
-    return delta_ci, ctx_ci, shd_ci
-
-
 class _QueryDrop(NamedTuple):
     """Represent single-query pass-rates and loss decomposition."""
 
@@ -618,6 +580,52 @@ class _QueryDrop(NamedTuple):
     delta_context: float
     delta_shadowing: float
     delta_truncated: float = 0.0
+
+
+def _bootstrap_decomposition_ci(
+    drops: Sequence[_QueryDrop],
+    iterations: int,
+    seed: int,
+    confidence: float = DEFAULT_CONFIDENCE,
+) -> tuple[
+    tuple[float, float],
+    tuple[float, float],
+    tuple[float, float],
+    tuple[float, float],
+]:
+    """Compute empirical bootstrap confidence intervals for loss components."""
+    m = len(drops)
+    if m <= 0 or iterations <= 0:
+        return (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)
+
+    # Standard pseudo-random generator is appropriate for Monte Carlo bootstrap
+    rng = random.Random(seed)  # noqa: S311
+    boot_deltas: list[float] = []
+    boot_ctx: list[float] = []
+    boot_shd: list[float] = []
+    boot_trunc: list[float] = []
+    indices = list(range(m))
+
+    for _ in range(iterations):
+        sample_idx = [rng.choice(indices) for _ in range(m)]
+        boot_deltas.append(statistics.fmean([drops[i].delta for i in sample_idx]))
+        boot_ctx.append(statistics.fmean([drops[i].delta_context for i in sample_idx]))
+        boot_shd.append(statistics.fmean([drops[i].delta_shadowing for i in sample_idx]))
+        boot_trunc.append(statistics.fmean([drops[i].delta_truncated for i in sample_idx]))
+
+    boot_deltas.sort()
+    boot_ctx.sort()
+    boot_shd.sort()
+    boot_trunc.sort()
+
+    q_low, q_high = bootstrap_quantiles(confidence)
+    low_idx = max(0, int(iterations * q_low))
+    high_idx = min(int(iterations * q_high), iterations - 1)
+    delta_ci = (round(boot_deltas[low_idx], 4), round(boot_deltas[high_idx], 4))
+    ctx_ci = (round(boot_ctx[low_idx], 4), round(boot_ctx[high_idx], 4))
+    shd_ci = (round(boot_shd[low_idx], 4), round(boot_shd[high_idx], 4))
+    trunc_ci = (round(boot_trunc[low_idx], 4), round(boot_trunc[high_idx], 4))
+    return delta_ci, ctx_ci, shd_ci, trunc_ci
 
 
 def _group_valid_results_by_query(
@@ -719,6 +727,7 @@ def decompose_pass_rate_drop(
             delta_total_ci=(0.0, 0.0),
             delta_context_ci=(0.0, 0.0),
             delta_shadowing_ci=(0.0, 0.0),
+            delta_truncated_ci=(0.0, 0.0),
             sample_size=0,
         )
 
@@ -731,19 +740,15 @@ def decompose_pass_rate_drop(
         for qid in common_qids
     ]
 
-    q_deltas = [d.delta for d in drops]
-    q_ctx_deltas = [d.delta_context for d in drops]
-    q_shd_deltas = [d.delta_shadowing for d in drops]
-
     base_pass_rate = statistics.fmean(d.base_pass for d in drops)
     scaled_pass_rate = statistics.fmean(d.scaled_pass for d in drops)
-    delta_total = statistics.fmean(q_deltas)
-    delta_ctx = statistics.fmean(q_ctx_deltas)
-    delta_shd = statistics.fmean(q_shd_deltas)
+    delta_total = statistics.fmean(d.delta for d in drops)
+    delta_ctx = statistics.fmean(d.delta_context for d in drops)
+    delta_shd = statistics.fmean(d.delta_shadowing for d in drops)
     delta_trunc = statistics.fmean(d.delta_truncated for d in drops)
 
-    delta_ci, ctx_ci, shd_ci = _bootstrap_decomposition_ci(
-        q_deltas, q_ctx_deltas, q_shd_deltas, iterations=iterations, seed=seed
+    delta_ci, ctx_ci, shd_ci, trunc_ci = _bootstrap_decomposition_ci(
+        drops, iterations=iterations, seed=seed
     )
 
     m = len(common_qids)
@@ -757,6 +762,7 @@ def decompose_pass_rate_drop(
         delta_total_ci=delta_ci,
         delta_context_ci=ctx_ci,
         delta_shadowing_ci=shd_ci,
+        delta_truncated_ci=trunc_ci,
         sample_size=m,
         baseline_ci=_compute_pass_rate_interval(base_pass_rate, m),
         scaled_ci=_compute_pass_rate_interval(scaled_pass_rate, m),

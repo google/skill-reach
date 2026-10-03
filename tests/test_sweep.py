@@ -2329,6 +2329,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering() -> None:
     print_sweep(console_single, single_study)
     single_text = console_single.export_text()
     assert "elbow threshold: stabilizes after N=10→25 drop of -25.0%" in single_text
+    assert "Budget Truncation Loss: +10.0%" in single_text
+    assert "Δ Trunc" in single_text
 
     cliff_study = single_study.model_copy(
         update={"knee_scale": 10, "steepest_drop_scales": (10, 25)}
