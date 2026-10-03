@@ -55,7 +55,7 @@ def clean(
         bool,
         SWITCH,
         Parameter(
-            name=["--dry-run", "-n"],
+            alias="-n",
             help="Display paths and space that would be reclaimed without deleting",
         ),
     ] = False,

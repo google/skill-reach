@@ -61,7 +61,6 @@ from .flags import (
     CATALOG_GROUP,
     FLAT,
     GENERATE_GROUP,
-    POSITIVE_INT,
     REGISTRY_GROUP,
     RUNTIME_GROUP,
     STUDY_GROUP,
@@ -78,6 +77,7 @@ from .flags import (
     StudyFlags,
     agent_help_text,
     build_config,
+    complete_skill_names,
 )
 
 #: Help panel group for import field mapping parameters.
@@ -387,7 +387,6 @@ def _handle_existing_query_source(
     study: StudyFlags | None,
     mapping: MapFlags | None,
     notes: str,
-    agent: str | None,
     runtime: RuntimeFlags | None,
     global_scope: bool,
     show_leaks: bool,
@@ -415,7 +414,7 @@ def _handle_existing_query_source(
             print(rendered, end="")
             return 0
         effective_skills = study.skills if study and study.skills else None
-        effective_agent = agent or (runtime.agent if runtime and runtime.agent else None)
+        effective_agent = runtime.agent if runtime and runtime.agent else None
         return _render_query_view(
             console,
             query_set,
@@ -486,7 +485,6 @@ def _resolve_sync_targets(
     skills_found: Sequence[Skill],
     existing_query_set: QuerySet,
     effective_generate: GenerateFlags,
-    count: int | None,
     generate: GenerateFlags | None,
 ) -> tuple[GenerateFlags | None, int | None]:
     """Filter generation targets to missing or stale skills when running in --sync mode."""
@@ -534,7 +532,8 @@ def _resolve_sync_targets(
     updates: dict[str, object] = {"targets": sync_targets}
     if existing_query_set.provenance is not None:
         prov = existing_query_set.provenance
-        if count is None and prov.queries_per_target:
+        explicit_count = generate is not None and "count" in generate.model_fields_set
+        if not explicit_count and prov.queries_per_target:
             updates["count"] = prov.queries_per_target
         if (generate is None or generate.top_rivals is None) and prov.rivals_in_view is not None:
             updates["top_rivals"] = prov.rivals_in_view
@@ -545,7 +544,6 @@ def _handle_draft_query_generation(
     console: Console,
     *,
     target: str | Path | None,
-    count: int | None,
     out: Path | None,
     format_opt: str | None,
     study: StudyFlags | None,
@@ -572,9 +570,6 @@ def _handle_draft_query_generation(
         generate = (generate or GenerateFlags()).model_copy(
             update={"targets": (target_skill_name,)}
         )
-
-    if count is not None:
-        generate = (generate or GenerateFlags()).model_copy(update={"count": count})
 
     effective_out = (
         Path(f".reach/queries.{format_opt}")
@@ -606,7 +601,6 @@ def _handle_draft_query_generation(
             skills_found,
             existing_query_set,
             effective_generate,
-            count,
             generate,
         )
         if exit_code is not None:
@@ -630,6 +624,7 @@ def _query(
     target: Annotated[
         str | Path | None,
         Parameter(
+            completer=complete_skill_names,
             help="Skill corpus to draft queries for, or existing query set to convert/inspect",
         ),
     ] = None,
@@ -637,7 +632,7 @@ def _query(
     out: Annotated[
         Path | None,
         Parameter(
-            name=["--out", "-o"],
+            alias="-o",
             help=(
                 "Where to write the query set (default: .reach/queries.json or "
                 ".reach/queries.jsonl)"
@@ -647,20 +642,11 @@ def _query(
     format: Annotated[
         Literal["json", "jsonl", "csv"] | None,
         Parameter(
-            name=["--format", "-f"],
+            alias="-f",
             help=(
                 "Output format: 'json', 'jsonl', or 'csv' (inferred from --out "
                 "file extension if provided)"
             ),
-        ),
-    ] = None,
-    count: Annotated[
-        int | None,
-        POSITIVE_INT,
-        Parameter(
-            name=["--count"],
-            group=GENERATE_GROUP,
-            help="Number of queries to draft per target skill (default: 3)",
         ),
     ] = None,
     config: ConfigFlag = None,
@@ -708,22 +694,11 @@ def _query(
         ),
     ] = False,
     quiet: Quiet = False,
-    agent: Annotated[
-        AgentName | None,
-        Parameter(
-            name="--agent",
-            show_choices=False,
-            help=agent_help_text(
-                "Agent runtime used for skill corpus discovery (no probes executed)",
-            ),
-        ),
-    ] = None,
     global_: Global = False,
     review: Annotated[
         bool,
         SWITCH,
         Parameter(
-            name="--review",
             help="Launch interactive browser review for drafted queries",
         ),
     ] = False,
@@ -731,7 +706,6 @@ def _query(
         bool,
         SWITCH,
         Parameter(
-            name="--force",
             help="Overwrite destination query set file if it already exists",
         ),
     ] = False,
@@ -739,7 +713,6 @@ def _query(
         bool,
         SWITCH,
         Parameter(
-            name="--sync",
             help="Backfill missing skills and refresh updated skills in an existing query set",
         ),
     ] = False,
@@ -766,7 +739,6 @@ def _query(
             study=study,
             mapping=mapping,
             notes=notes,
-            agent=agent,
             runtime=runtime,
             global_scope=global_,
             show_leaks=show_leaks,
@@ -776,7 +748,6 @@ def _query(
     return _handle_draft_query_generation(
         console,
         target=target,
-        count=count,
         out=out,
         format_opt=format,
         study=study,
@@ -798,6 +769,7 @@ def _query_draft(
     target: Annotated[
         str | Path | None,
         Parameter(
+            completer=complete_skill_names,
             help="Skill corpus directory or target skill to draft queries for",
         ),
     ] = None,
@@ -805,7 +777,7 @@ def _query_draft(
     out: Annotated[
         Path | None,
         Parameter(
-            name=["--out", "-o"],
+            alias="-o",
             help=(
                 "Where to write the drafted query set; defaults to --queries or .reach/queries.json"
             ),
@@ -814,17 +786,8 @@ def _query_draft(
     format: Annotated[
         Literal["json", "jsonl", "csv"] | None,
         Parameter(
-            name=["--format", "-f"],
+            alias="-f",
             help="Output format: 'json', 'jsonl', or 'csv' (inferred from --out if omitted)",
-        ),
-    ] = None,
-    count: Annotated[
-        int | None,
-        POSITIVE_INT,
-        Parameter(
-            name=["--count"],
-            group=GENERATE_GROUP,
-            help="Number of queries to draft per target skill (default: 3)",
         ),
     ] = None,
     config: ConfigFlag = None,
@@ -852,7 +815,6 @@ def _query_draft(
         bool,
         SWITCH,
         Parameter(
-            name="--review",
             help="Launch interactive browser review for drafted queries",
         ),
     ] = False,
@@ -860,7 +822,6 @@ def _query_draft(
         bool,
         SWITCH,
         Parameter(
-            name="--force",
             help="Overwrite destination query set file if it already exists",
         ),
     ] = False,
@@ -868,7 +829,6 @@ def _query_draft(
         bool,
         SWITCH,
         Parameter(
-            name="--sync",
             help="Backfill missing skills and refresh updated skills in an existing query set",
         ),
     ] = False,
@@ -879,7 +839,6 @@ def _query_draft(
         target=target,
         out=out,
         format=format,
-        count=count,
         config=config,
         catalog=catalog,
         runtime=runtime,
@@ -909,8 +868,6 @@ def _query_view(
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text(
                 "Agent runtime used for skill corpus discovery (no probes executed)",
             ),

@@ -71,6 +71,7 @@ from .flags import (
     Global,
     RegistryFlags,
     agent_help_text,
+    complete_skill_names,
 )
 
 #: Minimum number of skills required to compute pairwise similarity.
@@ -342,7 +343,6 @@ def _overlap(
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help=(
                 "Path to the skill directory or corpus to analyze (discovered "
                 "from precedence if omitted)"
@@ -354,6 +354,7 @@ def _overlap(
         tuple[str, ...],
         LIST,
         Parameter(
+            completer=complete_skill_names,
             help="Analyze overlap specifically for this skill against all "
             "competitors in the corpus (repeatable)",
         ),
@@ -375,7 +376,6 @@ def _overlap(
     top: Annotated[
         int | None,
         Parameter(
-            name="--top",
             help="Show only the top N ranked skills",
         ),
     ] = None,
@@ -391,7 +391,6 @@ def _overlap(
         tuple[str, ...],
         LIST,
         Parameter(
-            name="--quadrant",
             help=(
                 "Filter by diagnostic quadrant: near-duplicate, latent-collision, "
                 "boilerplate, distinct (implies --semantic)"
@@ -402,15 +401,12 @@ def _overlap(
         bool,
         SWITCH,
         Parameter(
-            name="--no-truncate",
             help="Render full skill names without middle truncation",
         ),
     ] = False,
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime to query for installed skill locations"),
         ),
     ] = None,
@@ -499,14 +495,15 @@ def _explain_cmd(
     skill: Annotated[
         str,
         Parameter(
-            name=["skill", "--skill"],
+            completer=complete_skill_names,
             help="The expected ground-truth skill name",
         ),
     ],
     rival: Annotated[
         str | None,
         Parameter(
-            name=["rival", "--rival", "-r"],
+            alias="-r",
+            completer=complete_skill_names,
             help=(
                 "The rival or misrouted skill name (auto-selects nearest rival if "
                 "omitted, or 'none' for abstention)"
@@ -516,22 +513,18 @@ def _explain_cmd(
     semantic: Annotated[
         bool,
         Parameter(
-            name=["--semantic"],
             help="Include dense semantic similarity alongside lexical BM25 scores",
         ),
     ] = False,
     skills: Annotated[
         Path | None,
         Parameter(
-            name=["skills", "--skills"],
             help="Path to the skill directory or corpus to analyze",
         ),
     ] = None,
     agent: Annotated[
         AgentName | None,
         Parameter(
-            name="--agent",
-            show_choices=False,
             help=agent_help_text("Agent runtime to query for installed skill locations"),
         ),
     ] = None,
