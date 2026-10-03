@@ -19,16 +19,15 @@ from __future__ import annotations
 import random
 import statistics
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING, Final, NamedTuple, Self
+from typing import TYPE_CHECKING, Annotated, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from reach.models import (
     NO_SKILL,
     InvocationPattern,
     ProbeResult,
     Query,
-    Skill,
 )
 from reach.uncertainty import (
     DEFAULT_CONFIDENCE,
@@ -37,34 +36,23 @@ from reach.uncertainty import (
     wilson_interval,
 )
 
-#: Minimum number of skill invocations required to trace transition precursors.
-MIN_TRANSITION_STEPS: Final = 2
-
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-
-type PrecursorTransitions = dict[tuple[str, str], list[int]]
-type RequirementSynonyms = frozenset[str]
-type ConfusionMatrix = Counter[tuple[str, str | None]]
 
 __all__ = [
     "ClassMetrics",
     "ClassificationReport",
     "DecompositionResult",
-    "PrecursorEdge",
     "TrajectoryScore",
     "classification_report",
     "classify_invocation_pattern",
     "collisions",
     "compute_f1",
-    "compute_precursor_graph",
     "confusion",
     "consistency",
     "consistency_counts",
     "decompose_pass_rate_drop",
-    "labeled_pairs",
     "score_trajectory",
-    "trajectory_scores",
 ]
 
 
@@ -99,13 +87,13 @@ def compute_f1(precision: float, recall: float) -> float:
 class TrajectoryScore(BaseModel):
     """Evaluation outcomes for a single query across its invocation trajectory."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     entrypoint_hit: bool
     trajectory_hit: bool
-    step_efficiency: float
-    skill_f1: float
-    redundancy: int
+    step_efficiency: Annotated[float, Field(ge=0.0, le=1.0)]
+    skill_f1: Annotated[float, Field(ge=0.0, le=1.0)]
+    redundancy: Annotated[int, Field(ge=0)]
 
 
 def score_trajectory(
@@ -156,21 +144,25 @@ def score_trajectory(
 class ClassMetrics(BaseModel):
     """Report precision, recall, support, and F1 metrics for a single skill class."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    false_negatives: int
-    false_positives: int
+    false_negatives: Annotated[int, Field(ge=0)]
+    false_positives: Annotated[int, Field(ge=0)]
     label: str
-    predicted: int
-    support: int
-    true_positives: int
-    trajectory_true_positives: int = 0
+    predicted: Annotated[int, Field(ge=0)]
+    support: Annotated[int, Field(ge=0)]
+    true_positives: Annotated[int, Field(ge=0)]
+    trajectory_true_positives: Annotated[int, Field(ge=0)] = 0
 
     @model_validator(mode="after")
     def _ensure_trajectory_at_least_top1(self) -> Self:
-        """Ensure trajectory true positives are at least top-1 true positives."""
+        """Validate that trajectory true positives are at least top-1 true positives."""
         if self.trajectory_true_positives < self.true_positives:
-            object.__setattr__(self, "trajectory_true_positives", self.true_positives)
+            msg = (
+                f"trajectory_true_positives ({self.trajectory_true_positives}) "
+                f"cannot be less than true_positives ({self.true_positives})"
+            )
+            raise ValueError(msg)
         return self
 
     @property
@@ -215,26 +207,26 @@ class ClassMetrics(BaseModel):
 class ClassificationReport(BaseModel):
     """Hold aggregated classification and routing metrics for an evaluation run."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    errors: int
-    macro_f1: float
-    macro_precision: float
-    macro_recall: float
+    errors: Annotated[int, Field(ge=0)]
+    macro_f1: Annotated[float, Field(ge=0.0)]
+    macro_precision: Annotated[float, Field(ge=0.0)]
+    macro_recall: Annotated[float, Field(ge=0.0)]
     per_class: tuple[ClassMetrics, ...]
-    probes: int
-    scored: int
-    abstentions: int = 0
-    false_abstentions: int = 0
-    in_scope: int = 0
-    out_of_scope: int = 0
-    out_of_scope_detected: int = 0
-    top1_hits: int = 0
-    entrypoint_hits: int = 0
-    trajectory_hits: int = 0
-    step_efficiency: float = 0.0
-    skill_f1: float = 0.0
-    redundancy: float = 0.0
+    probes: Annotated[int, Field(ge=0)]
+    scored: Annotated[int, Field(ge=0)]
+    abstentions: Annotated[int, Field(ge=0)] = 0
+    false_abstentions: Annotated[int, Field(ge=0)] = 0
+    in_scope: Annotated[int, Field(ge=0)] = 0
+    out_of_scope: Annotated[int, Field(ge=0)] = 0
+    out_of_scope_detected: Annotated[int, Field(ge=0)] = 0
+    top1_hits: Annotated[int, Field(ge=0)] = 0
+    entrypoint_hits: Annotated[int, Field(ge=0)] = 0
+    trajectory_hits: Annotated[int, Field(ge=0)] = 0
+    step_efficiency: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+    skill_f1: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+    redundancy: Annotated[float, Field(ge=0.0)] = 0.0
 
     @computed_field
     @property
@@ -342,18 +334,6 @@ def _paired(
     return [(truth[r.query_id], r) for r in results if not r.error]
 
 
-def labeled_pairs(
-    results: Sequence[ProbeResult],
-    queries: Sequence[Query],
-) -> tuple[list[str], list[str]]:
-    """Extract aligned ground truth and predicted label sequences."""
-    pairs = _paired(results, queries)
-    return (
-        [query.truth_label for query, _ in pairs],
-        [query.effective_predicted_label(result) for query, result in pairs],
-    )
-
-
 def _label_universe(
     y_true: Sequence[str],
     y_pred: Sequence[str],
@@ -380,7 +360,7 @@ def _class_metrics(
         support=sum(t == label for t in y_true),
         predicted=sum(p == label for p in y_pred),
         true_positives=tp,
-        trajectory_true_positives=trajectory_tp if trajectory_tp is not None else tp,
+        trajectory_true_positives=max(tp, trajectory_tp) if trajectory_tp is not None else tp,
         false_positives=fp,
         false_negatives=fn,
     )
@@ -487,31 +467,6 @@ def classification_report(
     )
 
 
-def trajectory_scores(
-    results: Sequence[ProbeResult],
-    queries: Sequence[Query],
-) -> dict[str, TrajectoryScore]:
-    """Return mapping of query_id to its aggregated TrajectoryScore across replicates."""
-    pairs = _paired(results, queries)
-    by_query: dict[str, list[TrajectoryScore]] = defaultdict(list)
-    for q, r in pairs:
-        by_query[q.id].append(score_trajectory(q, r.invoked_skills))
-
-    aggregated: dict[str, TrajectoryScore] = {}
-    for q_id, scores in by_query.items():
-        if len(scores) == 1:
-            aggregated[q_id] = scores[0]
-        else:
-            aggregated[q_id] = TrajectoryScore(
-                entrypoint_hit=sum(1 for s in scores if s.entrypoint_hit) * 2 >= len(scores),
-                trajectory_hit=sum(1 for s in scores if s.trajectory_hit) * 2 >= len(scores),
-                step_efficiency=round(_mean([s.step_efficiency for s in scores]), 4),
-                skill_f1=round(_mean([s.skill_f1 for s in scores]), 4),
-                redundancy=round(_mean([float(s.redundancy) for s in scores])),
-            )
-    return aggregated
-
-
 def consistency_counts(
     results: Sequence[ProbeResult],
     queries: Sequence[Query],
@@ -569,89 +524,26 @@ def collisions(
     return pairs
 
 
-class PrecursorEdge(BaseModel):
-    """Represent an empirical directed transition between two skills in a trajectory."""
-
-    model_config = ConfigDict(frozen=True)
-
-    precursor: str
-    target: str
-    attempts: int
-    handoffs: int
-    handoff_rate: float
-    avg_step_latency: float
-    is_declared_dependency: bool = False
-
-
-def compute_precursor_graph(
-    results: Sequence[ProbeResult],
-    queries: Sequence[Query],
-    skills: Sequence[Skill] = (),
-    min_observations: int = 1,
-) -> tuple[PrecursorEdge, ...]:
-    """Compute empirical precursor transition matrix T_i,j from observed trajectories."""
-    truth = {q.id: q.truth_label for q in queries if not q.is_out_of_scope}
-    declared_map = {s.name: set(s.declared_dependencies) for s in skills}
-    transitions: dict[tuple[str, str], list[int]] = defaultdict(list)
-    attempts: Counter[tuple[str, str]] = Counter()
-
-    for r in results:
-        if r.error:
-            continue
-        target = truth.get(r.query_id)
-        if not target or len(r.invoked_skills) < MIN_TRANSITION_STEPS:
-            continue
-
-        for idx, skill in enumerate(r.invoked_skills):
-            if skill == target:
-                break
-            attempts[(skill, target)] += 1
-            remaining = r.invoked_skills[idx + 1 :]
-            if target in remaining:
-                step_gap = remaining.index(target) + 1
-                transitions[(skill, target)].append(step_gap)
-
-    edges = []
-    for (src, dst), total_attempts in attempts.items():
-        if total_attempts >= min_observations:
-            gaps = transitions.get((src, dst), [])
-            is_declared = src in declared_map.get(dst, set()) or dst in declared_map.get(src, set())
-            edges.append(
-                PrecursorEdge(
-                    precursor=src,
-                    target=dst,
-                    attempts=total_attempts,
-                    handoffs=len(gaps),
-                    handoff_rate=round(len(gaps) / total_attempts, 3),
-                    avg_step_latency=round(statistics.fmean(gaps), 2) if gaps else 0.0,
-                    is_declared_dependency=is_declared,
-                )
-            )
-    return tuple(sorted(edges, key=lambda e: (-e.handoff_rate, -e.attempts, e.precursor, e.target)))
-
-
 class DecompositionResult(BaseModel):
     """Represent decomposition of pass-rate drop between baseline and scaled catalogs."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    baseline_pass_rate: float
-    scaled_pass_rate: float
+    baseline_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
+    scaled_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     delta_total: float
     delta_context: float
     delta_shadowing: float
     delta_total_ci: tuple[float, float] = (0.0, 0.0)
     delta_context_ci: tuple[float, float] = (0.0, 0.0)
     delta_shadowing_ci: tuple[float, float] = (0.0, 0.0)
-    sample_size: int = 0
+    sample_size: Annotated[int, Field(ge=0)] = 0
     baseline_ci: tuple[float, float] = (0.0, 0.0)
     scaled_ci: tuple[float, float] = (0.0, 0.0)
 
 
 def _probe_outcome_is_pass(result: ProbeResult, query: Query | None = None) -> bool:
     """Determine whether a single probe execution succeeded."""
-    if result.error:
-        return False
     if query is not None:
         return score_trajectory(query, result.invoked_skills).trajectory_hit
     if result.invocation_pattern is not None:
@@ -730,11 +622,14 @@ def _group_valid_results_by_query(
     return grouped
 
 
-def _query_pass_rate(results: Sequence[ProbeResult], query: Query | None) -> float:
-    """Calculate the empirical pass rate for a list of probe results."""
-    if not results:
-        return 0.0
-    return sum(1.0 for r in results if _probe_outcome_is_pass(r, query)) / len(results)
+def _partition_outcomes(
+    results: Sequence[ProbeResult],
+    query: Query | None,
+) -> tuple[float, list[ProbeResult]]:
+    """Calculate empirical pass rate and collect failed probes in a single pass."""
+    fails = [r for r in results if not _probe_outcome_is_pass(r, query)]
+    pass_rate = (len(results) - len(fails)) / len(results)
+    return pass_rate, fails
 
 
 def _decompose_query_drop(
@@ -743,22 +638,21 @@ def _decompose_query_drop(
     query: Query | None,
 ) -> _QueryDrop:
     """Calculate pass rates and decompose performance drop for a single query."""
-    p_base = _query_pass_rate(b_res, query)
-    p_scaled = _query_pass_rate(s_res, query)
+    p_base, b_fails = _partition_outcomes(b_res, query)
+    p_scaled, s_fails = _partition_outcomes(s_res, query)
     delta = p_base - p_scaled
+    if delta == 0.0:
+        return _QueryDrop(p_base, p_scaled, 0.0, 0.0, 0.0)
 
-    s_fails = [r for r in s_res if not _probe_outcome_is_pass(r, query)]
-    if not s_fails or delta == 0.0:
-        return _QueryDrop(p_base, p_scaled, delta, 0.0, 0.0)
-
-    n_ctx = sum(1.0 for r in s_fails if _probe_failure_is_context(r))
-    n_shd = len(s_fails) - n_ctx
+    fails = s_fails or b_fails
+    n_ctx = sum(1.0 for r in fails if _probe_failure_is_context(r))
+    n_shd = len(fails) - n_ctx
     return _QueryDrop(
         p_base,
         p_scaled,
         delta,
-        delta * (n_ctx / len(s_fails)),
-        delta * (n_shd / len(s_fails)),
+        delta * (n_ctx / len(fails)),
+        delta * (n_shd / len(fails)),
     )
 
 
@@ -766,17 +660,12 @@ def _resolve_evaluation_query_ids(
     base_by_query: dict[str, list[ProbeResult]],
     scaled_by_query: dict[str, list[ProbeResult]],
 ) -> list[str]:
-    """Identify query identifiers present across runs, falling back to set union."""
-    common_qids = sorted(set(base_by_query.keys()) & set(scaled_by_query.keys()))
-    if common_qids:
-        return common_qids
-    return sorted(set(base_by_query.keys()) | set(scaled_by_query.keys()))
+    """Identify query identifiers present across both baseline and scaled runs."""
+    return sorted(set(base_by_query.keys()) & set(scaled_by_query.keys()))
 
 
 def _compute_pass_rate_interval(pass_rate: float, sample_size: int) -> tuple[float, float]:
     """Compute rounded 95% Wilson confidence interval for an aggregate pass rate."""
-    if sample_size <= 0:
-        return (0.0, 0.0)
     w = wilson_interval(round(pass_rate * sample_size), sample_size)
     return (round(w.low, 4), round(w.high, 4)) if w else (0.0, 0.0)
 
@@ -809,8 +698,8 @@ def decompose_pass_rate_drop(
 
     drops = [
         _decompose_query_drop(
-            base_by_query.get(qid, []),
-            scaled_by_query.get(qid, []),
+            base_by_query[qid],
+            scaled_by_query[qid],
             truth_map.get(qid),
         )
         for qid in common_qids

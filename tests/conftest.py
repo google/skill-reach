@@ -51,7 +51,7 @@ from reach import retrieval
 from reach.artifact import Artifact
 from reach.catalog import build_catalogs, load_skills
 from reach.config import RunConfig
-from reach.metrics import classification_report, confusion, labeled_pairs
+from reach.metrics import classification_report, confusion
 from reach.models import (
     NO_SKILL,
     Catalog,
@@ -1063,7 +1063,10 @@ def matches_sklearn() -> Callable[..., None]:
     """Provide a helper verifying Reach metrics against scikit-learn implementations."""
 
     def _assert(results: Any, queries: Any, labels: Any = None) -> None:
-        y_true, y_pred = labeled_pairs(results, queries)
+        truth = {q.id: q for q in queries}
+        pairs = [(truth[r.query_id], r) for r in results if not r.error]
+        y_true = [q.truth_label for q, _ in pairs]
+        y_pred = [q.effective_predicted_label(r) for q, r in pairs]
         report = classification_report(results, queries, labels=labels)
         universe = list(labels) if labels else sorted(set(y_true) | set(y_pred))
         kwargs: dict[str, Any] = {

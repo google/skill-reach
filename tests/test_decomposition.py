@@ -118,6 +118,21 @@ def test_decomposition_empty_results() -> None:
     assert result.delta_total_ci == (0.0, 0.0)
 
 
+def test_decomposition_disjoint_queries_returns_zeroed_result(
+    make_paired_results: Callable[..., tuple[list[ProbeResult], list[ProbeResult], list[Query]]],
+) -> None:
+    """Verify disjoint query sets between baseline and scaled arms return a zeroed result."""
+    base, scaled, _ = make_paired_results(both_pass=2, both_fail=1, ctx_loss=1, shd_loss=1)
+    disjoint_scaled = [r.model_copy(update={"query_id": f"disjoint-{r.query_id}"}) for r in scaled]
+    result = decompose_pass_rate_drop(base, disjoint_scaled)
+    assert result.sample_size == 0
+    assert result.baseline_pass_rate == 0.0
+    assert result.scaled_pass_rate == 0.0
+    assert result.delta_total == 0.0
+    assert result.delta_context == 0.0
+    assert result.delta_shadowing == 0.0
+
+
 def test_decomposition_bootstrap_matches_scipy_reference(
     make_paired_results: Callable[..., tuple[list[ProbeResult], list[ProbeResult], list[Query]]],
 ) -> None:

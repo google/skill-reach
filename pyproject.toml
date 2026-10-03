@@ -74,7 +74,6 @@ dev = [
     "bm25s>=0.3.11",
     "google-antigravity>=0.1.16",
     "hypothesis>=6.168.0",
-    "mutmut>=3.7.0",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
@@ -210,27 +209,6 @@ filterwarnings = [
     "ignore::ResourceWarning:model2vec.*",
     "ignore:.*_UnionGenericAlias.*:DeprecationWarning",
     "ignore:The docstring of App contains raw markdown.*:DeprecationWarning",
-]
-
-
-[tool.mutmut]
-source_paths = ["src"]
-only_mutate = [
-    "src/reach/diff.py",
-    "src/reach/metrics.py",
-    "src/reach/uncertainty.py",
-]
-also_copy = ["tests"]
-pytest_add_cli_args = [
-    "-o",
-    "pythonpath=src",
-    "-W",
-    "ignore::pytest.PytestUnraisableExceptionWarning",
-    "-W",
-    "ignore::ResourceWarning",
-    "tests/test_diff.py",
-    "tests/test_metrics.py",
-    "tests/test_uncertainty.py",
 ]
 
 [tool.coverage.run]

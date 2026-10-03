@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -63,9 +64,6 @@ class VaryFactor(StrEnum):
 
 _DEFAULT_DIFF = DiffSettings()
 
-#: Calibrated empirical over-dispersion variance ratio for run-to-run variation.
-OVER_DISPERSION = _DEFAULT_DIFF.over_dispersion
-
 #: Noise inflation multiplier applied to standard errors.
 NOISE_INFLATION = _DEFAULT_DIFF.noise_inflation
 
@@ -94,7 +92,7 @@ def probes_to_resolve(delta: float, noise_inflation: float = NOISE_INFLATION) ->
 class Arm(BaseModel):
     """Hold a single experimental arm and its associated Artifact."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     label: str
     artifact: Artifact
@@ -114,19 +112,19 @@ class Arm(BaseModel):
 class ArmSummary(BaseModel):
     """Summarize provenance digests, catalog sizes, and accuracy metrics for an arm."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     label: str
     arm: str
     corpus_digest: str
     queries_digest: str
     catalog_id: str
-    catalog_size: int = Field(ge=0)
+    catalog_size: Annotated[int, Field(ge=0)]
     resident: tuple[str, ...] = ()
-    attempts: int = Field(ge=1)
-    probes: int = Field(ge=0)
-    scored: int = Field(ge=0)
-    top1_hits: int = Field(ge=0)
+    attempts: Annotated[int, Field(ge=1)]
+    probes: Annotated[int, Field(ge=0)]
+    scored: Annotated[int, Field(ge=0)]
+    top1_hits: Annotated[int, Field(ge=0)]
     top1_accuracy: float
     consistency: float
     standard_error: float | None = None
@@ -140,7 +138,7 @@ class ArmSummary(BaseModel):
 class Corroboration(BaseModel):
     """Record verification status of provenance changes between arms."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     factor: VaryFactor
     arm_moved: bool
@@ -154,15 +152,15 @@ class Corroboration(BaseModel):
 class SkillDelta(BaseModel):
     """Record per-skill recall differences and overlap significance between arms."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     skill: str
-    control_reached: int = Field(ge=0)
-    control_probes: int = Field(gt=0)
+    control_reached: Annotated[int, Field(ge=0)]
+    control_probes: Annotated[int, Field(gt=0)]
     control_recall: float
     control_interval: Interval
-    treatment_reached: int = Field(ge=0)
-    treatment_probes: int = Field(gt=0)
+    treatment_reached: Annotated[int, Field(ge=0)]
+    treatment_probes: Annotated[int, Field(gt=0)]
     treatment_recall: float
     treatment_interval: Interval
     real: bool
@@ -177,16 +175,16 @@ class SkillDelta(BaseModel):
 class QueryDelta(BaseModel):
     """Record per-query hit rate differences and overlap significance between arms."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     query_id: str
     kind: QueryKind | None = None
-    control_hits: int = Field(ge=0)
-    control_probes: int = Field(gt=0)
+    control_hits: Annotated[int, Field(ge=0)]
+    control_probes: Annotated[int, Field(gt=0)]
     control_rate: float
     control_interval: Interval
-    treatment_hits: int = Field(ge=0)
-    treatment_probes: int = Field(gt=0)
+    treatment_hits: Annotated[int, Field(ge=0)]
+    treatment_probes: Annotated[int, Field(gt=0)]
     treatment_rate: float
     treatment_interval: Interval
     real: bool
@@ -201,12 +199,12 @@ class QueryDelta(BaseModel):
 class Headline(BaseModel):
     """Summarize run-wide top-1 accuracy change and noise floor significance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     control: float
     treatment: float
-    confidence: float = Field(default=DEFAULT_CONFIDENCE, gt=0.0, lt=1.0)
-    noise_inflation: float = Field(default=NOISE_INFLATION, gt=0.0)
+    confidence: Annotated[float, Field(gt=0.0, lt=1.0)] = DEFAULT_CONFIDENCE
+    noise_inflation: Annotated[float, Field(gt=0.0)] = NOISE_INFLATION
     floor: float | None = None
     real: bool
     resolvable: float | None = None
@@ -222,12 +220,12 @@ class Headline(BaseModel):
 class Comparison(BaseModel):
     """Hold diff analysis between two arms across headline, skill, and query levels."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     factor: VaryFactor
     control: ArmSummary
     treatment: ArmSummary
-    shared_queries: int = Field(gt=0)
+    shared_queries: Annotated[int, Field(gt=0)]
     corroboration: Corroboration
     headline: Headline
     skills: tuple[SkillDelta, ...] = ()
@@ -286,7 +284,7 @@ CONTROL, TREATMENT, PAIRING = "control", "treatment", "pairing"
 class Wall(BaseModel):
     """Represent an incompatibility barrier preventing comparison between two runs."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     where: str
     path: Path | None = None
@@ -296,14 +294,14 @@ class Wall(BaseModel):
 class Survey(BaseModel):
     """Survey and validate readiness of two runs for pairwise diff comparison."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     factor: VaryFactor
     control_path: Path
     treatment_path: Path
     walls: tuple[Wall, ...] = ()
-    control: Arm | None = Field(default=None, exclude=True)
-    treatment: Arm | None = Field(default=None, exclude=True)
+    control: Annotated[Arm | None, Field(exclude=True)] = None
+    treatment: Annotated[Arm | None, Field(exclude=True)] = None
 
     @property
     def comparable(self) -> bool:
