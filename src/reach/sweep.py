@@ -132,6 +132,7 @@ class ScalingPoint(BaseModel):
     delta_vs_baseline: float
     delta_context: float
     delta_shadowing: float
+    delta_truncated: float = 0.0
     probes_executed: int
     probes_failed: int = 0
     probes_errored: NonNegativeInt = 0
@@ -157,11 +158,14 @@ class ScalingStudy(BaseModel):
     points: tuple[ScalingPoint, ...]
     knee_scale: int | None = None
     knee_scale_interval: tuple[int, int] | None = None
+    steepest_drop_scales: tuple[int, int] | None = None
+    steepest_drop_delta: float | None = None
     baseline_pass_rate: float
     final_pass_rate: float
     total_delta: float
     total_context_loss: float
     total_shadowing_loss: float
+    total_truncated_loss: float = 0.0
     noise_floor: float = 0.05
     total_corpus_skills: int = 0
     decomposition: DecompositionResult | None = None
@@ -608,6 +612,7 @@ class _ScaleDecomposition(NamedTuple):
     delta_context: float
     delta_shadowing: float
     decomposition: DecompositionResult | None
+    delta_truncated: float = 0.0
 
 
 def _estimate_query_attempts(results: Sequence[ProbeResult]) -> int:
@@ -901,6 +906,7 @@ def _evaluate_baseline_decomposition(
             delta_context=0.0,
             delta_shadowing=0.0,
             decomposition=None,
+            delta_truncated=0.0,
         )
     scoped_queries = (
         [q for q in queries if q.expected_skill == target_skill or q.is_out_of_scope]
@@ -921,6 +927,7 @@ def _evaluate_baseline_decomposition(
         delta_context=decomp.delta_context,
         delta_shadowing=decomp.delta_shadowing,
         decomposition=decomp,
+        delta_truncated=decomp.delta_truncated,
     )
 
 
@@ -1008,6 +1015,7 @@ def _build_scaling_point(
         delta_vs_baseline=round(decomp_stats.delta_vs_baseline, 4),
         delta_context=round(decomp_stats.delta_context, 4),
         delta_shadowing=round(decomp_stats.delta_shadowing, 4),
+        delta_truncated=round(decomp_stats.delta_truncated, 4),
         probes_executed=pass_stats.executed,
         probes_failed=pass_stats.fails,
         probes_errored=sum(1 for r in results if r.error),
@@ -1040,6 +1048,23 @@ def _prepare_sweep_config(
     return cfg
 
 
+def _find_steepest_drop(
+    scales: Sequence[int],
+    values: Sequence[float],
+) -> tuple[tuple[int, int] | None, float | None]:
+    """Identify the adjacent scale interval with the largest positive metric drop."""
+    if len(scales) < _MIN_DIFF_POINTS or len(scales) != len(values):
+        return None, None
+    best_drop = 0.0
+    best_pair: tuple[int, int] | None = None
+    for idx in range(len(scales) - 1):
+        drop = round(values[idx] - values[idx + 1], 4)
+        if drop > best_drop:
+            best_drop = drop
+            best_pair = (scales[idx], scales[idx + 1])
+    return best_pair, (best_drop if best_pair is not None else None)
+
+
 def _build_study_result(
     target: str | None,
     is_corpus: bool,
@@ -1052,6 +1077,8 @@ def _build_study_result(
     anchor_skills: Sequence[str] | None = None,
     paired_outcomes: PairedTrialOutcomes | None = None,
     knee_interval: tuple[int, int] | None = None,
+    steepest_drop_scales: tuple[int, int] | None = None,
+    steepest_drop_delta: float | None = None,
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
     b_rate = points[0].pass_rate if points else 0.0
@@ -1059,6 +1086,7 @@ def _build_study_result(
     t_delta = points[-1].delta_vs_baseline if len(points) > 1 else 0.0
     t_ctx = points[-1].delta_context if len(points) > 1 else 0.0
     t_shd = points[-1].delta_shadowing if len(points) > 1 else 0.0
+    t_trunc = points[-1].delta_truncated if len(points) > 1 else 0.0
 
     return ScalingStudy(
         target_skill=target,
@@ -1067,11 +1095,14 @@ def _build_study_result(
         points=tuple(points),
         knee_scale=knee,
         knee_scale_interval=knee_interval,
+        steepest_drop_scales=steepest_drop_scales,
+        steepest_drop_delta=steepest_drop_delta,
         baseline_pass_rate=b_rate,
         final_pass_rate=f_rate,
         total_delta=t_delta,
         total_context_loss=t_ctx,
         total_shadowing_loss=t_shd,
+        total_truncated_loss=t_trunc,
         noise_floor=noise_floor,
         total_corpus_skills=total_skills,
         decomposition=decomp,
@@ -1185,6 +1216,7 @@ def _setup_sweep_execution(
             skills=resolved_skills,
             scales=actual_scales,
             anchor_skills=resolved_anchors,
+            rivals_share=rivals_share,
         )
         return None, list(plan.catalogs), raw_query_set, plan, resolved_anchors
 
@@ -1353,6 +1385,7 @@ def _assemble_scaling_study(
     )
     evaluated_scales = actual_scales[: len(points)]
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
+    steepest_scales, steepest_delta = _find_steepest_drop(evaluated_scales, rate_curve)
     ci_span = ci_span_sigmas(DEFAULT_CONFIDENCE)
     weights = [
         1.0
@@ -1398,6 +1431,8 @@ def _assemble_scaling_study(
         anchor_skills=anchor_skills,
         paired_outcomes=paired_outcomes,
         knee_interval=knee_int,
+        steepest_drop_scales=steepest_scales,
+        steepest_drop_delta=steepest_delta,
     )
 
 

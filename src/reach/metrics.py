@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validat
 
 from reach.models import (
     NO_SKILL,
+    DisclosureState,
     InvocationPattern,
     ProbeResult,
     Query,
@@ -534,6 +535,7 @@ class DecompositionResult(BaseModel):
     delta_total: float
     delta_context: float
     delta_shadowing: float
+    delta_truncated: float = 0.0
     delta_total_ci: tuple[float, float] = (0.0, 0.0)
     delta_context_ci: tuple[float, float] = (0.0, 0.0)
     delta_shadowing_ci: tuple[float, float] = (0.0, 0.0)
@@ -560,6 +562,12 @@ def _probe_failure_is_context(result: ProbeResult) -> bool:
     if result.invocation_pattern is not None:
         return result.invocation_pattern is InvocationPattern.ABANDONED
     return not result.selected
+
+
+def _probe_is_truncated(result: ProbeResult) -> bool:
+    """Determine whether a probe was executed with a truncated or elided skill disclosure."""
+    state = getattr(result, "disclosure_state", None)
+    return state is not None and state is not DisclosureState.FULL
 
 
 def _bootstrap_decomposition_ci(
@@ -609,6 +617,7 @@ class _QueryDrop(NamedTuple):
     delta: float
     delta_context: float
     delta_shadowing: float
+    delta_truncated: float = 0.0
 
 
 def _group_valid_results_by_query(
@@ -637,22 +646,38 @@ def _decompose_query_drop(
     s_res: Sequence[ProbeResult],
     query: Query | None,
 ) -> _QueryDrop:
-    """Calculate pass rates and decompose performance drop for a single query."""
+    """Calculate pass rates and decompose marginal performance drop for a single query."""
     p_base, b_fails = _partition_outcomes(b_res, query)
     p_scaled, s_fails = _partition_outcomes(s_res, query)
     delta = p_base - p_scaled
     if delta == 0.0:
-        return _QueryDrop(p_base, p_scaled, 0.0, 0.0, 0.0)
+        return _QueryDrop(p_base, p_scaled, 0.0, 0.0, 0.0, 0.0)
 
-    fails = s_fails if delta > 0.0 else b_fails
-    n_ctx = sum(1.0 for r in fails if _probe_failure_is_context(r))
-    n_shd = len(fails) - n_ctx
+    n_b = max(1, len(b_res))
+    n_s = max(1, len(s_res))
+
+    b_trunc = sum(1.0 for r in b_fails if _probe_is_truncated(r)) / n_b
+    s_trunc = sum(1.0 for r in s_fails if _probe_is_truncated(r)) / n_s
+    delta_trunc = s_trunc - b_trunc
+
+    b_ctx = (
+        sum(1.0 for r in b_fails if not _probe_is_truncated(r) and _probe_failure_is_context(r))
+        / n_b
+    )
+    s_ctx = (
+        sum(1.0 for r in s_fails if not _probe_is_truncated(r) and _probe_failure_is_context(r))
+        / n_s
+    )
+    delta_ctx = s_ctx - b_ctx
+    delta_shd = delta - delta_ctx - delta_trunc
+
     return _QueryDrop(
         p_base,
         p_scaled,
         delta,
-        delta * (n_ctx / len(fails)),
-        delta * (n_shd / len(fails)),
+        delta_ctx,
+        delta_shd,
+        delta_trunc,
     )
 
 
@@ -690,6 +715,7 @@ def decompose_pass_rate_drop(
             delta_total=0.0,
             delta_context=0.0,
             delta_shadowing=0.0,
+            delta_truncated=0.0,
             delta_total_ci=(0.0, 0.0),
             delta_context_ci=(0.0, 0.0),
             delta_shadowing_ci=(0.0, 0.0),
@@ -714,6 +740,7 @@ def decompose_pass_rate_drop(
     delta_total = statistics.fmean(q_deltas)
     delta_ctx = statistics.fmean(q_ctx_deltas)
     delta_shd = statistics.fmean(q_shd_deltas)
+    delta_trunc = statistics.fmean(d.delta_truncated for d in drops)
 
     delta_ci, ctx_ci, shd_ci = _bootstrap_decomposition_ci(
         q_deltas, q_ctx_deltas, q_shd_deltas, iterations=iterations, seed=seed
@@ -726,6 +753,7 @@ def decompose_pass_rate_drop(
         delta_total=delta_total,
         delta_context=delta_ctx,
         delta_shadowing=delta_shd,
+        delta_truncated=delta_trunc,
         delta_total_ci=delta_ci,
         delta_context_ci=ctx_ci,
         delta_shadowing_ci=shd_ci,

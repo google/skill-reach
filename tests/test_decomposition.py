@@ -166,3 +166,61 @@ def test_decomposition_bootstrap_matches_scipy_reference(
     # Verify pure-Python bootstrap closely matches scipy percentile bootstrap
     assert math.isclose(result.delta_total_ci[0], scipy_low, abs_tol=0.08)
     assert math.isclose(result.delta_total_ci[1], scipy_high, abs_tol=0.08)
+
+
+def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
+    """Verify baseline partial failures do not contaminate marginal scaled failure attribution."""
+    from reach.models import CatalogMode, DisclosureState, InvocationPattern, ProbeResult, Query
+
+    q = Query(id="q1", text="test query", expected_skill="skill-a")
+    # Baseline: 3/5 pass, 2/5 fail due to context (p_pass=0.6, p_ctx=0.4, p_shd=0.0)
+    base = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="base",
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=2,
+            model="m",
+            runtime="fake",
+            attempt=i,
+            invoked_skills=("skill-a",) if i <= 3 else (),
+            invocation_pattern=(
+                InvocationPattern.ORACLE_ONLY if i <= 3 else InvocationPattern.ABANDONED
+            ),
+            disclosure_state=DisclosureState.FULL,
+        )
+        for i in range(1, 6)
+    ]
+    # Scaled: 1/5 pass, 2/5 FULL context fail, 1/5 truncated fail, 1/5 FULL shadowing fail
+    # (p_pass=0.2, delta_total=0.4: delta_ctx=0.0, delta_trunc=0.2, delta_shd=0.2)
+    scaled = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="scaled",
+            catalog_mode=CatalogMode.SWEEP,
+            catalog_size=10,
+            model="m",
+            runtime="fake",
+            attempt=i,
+            invoked_skills=("skill-a",) if i == 1 else (() if i <= 4 else ("rival",)),
+            invocation_pattern=(
+                InvocationPattern.ORACLE_ONLY
+                if i == 1
+                else (
+                    InvocationPattern.ABANDONED if i <= 4 else InvocationPattern.DISTRACTOR_HIJACK
+                )
+            ),
+            disclosure_state=(DisclosureState.NAME_ONLY_ELIDED if i == 4 else DisclosureState.FULL),
+        )
+        for i in range(1, 6)
+    ]
+    res = decompose_pass_rate_drop(base, scaled, queries=[q], iterations=50, seed=42)
+    assert math.isclose(res.delta_total, 0.4, abs_tol=1e-9)
+    assert math.isclose(res.delta_context, 0.0, abs_tol=1e-9)
+    assert math.isclose(res.delta_truncated, 0.2, abs_tol=1e-9)
+    assert math.isclose(res.delta_shadowing, 0.2, abs_tol=1e-9)
+    assert math.isclose(
+        res.delta_total,
+        res.delta_context + res.delta_truncated + res.delta_shadowing,
+        abs_tol=1e-9,
+    )

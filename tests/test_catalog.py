@@ -1081,7 +1081,7 @@ def test_find_cluster_medoids_display_quantiles(tmp_path: Path) -> None:
 
 
 def test_low_discrepancy_striding_intra_cluster_threat_ordering() -> None:
-    """Verify _low_discrepancy_striding preserves descending similarity within clusters."""
+    """Verify _low_discrepancy_striding supports pure threat ordering and rival/filler mixing."""
     from reach.catalog import _low_discrepancy_striding
 
     names = ["a0", "a1", "d_high", "d_mid", "d_low", "e_high", "e_mid", "e_low"]
@@ -1093,19 +1093,29 @@ def test_low_discrepancy_striding_intra_cluster_threat_ordering() -> None:
     sim[6][1] = 0.6
     sim[7][1] = 0.3
 
-    order = _low_discrepancy_striding(names, sim, [0, 1])
-    ordered_names = [names[i] for i in order]
+    order_pure = _low_discrepancy_striding(names, sim, [0, 1], rivals_share=1.0)
+    ordered_pure = [names[i] for i in order_pure]
 
-    assert ordered_names[:2] == ["a0", "a1"]
+    assert ordered_pure[:2] == ["a0", "a1"]
 
-    d_indices = [ordered_names.index(name) for name in ("d_high", "d_mid", "d_low")]
+    d_indices = [ordered_pure.index(name) for name in ("d_high", "d_mid", "d_low")]
     assert d_indices == sorted(d_indices)
 
-    e_indices = [ordered_names.index(name) for name in ("e_high", "e_mid", "e_low")]
+    e_indices = [ordered_pure.index(name) for name in ("e_high", "e_mid", "e_low")]
     assert e_indices == sorted(e_indices)
 
-    assert ordered_names.index("d_high") < ordered_names.index("e_low")
-    assert ordered_names.index("e_high") < ordered_names.index("d_low")
+    assert ordered_pure.index("d_high") < ordered_pure.index("e_low")
+    assert ordered_pure.index("e_high") < ordered_pure.index("d_low")
+
+    # With default rivals_share=0.5, top rivals and low-similarity filler are interleaved early
+    order_mixed = _low_discrepancy_striding(names, sim, [0, 1], rivals_share=0.5)
+    ordered_mixed = [names[i] for i in order_mixed]
+    assert ordered_mixed[:2] == ["a0", "a1"]
+    first_two_distractors = set(ordered_mixed[2:4])
+    assert bool(first_two_distractors & {"d_high", "e_high"})
+    assert bool(first_two_distractors & {"d_low", "e_low"})
+    assert ordered_mixed.index("d_high") < ordered_mixed.index("d_mid")
+    assert ordered_mixed.index("e_high") < ordered_mixed.index("e_mid")
 
 
 def test_find_cluster_medoids_configurable_parameters(tmp_path: Path) -> None:
