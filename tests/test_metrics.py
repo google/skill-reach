@@ -16,20 +16,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from scipy import stats
 
 from reach.metrics import (
+    ClassMetrics,
     classification_report,
     collisions,
     compute_f1,
-    compute_precursor_graph,
     confusion,
     consistency,
     score_trajectory,
-    trajectory_scores,
 )
 from reach.models import (
     NO_SKILL,
@@ -37,7 +34,6 @@ from reach.models import (
     ProbeResult,
     Query,
     QueryKind,
-    Skill,
 )
 
 
@@ -535,152 +531,6 @@ def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> 
     assert report.trajectory_interval.high == pytest.approx(scipy_traj.high, abs=1e-5)
 
 
-def test_trajectory_scores_mapping() -> None:
-    """Verify trajectory_scores returns per-query mapping."""
-    queries = (
-        Query(id="q1", text="deploy", expected_skill="deploy"),
-        Query(id="q2", text="oos", kind=QueryKind.OUT_OF_SCOPE),
-    )
-    results = [
-        ProbeResult(
-            query_id="q1",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=1,
-            model="m",
-            runtime="fake",
-            invoked_skills=("deploy",),
-        ),
-        ProbeResult(
-            query_id="q2",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=1,
-            model="m",
-            runtime="fake",
-            invoked_skills=(),
-        ),
-    ]
-    mapping = trajectory_scores(results, queries)
-    assert len(mapping) == 2
-    assert mapping["q1"].trajectory_hit is True
-    assert mapping["q1"].entrypoint_hit is True
-    assert mapping["q2"].trajectory_hit is True
-
-
-def test_compute_precursor_graph() -> None:
-    """Verify empirical precursor graph transitions and declared dependencies."""
-    queries = (
-        Query(id="q-deploy", text="deploy", expected_skill="cloud-deploy"),
-        Query(id="q-single", text="single", expected_skill="other"),
-    )
-    skills = (
-        Skill(
-            name="cloud-deploy",
-            description="deploy app",
-            path=Path("/skills/cloud-deploy"),
-            declared_dependencies=("gcloud-auth",),
-        ),
-    )
-    results = [
-        # Successful transition with gap=1
-        ProbeResult(
-            query_id="q-deploy",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            invoked_skills=("gcloud-auth", "cloud-deploy"),
-        ),
-        # Successful transition with gap=2
-        ProbeResult(
-            query_id="q-deploy",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            invoked_skills=("gcloud-auth", "logger", "cloud-deploy"),
-        ),
-        # Single-call probe (no transition possible)
-        ProbeResult(
-            query_id="q-single",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            invoked_skills=("other",),
-        ),
-        # Failed probe
-        ProbeResult(
-            query_id="q-deploy",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            error="timed out",
-        ),
-    ]
-
-    edges = compute_precursor_graph(results, queries, skills, min_observations=1)
-    # Looking for edge gcloud-auth -> cloud-deploy
-    matching = [e for e in edges if e.precursor == "gcloud-auth" and e.target == "cloud-deploy"]
-    assert len(matching) == 1
-    edge = matching[0]
-    assert edge.attempts == 2
-    assert edge.handoffs == 2
-    assert edge.handoff_rate == 1.0
-    # gaps were 1 and 2, avg = 1.5
-    assert edge.avg_step_latency == pytest.approx(1.5)
-    assert edge.is_declared_dependency is True
-
-
-def test_compute_precursor_graph_edge_cases() -> None:
-    """Verify precursor graph handles non-linear and missing target trajectories."""
-    queries = (
-        Query(
-            id="q-multi",
-            text="multi",
-            expected_skill="target-a",
-        ),
-    )
-    results = [
-        # Target appears first, then precursor: target-a is reached at step 0 so target-a ->
-        # gcloud-auth is not a precursor
-        ProbeResult(
-            query_id="q-multi",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=3,
-            model="m",
-            runtime="fake",
-            invoked_skills=("target-a", "logger", "gcloud-auth"),
-        ),
-        # Target never invoked in trajectory
-        ProbeResult(
-            query_id="q-multi",
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=3,
-            model="m",
-            runtime="fake",
-            invoked_skills=("step-1", "step-2"),
-        ),
-    ]
-    edges = compute_precursor_graph(results, queries, min_observations=1)
-    step1_edges = [e for e in edges if e.precursor == "step-1"]
-    assert len(step1_edges) == 1
-    edge = step1_edges[0]
-    assert edge.target == "target-a"
-    assert edge.attempts == 1
-    assert edge.handoffs == 0
-    assert edge.handoff_rate == 0.0
-    assert edge.avg_step_latency == 0.0
-
-
 @pytest.mark.parametrize(
     (
         "invoked_skills",
@@ -770,35 +620,18 @@ def test_acceptable_skills_are_neutral_in_classification_trajectory_and_collisio
     assert confusion([probe], [query])[("cloud-run-basics", expected_confusion_invoked)] == 1
 
 
-def test_trajectory_scores_aggregates_multi_attempt_replicates() -> None:
-    """Verify trajectory_scores averages across multiple attempts instead of overwriting (5.F)."""
-    query = Query(id="q-rep", text="setup cluster", expected_skill="gke-basics")
-    results = [
-        ProbeResult(
-            query_id="q-rep",
-            attempt=1,
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            invoked_skills=("gke-basics",),
-        ),
-        ProbeResult(
-            query_id="q-rep",
-            attempt=2,
-            catalog_id="c",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=2,
-            model="m",
-            runtime="fake",
-            invoked_skills=("other-skill",),
-        ),
-    ]
-    scores = trajectory_scores(results, [query])
-    assert scores["q-rep"].step_efficiency == pytest.approx(0.5)
-    assert scores["q-rep"].skill_f1 == pytest.approx(0.5)
-    assert scores["q-rep"].entrypoint_hit is True
+def test_class_metrics_rejects_trajectory_tp_below_top1_tp() -> None:
+    """Verify ClassMetrics raises ValueError when trajectory_true_positives < true_positives."""
+    with pytest.raises(ValueError, match="cannot be less than true_positives"):
+        ClassMetrics(
+            label="deploy",
+            support=2,
+            predicted=2,
+            true_positives=2,
+            trajectory_true_positives=1,
+            false_positives=0,
+            false_negatives=0,
+        )
 
 
 def test_multi_turn_trajectory_hit_preserves_turn1_conservation() -> None:

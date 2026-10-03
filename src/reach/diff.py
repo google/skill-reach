@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -62,9 +63,6 @@ class VaryFactor(StrEnum):
 
 
 _DEFAULT_DIFF = DiffSettings()
-
-#: Calibrated empirical over-dispersion variance ratio for run-to-run variation.
-OVER_DISPERSION = _DEFAULT_DIFF.over_dispersion
 
 #: Noise inflation multiplier applied to standard errors.
 NOISE_INFLATION = _DEFAULT_DIFF.noise_inflation
@@ -121,12 +119,12 @@ class ArmSummary(BaseModel):
     corpus_digest: str
     queries_digest: str
     catalog_id: str
-    catalog_size: int = Field(ge=0)
+    catalog_size: Annotated[int, Field(ge=0)]
     resident: tuple[str, ...] = ()
-    attempts: int = Field(ge=1)
-    probes: int = Field(ge=0)
-    scored: int = Field(ge=0)
-    top1_hits: int = Field(ge=0)
+    attempts: Annotated[int, Field(ge=1)]
+    probes: Annotated[int, Field(ge=0)]
+    scored: Annotated[int, Field(ge=0)]
+    top1_hits: Annotated[int, Field(ge=0)]
     top1_accuracy: float
     consistency: float
     standard_error: float | None = None
@@ -157,12 +155,12 @@ class SkillDelta(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     skill: str
-    control_reached: int = Field(ge=0)
-    control_probes: int = Field(gt=0)
+    control_reached: Annotated[int, Field(ge=0)]
+    control_probes: Annotated[int, Field(gt=0)]
     control_recall: float
     control_interval: Interval
-    treatment_reached: int = Field(ge=0)
-    treatment_probes: int = Field(gt=0)
+    treatment_reached: Annotated[int, Field(ge=0)]
+    treatment_probes: Annotated[int, Field(gt=0)]
     treatment_recall: float
     treatment_interval: Interval
     real: bool
@@ -181,12 +179,12 @@ class QueryDelta(BaseModel):
 
     query_id: str
     kind: QueryKind | None = None
-    control_hits: int = Field(ge=0)
-    control_probes: int = Field(gt=0)
+    control_hits: Annotated[int, Field(ge=0)]
+    control_probes: Annotated[int, Field(gt=0)]
     control_rate: float
     control_interval: Interval
-    treatment_hits: int = Field(ge=0)
-    treatment_probes: int = Field(gt=0)
+    treatment_hits: Annotated[int, Field(ge=0)]
+    treatment_probes: Annotated[int, Field(gt=0)]
     treatment_rate: float
     treatment_interval: Interval
     real: bool
@@ -205,8 +203,8 @@ class Headline(BaseModel):
 
     control: float
     treatment: float
-    confidence: float = Field(default=DEFAULT_CONFIDENCE, gt=0.0, lt=1.0)
-    noise_inflation: float = Field(default=NOISE_INFLATION, gt=0.0)
+    confidence: Annotated[float, Field(gt=0.0, lt=1.0)] = DEFAULT_CONFIDENCE
+    noise_inflation: Annotated[float, Field(gt=0.0)] = NOISE_INFLATION
     floor: float | None = None
     real: bool
     resolvable: float | None = None
@@ -227,7 +225,7 @@ class Comparison(BaseModel):
     factor: VaryFactor
     control: ArmSummary
     treatment: ArmSummary
-    shared_queries: int = Field(gt=0)
+    shared_queries: Annotated[int, Field(gt=0)]
     corroboration: Corroboration
     headline: Headline
     skills: tuple[SkillDelta, ...] = ()
@@ -302,8 +300,8 @@ class Survey(BaseModel):
     control_path: Path
     treatment_path: Path
     walls: tuple[Wall, ...] = ()
-    control: Arm | None = Field(default=None, exclude=True)
-    treatment: Arm | None = Field(default=None, exclude=True)
+    control: Annotated[Arm | None, Field(exclude=True)] = None
+    treatment: Annotated[Arm | None, Field(exclude=True)] = None
 
     @property
     def comparable(self) -> bool:

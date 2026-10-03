@@ -554,13 +554,6 @@ uv run ruff format --check .
 uvx ty check
 ```
 
-Mutation testing for statistical verification modules (`uncertainty.py`, `metrics.py`, `diff.py`):
-
-```sh
-uv run mutmut run
-uv run mutmut results
-```
-
 ## Repository Layout
 
 ```

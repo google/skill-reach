@@ -24,12 +24,8 @@ from typing import Annotated, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
-    "BOOTSTRAP_QUANTILE_HIGH",
-    "BOOTSTRAP_QUANTILE_LOW",
-    "DEFAULT_CI_SPAN_SIGMAS",
     "DEFAULT_CONFIDENCE",
     "DEFAULT_POWER",
-    "NORMAL_95_CI_SPAN_SIGMAS",
     "Interval",
     "bootstrap_quantiles",
     "ci_span_sigmas",
@@ -43,10 +39,6 @@ __all__ = [
 
 #: Default confidence level for statistical intervals (95%).
 DEFAULT_CONFIDENCE = 0.95
-
-#: Tail quantiles for two-sided bootstrap confidence intervals derived from DEFAULT_CONFIDENCE.
-BOOTSTRAP_QUANTILE_LOW: float = (1.0 - DEFAULT_CONFIDENCE) / 2.0
-BOOTSTRAP_QUANTILE_HIGH: float = 1.0 - BOOTSTRAP_QUANTILE_LOW
 
 #: Default statistical power for hypothesis comparisons (80%).
 DEFAULT_POWER = 0.80
@@ -85,11 +77,6 @@ def bootstrap_quantiles(confidence: float = DEFAULT_CONFIDENCE) -> tuple[float, 
     return (alpha / 2.0, 1.0 - alpha / 2.0)
 
 
-#: Multiplier (2 * z) converting confidence interval width to SE, derived from DEFAULT_CONFIDENCE.
-DEFAULT_CI_SPAN_SIGMAS: float = ci_span_sigmas(DEFAULT_CONFIDENCE)
-NORMAL_95_CI_SPAN_SIGMAS: float = DEFAULT_CI_SPAN_SIGMAS
-
-
 class Interval(BaseModel):
     """Represent a statistical confidence interval with lower and upper bounds."""
 
@@ -112,46 +99,17 @@ class Interval(BaseModel):
         """Return the span (high - low) of the confidence interval."""
         return self.high - self.low
 
-    @property
-    def center(self) -> float:
-        """Return the center point (midpoint) of the confidence interval."""
-        return (self.low + self.high) / 2.0
-
     def excludes(self, rate: float) -> bool:
         """Return True if rate falls strictly outside the interval bounds."""
         return not self.low <= rate <= self.high
-
-    def contains(self, rate: float) -> bool:
-        """Return True if rate falls within the interval bounds."""
-        return self.low <= rate <= self.high
-
-    def __contains__(self, rate: object) -> bool:
-        """Return True if rate falls within the interval bounds."""
-        if not isinstance(rate, (int, float)):
-            return False
-        return self.low <= rate <= self.high
 
     def overlaps(self, other: Interval) -> bool:
         """Return True if this interval intersects with another interval."""
         return self.low <= other.high and other.low <= self.high
 
-    def intersection(self, other: Interval) -> Interval | None:
-        """Calculate the intersection with another interval, returning None if disjoint."""
-        if not self.overlaps(other):
-            return None
-        return Interval(
-            low=max(self.low, other.low),
-            high=min(self.high, other.high),
-            confidence=min(self.confidence, other.confidence),
-        )
-
     def format_percent(self, digits: int = 1, separator: str = " - ") -> str:
         """Format the interval as a percentage range string '[low% - high%]'."""
         return f"[{self.low * 100:.{digits}f}%{separator}{self.high * 100:.{digits}f}%]"
-
-    def as_tuple(self) -> tuple[float, float]:
-        """Return interval bounds as a (low, high) float tuple."""
-        return (self.low, self.high)
 
     @classmethod
     def from_tuple(
@@ -166,12 +124,21 @@ class Interval(BaseModel):
         return cls(low=bounds[0], high=bounds[1], confidence=confidence)
 
 
-def wilson_interval(
+def _design_effect(attempts: int, intra_cluster_correlation: float) -> float:
+    """Compute survey cluster design effect for repeated attempts."""
+    if attempts <= 1:
+        return 1.0
+    icc = max(0.0, min(1.0, intra_cluster_correlation))
+    return 1.0 + (attempts - 1) * icc
+
+
+def _wilson_from_counts(
     hits: int,
     probes: int,
-    confidence: float = DEFAULT_CONFIDENCE,
+    effective_n: float,
+    confidence: float,
 ) -> Interval | None:
-    """Calculate the Wilson score confidence interval for a binomial proportion."""
+    """Compute Wilson score confidence interval from raw counts and effective sample size."""
     if probes < 0:
         msg = f"probes cannot be negative, got {probes}"
         raise ValueError(msg)
@@ -183,14 +150,25 @@ def wilson_interval(
 
     z = critical_value(confidence)
     z2 = z * z
-    denominator = probes + z2
-    center = (hits + z2 / 2.0) / denominator
-    half = z / denominator * math.sqrt(hits * (probes - hits) / probes + z2 / 4.0)
+    rate = hits / probes
+    eff_hits = rate * effective_n
+    denominator = effective_n + z2
+    center = (eff_hits + z2 / 2.0) / denominator
+    half = z / denominator * math.sqrt(eff_hits * (1.0 - rate) + z2 / 4.0)
     return Interval(
         low=0.0 if hits == 0 else max(0.0, center - half),
         high=1.0 if hits == probes else min(1.0, center + half),
         confidence=confidence,
     )
+
+
+def wilson_interval(
+    hits: int,
+    probes: int,
+    confidence: float = DEFAULT_CONFIDENCE,
+) -> Interval | None:
+    """Calculate the Wilson score confidence interval for a binomial proportion."""
+    return _wilson_from_counts(hits, probes, float(probes), confidence)
 
 
 def effective_sample_size(
@@ -201,11 +179,7 @@ def effective_sample_size(
     """Calculate survey-style effective sample size adjusting for repeated attempts."""
     if sample_size <= 0:
         return 0
-    if attempts <= 1:
-        return sample_size
-    icc = max(0.0, min(1.0, intra_cluster_correlation))
-    deff = 1.0 + (attempts - 1) * icc
-    return max(1, round(sample_size / deff))
+    return max(1, round(sample_size / _design_effect(attempts, intra_cluster_correlation)))
 
 
 def cluster_wilson_interval(
@@ -216,12 +190,8 @@ def cluster_wilson_interval(
     intra_cluster_correlation: float = 0.6,
 ) -> Interval | None:
     """Calculate Wilson score confidence interval adjusted for cluster design effect."""
-    if probes <= 0:
-        return None
-    neff = effective_sample_size(probes, attempts, intra_cluster_correlation)
-    rate = hits / probes
-    adj_hits = max(0, min(neff, round(rate * neff)))
-    return wilson_interval(adj_hits, neff, confidence=confidence)
+    deff = _design_effect(attempts, intra_cluster_correlation)
+    return _wilson_from_counts(hits, probes, max(1.0, probes / deff), confidence)
 
 
 def _two_proportion_constant(alpha: float, power: float) -> float:

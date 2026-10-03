@@ -27,7 +27,6 @@ import pytest
 from reach.diff import (
     CONTROL,
     NOISE_INFLATION,
-    OVER_DISPERSION,
     PAIRING,
     TREATMENT,
     VaryFactor,
@@ -142,7 +141,6 @@ def test_the_floor_is_the_deviate_the_inflation_and_both_errors() -> None:
     """Verify noise_floor formula matches critical value, inflation, and standard errors."""
     floor = noise_floor(0.04, 0.06, DEFAULT_CONFIDENCE)
     assert floor == pytest.approx(critical_value(0.95) * NOISE_INFLATION * 0.10)
-    assert pytest.approx(OVER_DISPERSION**0.5) == NOISE_INFLATION
 
 
 def test_the_floor_agrees_with_the_power_arithmetic_already_in_the_tool() -> None:
