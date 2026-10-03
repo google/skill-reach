@@ -96,7 +96,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
     ):
         s0, s1 = study.steepest_drop_scales
         drop_text = (
-            f"  • Steepest Drop Interval: K={s0}→{s1} (-{study.steepest_drop_delta * 100:.1f}%)"
+            f"  • Steepest Drop Interval: K={s0}→{s1} (-{study.steepest_drop_delta * 100:.1f}% F1)"
         )
         decision_lines.append((drop_text, "dim"))
         decision_lines.append(("\n", ""))
@@ -105,7 +105,8 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         study.total_delta != 0 or study.total_shadowing_loss != 0 or study.total_context_loss != 0
     ):
         loss_text = (
-            f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}): "
+            f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}, "
+            f"{study.total_delta * 100:+.1f}% pass-rate drop): "
             f"Δ Shadowing {study.total_shadowing_loss * 100:+.1f}% | "
             f"Δ Context {study.total_context_loss * 100:+.1f}%"
         )

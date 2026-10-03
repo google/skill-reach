@@ -1728,7 +1728,9 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis() -> Non
     console = Console(file=buf, force_terminal=False, width=80)
     print_sweep(console, study)
     out = buf.getvalue()
-    assert "Loss Decomposition (K=10→147): Δ Shadowing +9.8% | Δ Context +2.4%" in out
+    assert "Loss Decomposition (K=10→147, +9.7% pass-rate drop): " in out
+    assert "Δ Shadowing +9.8%" in out
+    assert "Δ Context +2.4%" in out
     assert "Δ Shadow" in out
     assert "Trunc" in out
     assert "51% (21)" in out
@@ -2314,7 +2316,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering() -> None:
     console = Console(record=True, width=100)
     print_sweep(console, corpus_study)
     corpus_text = console.export_text()
-    assert "Steepest Drop Interval: K=10→25 (-25.0%)" in corpus_text
+    assert "Steepest Drop Interval: K=10→25 (-25.0% F1)" in corpus_text
+    assert "Loss Decomposition (K=10→50, +27.0% pass-rate drop): " in corpus_text
     assert "Budget Truncation Loss: +10.0%" in corpus_text
 
     from reach.views.sweep import render_sweep_csv
