@@ -1,0 +1,2613 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="An evaluation suite for AI agent skill routing, collision detection, and description optimization.">
+      
+      
+        <meta name="author" content="Google LLC">
+      
+      
+        <link rel="canonical" href="https://google.github.io/skill-reach/cli/eval/">
+      
+      
+        <link rel="prev" href="../query/">
+      
+      
+        <link rel="next" href="../check/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>reach eval - skill-reach</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#reach-eval" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="skill-reach" class="md-header__button md-logo" aria-label="skill-reach" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            skill-reach
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              reach eval
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/google/skill-reach" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    google/skill-reach
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/how-it-works/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/sandboxing/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  CLI Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+  Python API
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="skill-reach" class="md-nav__button md-logo" aria-label="skill-reach" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    skill-reach
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/google/skill-reach" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    google/skill-reach
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/how-it-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How Reachability Works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progressive-disclosure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progressive Disclosure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sandboxing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandboxing & Safety
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../init/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach init
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../doctor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach doctor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clean/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach clean
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overlap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach overlap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach query
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach eval
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#synopsis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-corpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Study &amp; Corpus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-registry-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent Registry Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#catalog-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catalog Assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runtime-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime &amp; Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recording-artifacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recording &amp; Artifacts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../check/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach check
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../optimize/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach optimize
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach diff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sweep/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach sweep
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../completion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach completion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.artifact
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/catalog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/check/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.check
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/diff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.diff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/lint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.lint
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/optimize/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.optimize
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/overlap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.overlap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/queries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.queries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/registry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.registry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/retrieval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.retrieval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/sweep/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.sweep
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/uncertainty/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reach.uncertainty
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#synopsis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Synopsis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Scenarios
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#study-corpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Study &amp; Corpus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-registry-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent Registry Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#catalog-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catalog Assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runtime-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime &amp; Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recording-artifacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recording &amp; Artifacts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="reach-eval"><code>reach eval</code><a class="headerlink" href="#reach-eval" title="Permanent link">&para;</a></h1>
+<p>Measure whether a catalog's skills are reachable when resident alongside their rivals. If no labeled query set exists, <code>reach eval</code> automatically drafts one.</p>
+<blockquote>
+<p>[!WARNING]
+<strong>Agent Execution Safety</strong>
+<code>reach eval</code> executes live agent subprocesses that can run tools and shell commands on the host system. When testing third-party or untrusted skills, execute inside an isolated container sandbox (e.g. Docker or <a href="../../guides/sandboxing/">Google Cloud Run sandboxes</a>) or use <code>--agent keyword</code> (an in-memory lexical matching engine that matches query terms against skill manifests via compiled regexes and BM25 scoring without running subprocesses or external APIs). Automated non-interactive environments must explicitly pass <code>--yes</code> / <code>-y</code> or set <code>REACH_YES=1</code> to bypass the safety confirmation gate.</p>
+</blockquote>
+<hr />
+<h2 id="synopsis">Synopsis<a class="headerlink" href="#synopsis" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span><span class="o">[</span>TARGET<span class="o">]</span><span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</span></code></pre></div>
+<hr />
+<h2 id="key-scenarios">Key Scenarios<a class="headerlink" href="#key-scenarios" title="Permanent link">&para;</a></h2>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:6"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><input id="__tabbed_1_4" name="__tabbed_1" type="radio" /><input id="__tabbed_1_5" name="__tabbed_1" type="radio" /><input id="__tabbed_1_6" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Run a quick evaluation on a target skill</label><label for="__tabbed_1_2">Auto-draft and evaluate full catalog</label><label for="__tabbed_1_3">Evaluate skills from Google Cloud Agent Registry</label><label for="__tabbed_1_4">Dry-run without model calls</label><label for="__tabbed_1_5">Direct skill directory path</label><label for="__tabbed_1_6">Parallel execution</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Quick single-skill evaluation defaults to 3 attempts per query (override with <code>--attempts</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>cloud-deploy<span class="w"> </span>--agent<span class="w"> </span>claude-code
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Synthesize queries for all resident skills and immediately probe the catalog in one step:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>./skills<span class="w"> </span>--auto
+</span></code></pre></div>
+<p>Tune the number of drafted queries per skill with <code>--count</code> (default: 3):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>./skills<span class="w"> </span>--auto<span class="w"> </span>--count<span class="w"> </span><span class="m">5</span>
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Evaluate reachability directly on skills pulled from Google Cloud Agent Registry:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>--project<span class="w"> </span>your-project-id<span class="w"> </span>--location<span class="w"> </span>global<span class="w"> </span>--auto
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Simulate catalog assembly, prompt generation, and probe loops without executing live model API calls:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>cloud-deploy<span class="w"> </span>--dry-run
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Specify a direct path to a skill directory (parent corpus is auto-detected):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>./skills/cloud-deploy<span class="w"> </span>--agent<span class="w"> </span>claude-code
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Speed up evaluation with concurrent probe execution:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>reach<span class="w"> </span><span class="nb">eval</span><span class="w"> </span>cloud-deploy<span class="w"> </span>--workers<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div>
+</div>
+</div>
+</div>
+<hr />
+<h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h2>
+<h3 id="study-corpus">Study &amp; Corpus<a class="headerlink" href="#study-corpus" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>[TARGET]</code></td>
+<td style="text-align: left;">String / Path</td>
+<td style="text-align: left;">One skill to evaluate, by name or directory (requests a quick run).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--skill</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Filter evaluation queries or auto-drafting to specific skill name(s) (repeatable).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--query</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Probe this exact question rather than drafting one (repeatable).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--expected</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">The skill every <code>--query</code> should reach; defaults to the skill named.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--skills</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">Root directory containing skills or a catalog tree.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--queries</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">Labeled evaluation queries file (<code>.json</code>, <code>.yaml</code>/<code>.yml</code>, <code>.jsonl</code>, or <code>.csv</code>). If omitted, queries are automatically drafted.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--workdir</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">Temporary workspace to install the competitive catalog into.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--catalog</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Catalog identifier; defaults to the query set's catalog ID.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--partial</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;">Allow a query set that targets only a subset of the catalog's skills.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--rescope</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;">Probe the query set against a catalog other than the one it was labeled in.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--tag</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Short semantic label for this run (e.g. <code>v1-baseline</code>), displayed in headers.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--run-dir</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">Directory containing default queries, workdir, and output paths.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="agent-registry-options">Agent Registry Options<a class="headerlink" href="#agent-registry-options" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Default</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>--project</code>, <code>-p</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">None</td>
+<td style="text-align: left;">Google Cloud project ID hosting the Agent Registry.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--location</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;"><code>"global"</code></td>
+<td style="text-align: left;">Agent Registry location endpoint (<code>global</code>, <code>us</code>, <code>eu</code>).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--publisher</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">None</td>
+<td style="text-align: left;">Filter registry skills by publisher identifier (e.g. <code>cloud.google.com</code>).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--registry</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Target Google Cloud Agent Registry instead of local workspace.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--fresh</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Bypass cached metadata and re-fetch latest skill definitions.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--no-cache</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Run without reading or writing local disk cache.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="catalog-assembly">Catalog Assembly<a class="headerlink" href="#catalog-assembly" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Default</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>--mode</code></td>
+<td style="text-align: left;">Choice</td>
+<td style="text-align: left;"><code>all</code></td>
+<td style="text-align: left;">Assembly mode: <code>all</code> (whole catalog), <code>neighborhood</code> (closest rivals), <code>singleton</code>.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--catalog-size</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Number of skills per neighborhood catalog.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--rivals</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Number of top-ranked rival skills per neighborhood catalog.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--seed</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Random seed for catalog filler selection.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="runtime-execution">Runtime &amp; Execution<a class="headerlink" href="#runtime-execution" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Default</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>--agent</code></td>
+<td style="text-align: left;">Choice</td>
+<td style="text-align: left;"><code>from reach.toml</code></td>
+<td style="text-align: left;">Target runtime: <code>antigravity-cli</code>, <code>antigravity-sdk</code>, <code>claude-code</code>, <code>goose</code>, <code>keyword</code>, <code>pi</code>.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--model</code>, <code>-m</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Default model</td>
+<td style="text-align: left;">Target model identifier.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--effort</code>, <code>-e</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Default effort</td>
+<td style="text-align: left;">Reasoning effort level (e.g. <code>low</code>, <code>medium</code>, <code>high</code>).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--timeout</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Seconds allowed per probe attempt.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--max-turns</code>, <code>-T</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>3</code></td>
+<td style="text-align: left;">Maximum conversation turns to execute and evaluate.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--early-exit</code> / <code>--no-early-exit</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>true</code></td>
+<td style="text-align: left;">Terminate multi-turn probe immediately when target skill is invoked.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--opt</code>, <code>-O</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Agent runtime option as <code>key=value</code> (repeatable).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--attempts</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>5</code> (<code>3</code> for quick eval)</td>
+<td style="text-align: left;">Number of probe attempts per query for consistency estimation.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--retries</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>2</code></td>
+<td style="text-align: left;">Retry attempts for failed model invocations.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--backoff</code></td>
+<td style="text-align: left;">Float</td>
+<td style="text-align: left;"><code>5.0</code></td>
+<td style="text-align: left;">Initial backoff time in seconds before the first retry.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--pause</code></td>
+<td style="text-align: left;">Float</td>
+<td style="text-align: left;"><code>0.0</code></td>
+<td style="text-align: left;">Seconds to pause between probes to respect rate limits.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--workers</code>, <code>-j</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>1</code></td>
+<td style="text-align: left;">Number of concurrent probes to run.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--auto</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Automatically draft queries for all skills and probe the catalog in one step.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--reasoning</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Display model reasoning / thought traces directly beneath misrouted collision rows.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--no-resume</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Re-probe everything, ignoring results already in output.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--append-across-arms</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Add probes to an <code>--out</code> recorded under a different configuration.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--allow-truncation</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Probe a catalog too wide for the runtime's skill listing without error.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--yes</code>, <code>-y</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Bypass interactive safety confirmation prompts.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="query-generation">Query Generation<a class="headerlink" href="#query-generation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Default</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>--skill</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">All</td>
+<td style="text-align: left;">Specific skill name(s) to draft queries for (repeatable).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--count</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>3</code></td>
+<td style="text-align: left;">Number of queries to draft per target skill.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--generator-model</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;"><code>gemini-3.8-flash</code></td>
+<td style="text-align: left;">Model used to draft synthetic queries.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--generator-agent</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;">Auto-detected</td>
+<td style="text-align: left;">Agent driver used to draft synthetic queries, overriding the probe agent.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--generator-arm</code></td>
+<td style="text-align: left;">String</td>
+<td style="text-align: left;"><code>content</code></td>
+<td style="text-align: left;">Which generation prompt to use (<code>content</code>, <code>behavioral</code>, etc.).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--top-rivals</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>3</code></td>
+<td style="text-align: left;">Maximum number of top-ranked rival skills to include in generation prompts.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--draft-concurrency</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>1</code></td>
+<td style="text-align: left;">Targets to draft concurrently.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--adversarial</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Synthesize near-miss adversarial negative queries sharing target vocabulary.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--adversarial-count</code></td>
+<td style="text-align: left;">Integer</td>
+<td style="text-align: left;"><code>1</code></td>
+<td style="text-align: left;">Number of adversarial negative queries per target.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recording-artifacts">Recording &amp; Artifacts<a class="headerlink" href="#recording-artifacts" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Option</th>
+<th style="text-align: left;">Type</th>
+<th style="text-align: left;">Default</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>--out</code>, <code>-o</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;"><code>.reach/eval.json</code></td>
+<td style="text-align: left;">Destination for the evaluation artifact.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--records</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">JSONL file to stream raw probe results to.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--format</code></td>
+<td style="text-align: left;">Choice</td>
+<td style="text-align: left;"><code>text</code></td>
+<td style="text-align: left;">Output format: <code>text</code>, <code>json</code>, <code>jsonl</code>, <code>csv</code>.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--save</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Save a quick run's query set, citations, and artifact to DIR before scratch cleanup.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--dry-run</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Simulate drafting and probing without executing model calls or saving results.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--global</code>, <code>-g</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Discover and inspect skills from user global configuration (<code>~/</code>).</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--quiet</code>, <code>-q</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Suppress terminal progress and summary view.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--verbose</code></td>
+<td style="text-align: left;">Flag</td>
+<td style="text-align: left;"><code>false</code></td>
+<td style="text-align: left;">Display full hexadecimal hash digests alongside badges.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--config</code></td>
+<td style="text-align: left;">Path</td>
+<td style="text-align: left;">-</td>
+<td style="text-align: left;">Path to custom <code>reach.toml</code> configuration file.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight", "search.share"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
