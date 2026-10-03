@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -119,23 +120,28 @@ def _format_skill_completions(
     return {s.name: s.description[:max_len] for s in skills}
 
 
+def _try_load_skill_completions(directory: Path) -> dict[str, str]:
+    """Safely load and format skill completions from a candidate directory."""
+    from reach.catalog import load_skills
+
+    with contextlib.suppress(OSError, ValueError):
+        candidate = directory.expanduser()
+        if candidate.is_dir():
+            return _format_skill_completions(load_skills(candidate))
+    return {}
+
+
 def complete_skill_names(ctx: CompletionContext) -> dict[str, str]:
     """Return discovered skill names and short descriptions for tab completion."""
-    from reach.catalog import load_skills
     from reach.config import resolve_discovery_candidates
 
     skills_arg = ctx.get("skills")
     if skills_arg is not None and skills_arg.provided and isinstance(skills_arg.value, (str, Path)):
-        candidate = Path(skills_arg.value).expanduser()
-        if candidate.is_dir():
-            return _format_skill_completions(load_skills(candidate))
-        return {}
+        return _try_load_skill_completions(Path(skills_arg.value))
 
     for root in resolve_discovery_candidates(workdir=Path.cwd()):
-        if root.is_dir():
-            loaded = load_skills(root)
-            if loaded:
-                return _format_skill_completions(loaded)
+        if completions := _try_load_skill_completions(root):
+            return completions
     return {}
 
 

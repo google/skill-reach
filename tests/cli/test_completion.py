@@ -111,11 +111,18 @@ def test_dynamic_completer_skill_names_respects_skills_context(
     skill_out = capsys.readouterr().out
     assert "alpha-skill\tAlpha skill description." in skill_out
 
-    missing_completions = compute_completions(
-        app,
-        ["lint", "--skills", str(tmp_path / "nonexistent"), "--skill", ""],
-    )
-    assert missing_completions == []
+    broken_root = tmp_path / "broken_skills" / "bad-skill"
+    broken_root.mkdir(parents=True)
+    (broken_root / "SKILL.md").write_text("---\n: invalid_yaml: [\n---\n", encoding="utf-8")
+
+    for bad_dir in (tmp_path / "nonexistent", broken_root.parent):
+        assert (
+            compute_completions(
+                app,
+                ["lint", "--skills", str(bad_dir), "--skill", ""],
+            )
+            == []
+        )
 
     monkeypatch.chdir(tmp_path)
     cwd_completions = compute_completions(app, ["lint", "--skill", ""])
