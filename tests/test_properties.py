@@ -544,27 +544,24 @@ def _assert_deltas_antisymmetric[T: _DeltaRecord](
 
 
 @given(
-    control_counts=st.lists(hits_and_probes(), min_size=1, max_size=4),
-    data=st.data(),
+    paired_counts=st.lists(
+        st.tuples(hits_and_probes(), hits_and_probes()),
+        min_size=1,
+        max_size=4,
+    ),
     se_control=st.floats(min_value=0.01, max_value=0.25),
     se_treatment=st.floats(min_value=0.01, max_value=0.25),
     confidence=st.floats(min_value=0.80, max_value=0.99),
 )
 def test_diff_arms_antisymmetry_under_arm_swap(
-    control_counts: list[tuple[int, int]],
-    data: st.DataObject,
+    paired_counts: list[tuple[tuple[int, int], tuple[int, int]]],
     se_control: float,
     se_treatment: float,
     confidence: float,
 ) -> None:
     """Verify swapping control and treatment negates deltas while preserving significance."""
-    treatment_counts = data.draw(
-        st.lists(
-            hits_and_probes(),
-            min_size=len(control_counts),
-            max_size=len(control_counts),
-        ),
-    )
+    control_counts = [c for c, _ in paired_counts]
+    treatment_counts = [t for _, t in paired_counts]
     control = _synthetic_arm("control", "corpus-a", control_counts, se_control)
     treatment = _synthetic_arm("treatment", "corpus-b", treatment_counts, se_treatment)
 

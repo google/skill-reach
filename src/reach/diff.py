@@ -92,7 +92,7 @@ def probes_to_resolve(delta: float, noise_inflation: float = NOISE_INFLATION) ->
 class Arm(BaseModel):
     """Hold a single experimental arm and its associated Artifact."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     label: str
     artifact: Artifact
@@ -112,7 +112,7 @@ class Arm(BaseModel):
 class ArmSummary(BaseModel):
     """Summarize provenance digests, catalog sizes, and accuracy metrics for an arm."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     label: str
     arm: str
@@ -138,7 +138,7 @@ class ArmSummary(BaseModel):
 class Corroboration(BaseModel):
     """Record verification status of provenance changes between arms."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     factor: VaryFactor
     arm_moved: bool
@@ -152,7 +152,7 @@ class Corroboration(BaseModel):
 class SkillDelta(BaseModel):
     """Record per-skill recall differences and overlap significance between arms."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     skill: str
     control_reached: Annotated[int, Field(ge=0)]
@@ -175,7 +175,7 @@ class SkillDelta(BaseModel):
 class QueryDelta(BaseModel):
     """Record per-query hit rate differences and overlap significance between arms."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     query_id: str
     kind: QueryKind | None = None
@@ -199,7 +199,7 @@ class QueryDelta(BaseModel):
 class Headline(BaseModel):
     """Summarize run-wide top-1 accuracy change and noise floor significance."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     control: float
     treatment: float
@@ -220,7 +220,7 @@ class Headline(BaseModel):
 class Comparison(BaseModel):
     """Hold diff analysis between two arms across headline, skill, and query levels."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     factor: VaryFactor
     control: ArmSummary
@@ -284,7 +284,7 @@ CONTROL, TREATMENT, PAIRING = "control", "treatment", "pairing"
 class Wall(BaseModel):
     """Represent an incompatibility barrier preventing comparison between two runs."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     where: str
     path: Path | None = None
@@ -294,7 +294,7 @@ class Wall(BaseModel):
 class Survey(BaseModel):
     """Survey and validate readiness of two runs for pairwise diff comparison."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     factor: VaryFactor
     control_path: Path

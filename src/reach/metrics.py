@@ -87,7 +87,7 @@ def compute_f1(precision: float, recall: float) -> float:
 class TrajectoryScore(BaseModel):
     """Evaluation outcomes for a single query across its invocation trajectory."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     entrypoint_hit: bool
     trajectory_hit: bool
@@ -144,7 +144,7 @@ def score_trajectory(
 class ClassMetrics(BaseModel):
     """Report precision, recall, support, and F1 metrics for a single skill class."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     false_negatives: Annotated[int, Field(ge=0)]
     false_positives: Annotated[int, Field(ge=0)]
@@ -207,7 +207,7 @@ class ClassMetrics(BaseModel):
 class ClassificationReport(BaseModel):
     """Hold aggregated classification and routing metrics for an evaluation run."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     errors: Annotated[int, Field(ge=0)]
     macro_f1: Annotated[float, Field(ge=0.0)]
@@ -527,7 +527,7 @@ def collisions(
 class DecompositionResult(BaseModel):
     """Represent decomposition of pass-rate drop between baseline and scaled catalogs."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True)
 
     baseline_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     scaled_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
@@ -644,7 +644,7 @@ def _decompose_query_drop(
     if delta == 0.0:
         return _QueryDrop(p_base, p_scaled, 0.0, 0.0, 0.0)
 
-    fails = s_fails or b_fails
+    fails = s_fails if delta > 0.0 else b_fails
     n_ctx = sum(1.0 for r in fails if _probe_failure_is_context(r))
     n_shd = len(fails) - n_ctx
     return _QueryDrop(

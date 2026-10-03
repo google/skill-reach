@@ -190,8 +190,6 @@ def cluster_wilson_interval(
     intra_cluster_correlation: float = 0.6,
 ) -> Interval | None:
     """Calculate Wilson score confidence interval adjusted for cluster design effect."""
-    if probes <= 0:
-        return _wilson_from_counts(hits, probes, 0.0, confidence)
     deff = _design_effect(attempts, intra_cluster_correlation)
     return _wilson_from_counts(hits, probes, max(1.0, probes / deff), confidence)
 
