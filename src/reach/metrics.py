@@ -568,7 +568,7 @@ def _probe_failure_is_context(result: ProbeResult) -> bool:
 def _probe_is_truncated(result: ProbeResult) -> bool:
     """Determine whether a probe was executed with a truncated or elided skill disclosure."""
     state = getattr(result, "disclosure_state", None)
-    return state is not None and state is not DisclosureState.FULL
+    return state is not None and state != DisclosureState.FULL
 
 
 class _QueryDrop(NamedTuple):

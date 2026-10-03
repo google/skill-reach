@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import re
+from collections import deque
 from pathlib import Path
 from random import Random
 from typing import TYPE_CHECKING, Annotated, Any, Final
@@ -829,8 +830,6 @@ def _round_robin_drain(
     queues: Mapping[int, Sequence[int]],
 ) -> list[int]:
     """Drain per-cluster candidate sequences in round-robin order across cluster_order."""
-    from collections import deque
-
     deques = {a: deque(queues[a]) for a in cluster_order if queues.get(a)}
     active = [a for a in cluster_order if a in deques]
     drained: list[int] = []
@@ -850,8 +849,6 @@ def _interleave_rival_and_filler_streams(
     effective_share: float,
 ) -> list[int]:
     """Interleave rival and filler streams via a Bresenham-style quota accumulator."""
-    from collections import deque
-
     rivals_q = deque(all_rivals)
     fillers_q = deque(all_fillers)
     interleaved: list[int] = []
@@ -988,7 +985,7 @@ class CorpusScalingPlan(BaseModel):
     sequence: tuple[str, ...]
     catalogs: tuple[Catalog, ...]
     anchor_skills: tuple[str, ...] | None = None
-    rivals_share: float = 0.5
+    rivals_share: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
 
     @classmethod
     def create(
@@ -1001,6 +998,7 @@ class CorpusScalingPlan(BaseModel):
         rivals_share: float = 0.5,
     ) -> CorpusScalingPlan:
         """Construct a scaling plan by computing distance geometry and k-Center ordering once."""
+        effective_share = max(0.0, min(1.0, rivals_share))
         unique_skills = _deduplicate_skills(skills)
         names, dist, sim = _compute_cosine_bm25_distance_matrix(unique_skills, scorer=scorer)
         name_to_idx = {name: i for i, name in enumerate(names)}
@@ -1018,7 +1016,7 @@ class CorpusScalingPlan(BaseModel):
             name_to_idx,
             resolved_anchors,
             skills=unique_skills,
-            rivals_share=rivals_share,
+            rivals_share=effective_share,
         )
         catalogs = _build_nested_catalogs(seq, scales)
 
@@ -1030,7 +1028,7 @@ class CorpusScalingPlan(BaseModel):
             sequence=seq,
             catalogs=tuple(catalogs),
             anchor_skills=resolved_anchors,
-            rivals_share=rivals_share,
+            rivals_share=effective_share,
         )
 
     def queries_for_scale(

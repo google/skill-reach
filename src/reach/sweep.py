@@ -1058,11 +1058,11 @@ def _find_steepest_drop(
     best_drop = 0.0
     best_pair: tuple[int, int] | None = None
     for idx in range(len(scales) - 1):
-        drop = round(values[idx] - values[idx + 1], 4)
+        drop = values[idx] - values[idx + 1]
         if drop > best_drop:
             best_drop = drop
             best_pair = (scales[idx], scales[idx + 1])
-    return best_pair, (best_drop if best_pair is not None else None)
+    return best_pair, (round(best_drop, 4) if best_pair is not None else None)
 
 
 def _build_study_result(

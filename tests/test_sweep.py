@@ -2328,7 +2328,7 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering() -> None:
     console_single = Console(record=True, width=100)
     print_sweep(console_single, single_study)
     single_text = console_single.export_text()
-    assert "elbow threshold: stabilizes after N=10→25 drop of -25.0%" in single_text
+    assert "elbow threshold: stabilizes after N=10→25 drop of 25.0%" in single_text
     assert "Budget Truncation Loss: +10.0%" in single_text
     assert "Δ Trunc" in single_text
 

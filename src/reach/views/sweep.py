@@ -246,7 +246,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             s0, s1 = study.steepest_drop_scales
             knee_note = (
                 f" (elbow threshold: stabilizes after N={s0}→{s1} drop "
-                f"of -{study.steepest_drop_delta * 100:.1f}%)"
+                f"of {study.steepest_drop_delta * 100:.1f}%)"
             )
         else:
             knee_note = " (capacity cliff where distractor shadowing accelerates)"
