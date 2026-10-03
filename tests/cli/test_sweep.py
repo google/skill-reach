@@ -1451,6 +1451,32 @@ def test_draft_missing_sweep_queries_error_unlinks_checkpoint_and_abort_notice(
     out = capsys.readouterr()
     assert "Aborting sweep:" in (out.out + out.err)
 
+    captured_kwargs: dict[str, object] = {}
+
+    def _capture_sweep(**kwargs: object) -> ScalingStudy:
+        captured_kwargs.update(kwargs)
+        return _fake_sweep_abort(**kwargs)
+
+    monkeypatch.setattr("reach.cli.sweep.run_scaling_sweep", _capture_sweep)
+    assert (
+        main(
+            [
+                "sweep",
+                str(corpus_dir),
+                "--queries",
+                str(queries_file),
+                "--scales",
+                "1,2",
+                "--agent",
+                "fake",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    assert captured_kwargs.get("noise_floor") is None
+    capsys.readouterr()
+
     monkeypatch.setattr(
         "reach.cli.sweep.run_scaling_sweep",
         lambda **_kw: (_ for _ in ()).throw(RuntimeError("sweep runtime failure")),

@@ -1081,7 +1081,7 @@ def test_find_cluster_medoids_display_quantiles(tmp_path: Path) -> None:
 
 
 def test_low_discrepancy_striding_intra_cluster_threat_ordering() -> None:
-    """Verify _low_discrepancy_striding preserves descending similarity within clusters."""
+    """Verify _low_discrepancy_striding supports pure threat ordering and rival/filler mixing."""
     from reach.catalog import _low_discrepancy_striding
 
     names = ["a0", "a1", "d_high", "d_mid", "d_low", "e_high", "e_mid", "e_low"]
@@ -1093,19 +1093,47 @@ def test_low_discrepancy_striding_intra_cluster_threat_ordering() -> None:
     sim[6][1] = 0.6
     sim[7][1] = 0.3
 
-    order = _low_discrepancy_striding(names, sim, [0, 1])
-    ordered_names = [names[i] for i in order]
+    order_pure = _low_discrepancy_striding(names, sim, [0, 1], rivals_share=1.0)
+    ordered_pure = [names[i] for i in order_pure]
 
-    assert ordered_names[:2] == ["a0", "a1"]
+    assert ordered_pure[:2] == ["a0", "a1"]
 
-    d_indices = [ordered_names.index(name) for name in ("d_high", "d_mid", "d_low")]
+    d_indices = [ordered_pure.index(name) for name in ("d_high", "d_mid", "d_low")]
     assert d_indices == sorted(d_indices)
 
-    e_indices = [ordered_names.index(name) for name in ("e_high", "e_mid", "e_low")]
+    e_indices = [ordered_pure.index(name) for name in ("e_high", "e_mid", "e_low")]
     assert e_indices == sorted(e_indices)
 
-    assert ordered_names.index("d_high") < ordered_names.index("e_low")
-    assert ordered_names.index("e_high") < ordered_names.index("d_low")
+    assert ordered_pure.index("d_high") < ordered_pure.index("e_low")
+    assert ordered_pure.index("e_high") < ordered_pure.index("d_low")
+
+    # With default rivals_share=0.5, top rivals and low-similarity filler are interleaved early
+    order_mixed = _low_discrepancy_striding(names, sim, [0, 1], rivals_share=0.5)
+    ordered_mixed = [names[i] for i in order_mixed]
+    assert ordered_mixed[:2] == ["a0", "a1"]
+    first_two_distractors = set(ordered_mixed[2:4])
+    assert bool(first_two_distractors & {"d_high", "e_high"})
+    assert bool(first_two_distractors & {"d_low", "e_low"})
+    assert ordered_mixed.index("d_high") < ordered_mixed.index("d_mid")
+    assert ordered_mixed.index("e_high") < ordered_mixed.index("e_mid")
+
+    # With rivals_share=0.0, all non-anchors are scheduled through the Van der Corput filler stream
+    order_filler = _low_discrepancy_striding(names, sim, [0, 1], rivals_share=0.0)
+    ordered_filler = [names[i] for i in order_filler]
+    assert ordered_filler[:2] == ["a0", "a1"]
+    assert set(ordered_filler) == set(names)
+
+    # Single-element clusters drain cleanly across rival/filler shares
+    single_names = ["a0", "a1", "d_only", "e_only"]
+    single_sim = [[0.0] * 4 for _ in range(4)]
+    single_sim[2][0] = 0.8
+    single_sim[3][1] = 0.8
+    for share in (0.0, 0.5, 1.0):
+        single_order = _low_discrepancy_striding(
+            single_names, single_sim, [0, 1], rivals_share=share
+        )
+        assert [single_names[i] for i in single_order[:2]] == ["a0", "a1"]
+        assert set(single_order) == {0, 1, 2, 3}
 
 
 def test_find_cluster_medoids_configurable_parameters(tmp_path: Path) -> None:

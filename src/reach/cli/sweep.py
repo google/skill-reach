@@ -310,12 +310,15 @@ def _sweep(
         ),
     ] = None,
     noise_floor: Annotated[
-        float,
+        float | None,
         RATE,
         Parameter(
-            help="Minimum pass rate drop to trigger knee detection",
+            help=(
+                "Minimum pass rate drop to trigger knee detection "
+                "(default: dynamic paired McNemar noise floor)"
+            ),
         ),
-    ] = 0.05,
+    ] = None,
     agent: Annotated[
         AgentName | None,
         Parameter(

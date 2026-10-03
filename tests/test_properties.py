@@ -410,7 +410,7 @@ def test_classification_report_and_decomposition_conservation(
         decomp.delta_total,
         abs=1e-9,
     )
-    assert decomp.delta_context + decomp.delta_shadowing == pytest.approx(
+    assert decomp.delta_context + decomp.delta_truncated + decomp.delta_shadowing == pytest.approx(
         decomp.delta_total,
         abs=1e-9,
     )

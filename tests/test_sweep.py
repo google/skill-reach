@@ -1728,7 +1728,9 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis() -> Non
     console = Console(file=buf, force_terminal=False, width=80)
     print_sweep(console, study)
     out = buf.getvalue()
-    assert "Loss Decomposition (K=10→147): Δ Shadowing +9.8% | Δ Context +2.4%" in out
+    assert "Loss Decomposition (K=10→147, +9.7% pass-rate drop): " in out
+    assert "Δ Shadowing +9.8%" in out
+    assert "Δ Context +2.4%" in out
     assert "Δ Shadow" in out
     assert "Trunc" in out
     assert "51% (21)" in out
@@ -2247,3 +2249,97 @@ def test_sweep_hints_when_fewer_than_three_scales(
     text = console.export_text()
     assert "requires ≥ 3 scale steps to detect" in text
     assert "evaluated" in text
+
+
+def test_sweep_steepest_drop_and_truncation_loss_rendering() -> None:
+    """Verify ScalingStudy steepest drop interval and truncation loss render in sweep views."""
+    from rich.console import Console
+
+    from reach.sweep import ScalingPoint, ScalingStudy, _find_steepest_drop
+    from reach.views.sweep import print_sweep
+
+    assert _find_steepest_drop((10, 25, 50), (0.95, 0.70, 0.68)) == ((10, 25), 0.25)
+    assert _find_steepest_drop((10, 25), (0.80, 0.85)) == (None, None)
+
+    pt1 = ScalingPoint(
+        scale=10,
+        catalog_id="c10",
+        pass_rate=0.95,
+        pass_rate_interval=(0.85, 0.99),
+        f1_score=0.95,
+        delta_vs_baseline=0.0,
+        delta_context=0.0,
+        delta_shadowing=0.0,
+        probes_executed=20,
+    )
+    pt2 = ScalingPoint(
+        scale=25,
+        catalog_id="c25",
+        pass_rate=0.70,
+        pass_rate_interval=(0.55, 0.82),
+        f1_score=0.70,
+        delta_vs_baseline=0.25,
+        delta_context=0.10,
+        delta_shadowing=0.15,
+        delta_truncated=0.10,
+        probes_executed=20,
+    )
+    pt3 = ScalingPoint(
+        scale=50,
+        catalog_id="c50",
+        pass_rate=0.68,
+        pass_rate_interval=(0.52, 0.80),
+        f1_score=0.68,
+        delta_vs_baseline=0.27,
+        delta_context=0.12,
+        delta_shadowing=0.15,
+        delta_truncated=0.10,
+        probes_executed=20,
+    )
+
+    corpus_study = ScalingStudy(
+        target_skill=None,
+        is_corpus_sweep=True,
+        scales=(10, 25, 50),
+        points=(pt1, pt2, pt3),
+        knee_scale=25,
+        steepest_drop_scales=(10, 25),
+        steepest_drop_delta=0.25,
+        baseline_pass_rate=0.95,
+        final_pass_rate=0.68,
+        total_delta=0.27,
+        total_context_loss=0.12,
+        total_shadowing_loss=0.15,
+        total_truncated_loss=0.10,
+        total_corpus_skills=50,
+    )
+    console = Console(record=True, width=100)
+    print_sweep(console, corpus_study)
+    corpus_text = console.export_text()
+    assert "Steepest Drop Interval: K=10→25 (-25.0% F1)" in corpus_text
+    assert "Loss Decomposition (K=10→50, +27.0% pass-rate drop): " in corpus_text
+    assert "Budget Truncation Loss: +10.0%" in corpus_text
+
+    from reach.views.sweep import render_sweep_csv
+
+    single_study = corpus_study.model_copy(
+        update={"is_corpus_sweep": False, "target_skill": "skill-a"}
+    )
+    console_single = Console(record=True, width=100)
+    print_sweep(console_single, single_study)
+    single_text = console_single.export_text()
+    assert "elbow threshold: stabilizes after N=10→25 drop of 25.0%" in single_text
+    assert "Budget Truncation Loss: +10.0%" in single_text
+    assert "Δ Trunc" in single_text
+
+    cliff_study = single_study.model_copy(
+        update={"knee_scale": 10, "steepest_drop_scales": (10, 25)}
+    )
+    console_cliff = Console(record=True, width=100)
+    print_sweep(console_cliff, cliff_study)
+    cliff_text = console_cliff.export_text()
+    assert "capacity cliff where distractor shadowing accelerates" in cliff_text
+
+    csv_single = render_sweep_csv(single_study)
+    assert "delta_truncated" in csv_single
+    assert "0.1000" in csv_single

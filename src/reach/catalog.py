@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import re
+from collections import deque
 from pathlib import Path
 from random import Random
 from typing import TYPE_CHECKING, Annotated, Any, Final
@@ -824,13 +825,58 @@ def _permute_by_van_der_corput(candidates: Sequence[int]) -> list[int]:
     return ordered
 
 
+def _round_robin_drain(
+    cluster_order: Sequence[int],
+    queues: Mapping[int, Sequence[int]],
+) -> list[int]:
+    """Drain per-cluster candidate sequences in round-robin order across cluster_order."""
+    deques = {a: deque(queues[a]) for a in cluster_order if queues.get(a)}
+    active = [a for a in cluster_order if a in deques]
+    drained: list[int] = []
+    while active:
+        next_active: list[int] = []
+        for a in active:
+            drained.append(deques[a].popleft())
+            if deques[a]:
+                next_active.append(a)
+        active = next_active
+    return drained
+
+
+def _interleave_rival_and_filler_streams(
+    all_rivals: Sequence[int],
+    all_fillers: Sequence[int],
+    effective_share: float,
+) -> list[int]:
+    """Interleave rival and filler streams via a Bresenham-style quota accumulator."""
+    rivals_q = deque(all_rivals)
+    fillers_q = deque(all_fillers)
+    interleaved: list[int] = []
+    quota = 0.5
+    while rivals_q or fillers_q:
+        quota += effective_share
+        if quota >= 1.0:
+            quota -= 1.0
+            if rivals_q:
+                interleaved.append(rivals_q.popleft())
+            elif fillers_q:
+                interleaved.append(fillers_q.popleft())
+        elif fillers_q:
+            interleaved.append(fillers_q.popleft())
+        elif rivals_q:
+            interleaved.append(rivals_q.popleft())
+    return interleaved
+
+
 def _low_discrepancy_striding(
     names: Sequence[str],
     sim: Sequence[Sequence[float]],
     anchor_indices: Sequence[int],
     skills: Sequence[Skill] | None = None,
+    *,
+    rivals_share: float = 0.5,
 ) -> list[int]:
-    """Order non-anchor skills via cluster-partitioned 2D low-discrepancy striding."""
+    """Order non-anchor skills by interleaving top cluster rivals with Van der Corput filler."""
     n = len(names)
     anchors = list(dict.fromkeys(anchor_indices))
     if len(anchors) >= n:
@@ -841,39 +887,41 @@ def _low_discrepancy_striding(
     if not non_anchors:
         return anchors
 
-    # Compute formatted display character width for tie-breaking
-    if skills is not None and len(skills) == n:
-        widths = _compute_skill_display_widths(skills)
-    else:
-        widths = [len(names[i]) for i in range(n)]
-
-    # Partition non-anchors into nearest anchor clusters
+    widths = (
+        _compute_skill_display_widths(skills)
+        if (skills is not None and len(skills) == n)
+        else [len(names[i]) for i in range(n)]
+    )
     clusters_by_anchor: dict[int, list[int]] = {a: [] for a in anchors}
     for i in non_anchors:
         best_anchor = max(anchors, key=lambda a: (sim[i][a], -a))
         clusters_by_anchor[best_anchor].append(i)
 
-    # Sort each cluster's candidate pool by similarity descending, then
-    # display width descending, then alphabetically
     for a in anchors:
         clusters_by_anchor[a].sort(key=lambda i: (-sim[i][a], -widths[i], names[i]))
 
-    from collections import deque
+    effective_share = max(0.0, min(1.0, rivals_share))
+    cluster_order = _permute_by_van_der_corput([a for a in anchors if clusters_by_anchor[a]])
 
-    # Interleave active clusters using Van der Corput radical inverse sequence
-    active_anchors = [a for a in anchors if clusters_by_anchor[a]]
-    cluster_order = _permute_by_van_der_corput(active_anchors)
-    cluster_queues = {a: deque(clusters_by_anchor[a]) for a in cluster_order}
+    rival_lists: dict[int, list[int]] = {}
+    filler_lists: dict[int, list[int]] = {}
+    for a in cluster_order:
+        c_list = clusters_by_anchor[a]
+        r_count = (
+            min(len(c_list), round(len(c_list) * effective_share + 1e-9))
+            if effective_share > 0.0
+            else 0
+        )
+        rival_lists[a] = c_list[:r_count]
+        filler_lists[a] = _permute_by_van_der_corput(c_list[r_count:])
 
-    interleaved: list[int] = []
-    active = list(cluster_order)
-    while active:
-        next_active = []
-        for a in active:
-            interleaved.append(cluster_queues[a].popleft())
-            if cluster_queues[a]:
-                next_active.append(a)
-        active = next_active
+    offset = max(1, len(cluster_order) // 2) if cluster_order else 0
+    filler_order = (
+        cluster_order[offset:] + cluster_order[:offset] if len(cluster_order) > 1 else cluster_order
+    )
+    all_rivals = _round_robin_drain(cluster_order, rival_lists)
+    all_fillers = _round_robin_drain(filler_order, filler_lists)
+    interleaved = _interleave_rival_and_filler_streams(all_rivals, all_fillers, effective_share)
 
     return [*anchors, *interleaved]
 
@@ -885,6 +933,8 @@ def _build_scaling_sequence(
     name_to_idx: Mapping[str, int],
     resolved_anchors: tuple[str, ...] | None,
     skills: Sequence[Skill] | None = None,
+    *,
+    rivals_share: float = 0.5,
 ) -> tuple[str, ...]:
     """Determine complete scaling order across unique skills."""
     n = len(names)
@@ -892,7 +942,13 @@ def _build_scaling_sequence(
         return names
     if resolved_anchors:
         initial = [name_to_idx[a] for a in resolved_anchors]
-        order = _low_discrepancy_striding(names, sim, initial, skills=skills)
+        order = _low_discrepancy_striding(
+            names,
+            sim,
+            initial,
+            skills=skills,
+            rivals_share=rivals_share,
+        )
         return tuple(names[i] for i in order)
 
     medoid_idx = max(range(n), key=lambda i: (sum(sim[i]), -i))
@@ -929,6 +985,7 @@ class CorpusScalingPlan(BaseModel):
     sequence: tuple[str, ...]
     catalogs: tuple[Catalog, ...]
     anchor_skills: tuple[str, ...] | None = None
+    rivals_share: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
 
     @classmethod
     def create(
@@ -937,8 +994,11 @@ class CorpusScalingPlan(BaseModel):
         scales: Sequence[int],
         anchor_skills: Sequence[str] | None = None,
         scorer: Scorer | None = None,
+        *,
+        rivals_share: float = 0.5,
     ) -> CorpusScalingPlan:
         """Construct a scaling plan by computing distance geometry and k-Center ordering once."""
+        effective_share = max(0.0, min(1.0, rivals_share))
         unique_skills = _deduplicate_skills(skills)
         names, dist, sim = _compute_cosine_bm25_distance_matrix(unique_skills, scorer=scorer)
         name_to_idx = {name: i for i, name in enumerate(names)}
@@ -950,7 +1010,13 @@ class CorpusScalingPlan(BaseModel):
                 resolved_anchors = valid_anchors
 
         seq = _build_scaling_sequence(
-            names, dist, sim, name_to_idx, resolved_anchors, skills=unique_skills
+            names,
+            dist,
+            sim,
+            name_to_idx,
+            resolved_anchors,
+            skills=unique_skills,
+            rivals_share=effective_share,
         )
         catalogs = _build_nested_catalogs(seq, scales)
 
@@ -962,6 +1028,7 @@ class CorpusScalingPlan(BaseModel):
             sequence=seq,
             catalogs=tuple(catalogs),
             anchor_skills=resolved_anchors,
+            rivals_share=effective_share,
         )
 
     def queries_for_scale(
@@ -983,6 +1050,8 @@ def build_corpus_scaling_sequence(
     skills: Sequence[Skill],
     anchor_skills: Sequence[str] | None = None,
     scorer: Scorer | None = None,
+    *,
+    rivals_share: float = 0.5,
 ) -> tuple[str, ...]:
     """Order skills using Farthest-First Traversal (k-Center) on Cosine-BM25 distance."""
     plan = CorpusScalingPlan.create(
@@ -990,6 +1059,7 @@ def build_corpus_scaling_sequence(
         scales=(),
         anchor_skills=anchor_skills,
         scorer=scorer,
+        rivals_share=rivals_share,
     )
     return plan.sequence
 
@@ -1000,6 +1070,8 @@ def build_corpus_scaling_catalogs(
     ordered_names: Sequence[str] | None = None,
     anchor_skills: Sequence[str] | None = None,
     scorer: Scorer | None = None,
+    *,
+    rivals_share: float = 0.5,
 ) -> list[Catalog]:
     """Generate deterministic nested catalogs for whole-corpus capacity evaluation."""
     if not skills:
@@ -1025,6 +1097,7 @@ def build_corpus_scaling_catalogs(
         scales=scales,
         anchor_skills=anchor_skills,
         scorer=scorer,
+        rivals_share=rivals_share,
     )
     return list(plan.catalogs)
 
