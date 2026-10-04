@@ -4,7 +4,7 @@
 
 When you run any `reach` command, it loads the bundled base configuration, overlays your project-level `reach.toml` (if present), and applies any environment variables or CLI flags passed at runtime.
 
-To customize settings for your repository, copy the included template to your project root:
+To customize settings for your repository, copy the included template to your project root (which is gitignored by default so your local paths and credentials remain private):
 
 ```bash
 cp reach.example.toml reach.toml
@@ -390,14 +390,14 @@ Parameters for synthetic query drafting and leakage detection.
 
 ### `[registry]`
 
-Parameters for Google Cloud Agent Registry integration.
+Parameters for Google Cloud Agent Registry integration. When `--skills` or `[study].skills` is set without an explicit `--registry` or `--project` CLI flag, local skills take precedence over `[registry].project`. For `antigravity-sdk`, `[registry].project` and `[registry].location` also provide the default Agent Platform project and location when no Gemini API key is configured.
 
-| Key                 | Type    | Default    | Description                                                                         |
-| :------------------ | :------ | :--------- | :---------------------------------------------------------------------------------- |
-| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry.                         |
-| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                   |
-| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                |
-| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating. |
+| Key                 | Type    | Default    | Description                                                                             |
+| :------------------ | :------ | :--------- | :-------------------------------------------------------------------------------------- |
+| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry and Agent Platform fallback. |
+| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                       |
+| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                    |
+| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating.     |
 
 ### `[retrieval]`
 
@@ -425,22 +425,22 @@ Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciproc
 
 Controls default file paths for benchmark queries, skill roots, workspaces, and evaluation artifacts.
 
-| Key                    | Type                                | Default  | Description                                                                                                                |
-| :--------------------- | :---------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------- |
-| `anchor`               | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                    |
-| `auto_queries`         | Boolean                             | `true`   | Automatically synthesize and backfill benchmark queries for unqueried anchor skills during scaling sweeps.                 |
-| `bootstrap_iterations` | Integer                             | `200`    | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                   |
-| `bootstrap_seed`       | Integer / `None`                    | `42`     | Random seed for reproducible bootstrap resamples and curve perturbation.                                                   |
-| `catalog`              | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`. |
-| `out`                  | Path                                | `None`   | Destination file path for recorded evaluation artifacts.                                                                   |
-| `partial`              | Boolean                             | `false`  | Allow query sets that evaluate only a subset of resident skills.                                                           |
-| `queries`              | Path                                | `None`   | Path to labeled evaluation queries JSON benchmark file.                                                                    |
-| `rescope`              | Boolean                             | `false`  | Permit evaluation against a catalog differing from the one labeled in.                                                     |
-| `scales`               | Sequence[Integer]                   | `None`   | Pre-configured catalog sizes for scaling sweeps (e.g. `[10, 25, 50, 100]`).                                                |
-| `skills`               | Path                                | `None`   | Explicit path override to local skills directory (bypasses `[discovery].precedence` if set).                               |
-| `tag`                  | String                              | `""`     | Semantic run tracking label (e.g. `"v1-baseline"`).                                                                        |
-| `trusted`              | Boolean                             | `false`  | When true, trusts resident skills and bypasses interactive safety confirmation prompts.                                    |
-| `workdir`              | Path                                | `None`   | Custom persistent workspace path (defaults to isolated ephemeral temp directory).                                          |
+| Key                    | Type                                | Default  | Description                                                                                                                                                     |
+| :--------------------- | :---------------------------------- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anchor`               | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                                                         |
+| `auto_queries`         | Boolean                             | `true`   | Automatically synthesize benchmark queries on cold start or for explicitly requested unqueried skills; existing non-empty query sets in sweeps are used as-is.  |
+| `bootstrap_iterations` | Integer                             | `200`    | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                                                        |
+| `bootstrap_seed`       | Integer / `None`                    | `42`     | Random seed for reproducible bootstrap resamples and curve perturbation.                                                                                        |
+| `catalog`              | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`.                                      |
+| `out`                  | Path                                | `None`   | Destination file path for recorded evaluation artifacts (`.jsonl` paths stream per-probe records in `reach eval` while `reach sweep` uses `.reach/sweep.json`). |
+| `partial`              | Boolean                             | `false`  | Allow query sets that evaluate only a subset of resident skills.                                                                                                |
+| `queries`              | Path                                | `None`   | Path to labeled evaluation queries JSON benchmark file.                                                                                                         |
+| `rescope`              | Boolean                             | `false`  | Permit evaluation against a catalog differing from the one labeled in.                                                                                          |
+| `scales`               | Sequence[Integer]                   | `None`   | Pre-configured catalog sizes for scaling sweeps (e.g. `[10, 25, 50, 100]`).                                                                                     |
+| `skills`               | Path                                | `None`   | Explicit path override to local skills directory (bypasses `[discovery].precedence` if set).                                                                    |
+| `tag`                  | String                              | `""`     | Semantic run tracking label (e.g. `"v1-baseline"`).                                                                                                             |
+| `trusted`              | Boolean                             | `false`  | When true, trusts resident skills and bypasses interactive safety confirmation prompts.                                                                         |
+| `workdir`              | Path                                | `None`   | Custom persistent workspace path (defaults to isolated ephemeral temp directory).                                                                               |
 
 > [!CAUTION]
 > **Risk of Bypassing Safety Confirmation**

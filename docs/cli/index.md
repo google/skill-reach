@@ -39,7 +39,7 @@ The following flags apply across `reach` commands:
 
 ## Supported Agent Runtimes
 
-When running commands that interact with an agent runtime (`check`, `eval`, `optimize`), select the target runtime via `--agent <runtime>`:
+When running commands that interact with an agent runtime (`check`, `eval`, `optimize`, `sweep`), select the target runtime via `--agent <runtime>`:
 
 - `claude-code`: Drives Anthropic's Claude Code CLI.
 - `antigravity-cli`: Drives the Google Antigravity Agent API / CLI.

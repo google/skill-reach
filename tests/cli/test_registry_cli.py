@@ -188,3 +188,48 @@ def test_query_draft_with_registry(
             == 0
         )
         assert mock_draft.called
+
+
+def test_explicit_skills_flag_overrides_toml_registry_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skill_repo: Path,
+) -> None:
+    """Verify explicit --skills overrides [registry].project unless --registry is passed."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "reach.toml").write_text(
+        '[registry]\nproject = "toml-registry-proj"\n',
+        encoding="utf-8",
+    )
+
+    with patch("reach.catalog.load_registry_skills") as mock_reg:
+        # 1. overlap with explicit skills path does not call Agent Registry
+        assert main(["overlap", str(skill_repo)]) == 0
+        assert not mock_reg.called
+
+        # 2. cluster with explicit skills path does not call Agent Registry
+        assert main(["cluster", str(skill_repo)]) == 0
+        assert not mock_reg.called
+
+        # 3. eval with explicit --skills does not call Agent Registry
+        assert main(["eval", "--skills", str(skill_repo), "--auto", "--dry-run"]) == 0
+        assert not mock_reg.called
+
+
+def test_registry_flag_without_project_fails_fast(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify --registry without a configured or discoverable project fails with a clear error."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+
+    with patch("reach.config.resolve_registry_project", return_value=None):
+        rc = main(["overlap", "--registry"])
+
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "Agent Registry requires a Google Cloud project ID" in (captured.out + captured.err)

@@ -1117,6 +1117,111 @@ def test_single_skill_sweep_retains_neighbor_negative_queries_and_tracks_interna
     assert point.delta_vs_baseline == 0.0
 
 
+def test_single_skill_sweep_filters_out_unrelated_neighbor_negatives_from_corpus(
+    tmp_path: Path,
+) -> None:
+    """Verify _resolve_sweep_target_and_queries filters out neighbor negatives for other skills."""
+    from reach.models import Query, QueryKind, Skill
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _resolve_sweep_target_and_queries
+
+    skills = [
+        Skill(name="cloud-run", description="Cloud Run", path=tmp_path / "cloud-run"),
+        Skill(name="bigquery", description="BigQuery", path=tmp_path / "bigquery"),
+        Skill(name="spanner", description="Spanner", path=tmp_path / "spanner"),
+    ]
+    raw_qs = QuerySet(
+        catalog_id="c",
+        queries=(
+            Query(
+                id="cr-1",
+                text="Deploy container",
+                expected_skill="cloud-run",
+                kind=QueryKind.IMPLICIT,
+            ),
+            Query(
+                id="adv-cloud-run-1",
+                text="Cloud run near miss",
+                expected_skill="bigquery",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                id="adv-bigquery-1",
+                text="Bigquery near miss",
+                expected_skill="spanner",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                id="adv-spanner-1",
+                text="Spanner near miss",
+                expected_skill="bigquery",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                id="bq-pos",
+                text="Run SQL query",
+                expected_skill="bigquery",
+                kind=QueryKind.IMPLICIT,
+            ),
+            Query(
+                id="span-pos",
+                text="Spanner transaction",
+                expected_skill="spanner",
+                kind=QueryKind.IMPLICIT,
+            ),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    target, filtered_qs = _resolve_sweep_target_and_queries(skills, raw_qs, "cloud-run")
+    assert target == "cloud-run"
+    assert [q.id for q in filtered_qs.queries] == ["cr-1", "adv-cloud-run-1"]
+
+
+def test_single_skill_sweep_preserves_target_adversarial_on_prefix_collision(
+    tmp_path: Path,
+) -> None:
+    """Verify target adversarial query is preserved when a rival is a prefix of target."""
+    from reach.models import Query, QueryKind, Skill
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _resolve_sweep_target_and_queries
+
+    skills = [
+        Skill(name="cloud-run", description="Cloud Run", path=tmp_path / "cloud-run"),
+        Skill(
+            name="cloud-run-basics",
+            description="Cloud Run Basics",
+            path=tmp_path / "cloud-run-basics",
+        ),
+    ]
+    raw_qs = QuerySet(
+        catalog_id="c",
+        queries=(
+            Query(
+                id="cr-basics-pos",
+                text="Deploy container basics",
+                expected_skill="cloud-run-basics",
+                kind=QueryKind.IMPLICIT,
+            ),
+            Query(
+                id="adv-cloud-run-basics-1",
+                text="Cloud run basics near miss",
+                expected_skill="cloud-run",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                id="adv-cloud-run-1",
+                text="Cloud run near miss",
+                expected_skill="cloud-run-basics",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+        ),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+    target, filtered_qs = _resolve_sweep_target_and_queries(skills, raw_qs, "cloud-run-basics")
+    assert target == "cloud-run-basics"
+    assert [q.id for q in filtered_qs.queries] == ["cr-basics-pos", "adv-cloud-run-basics-1"]
+
+
 def test_render_ascii_curve_single_bullet_per_column_on_midpoint_boundaries() -> None:
     """Verify render_ascii_curve maps midpoint boundary values to exactly one row bullet."""
     from reach.views.sweep import render_ascii_curve

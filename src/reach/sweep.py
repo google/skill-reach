@@ -553,10 +553,24 @@ def _resolve_sweep_target_and_queries(
         msg = f"target skill {target!r} not found in loaded skills{hint}"
         raise _SkillNotFoundError(msg)
 
+    other_skills = sorted(
+        (set(by_name) | raw_query_set.covered_skills()) - {target},
+        key=len,
+        reverse=True,
+    )
     target_queries = tuple(
         q
         for q in raw_query_set.queries
-        if q.expected_skill == target or q.is_out_of_scope or q.kind == QueryKind.NEIGHBOR_NEGATIVE
+        if (q.expected_skill == target and q.kind != QueryKind.NEIGHBOR_NEGATIVE)
+        or q.is_out_of_scope
+        or (
+            q.kind == QueryKind.NEIGHBOR_NEGATIVE
+            and not (
+                q.id.startswith("adv-")
+                and not q.id.removeprefix("adv-").startswith(f"{target}-")
+                and any(q.id.removeprefix("adv-").startswith(f"{other}-") for other in other_skills)
+            )
+        )
     )
     if not target_queries:
         target_queries = raw_query_set.queries
@@ -1210,7 +1224,7 @@ def _setup_sweep_execution(
             resolved_skills,
             actual_scales,
             query_set=raw_query_set,
-            clamp_to_queried=not effective_config.study.auto_queries,
+            clamp_to_queried=not effective_config.study.auto_queries or bool(raw_query_set.queries),
         )
         plan = CorpusScalingPlan.create(
             skills=resolved_skills,

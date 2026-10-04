@@ -26,7 +26,13 @@ from cyclopts import Group, Parameter, validators
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
-from reach.config import DEFAULT_GEMINI_MODEL, QuerySettings, RunConfig, StudySettings
+from reach.config import (
+    DEFAULT_GEMINI_MODEL,
+    QuerySettings,
+    RunConfig,
+    StudySettings,
+    _discover_config_path,
+)
 from reach.diff import VaryFactor
 from reach.generate import GeneratorArm
 from reach.lint import Severity
@@ -516,8 +522,11 @@ class PlanFlags(Flags):
     attempts: Annotated[
         int | None,
         POSITIVE_INT,
-        Field(default=None, ge=1),
-        Parameter(help="Probes per query"),
+        Field(ge=1),
+        Parameter(
+            alias="-n",
+            help="Probes per query",
+        ),
     ] = None
     retries: Annotated[
         int | None,
@@ -696,9 +705,26 @@ def _load_base_config(
     study: StudyFlags,
     required: Sequence[str],
 ) -> RunConfig:
-    """Load base RunConfig from a TOML file or initialize from study flags."""
-    if config is not None:
-        return RunConfig.from_toml(config, skills=study.skills)
+    """Load base RunConfig from an explicit or auto-discovered TOML file or study flags."""
+    discovered_path, is_explicit = _discover_config_path(config)
+    if discovered_path is not None:
+        loaded = RunConfig.from_toml(discovered_path, skills=study.skills)
+        if not is_explicit:
+            if study.skills is not None and study.queries is None:
+                loaded = loaded.model_copy(
+                    update={"study": loaded.study.model_copy(update={"queries": None})}
+                )
+            missing = [
+                flag
+                for flag in required
+                if getattr(study, flag) is None and getattr(loaded.study, flag, None) is None
+            ]
+            if missing:
+                raise ValueError(
+                    "without --config these are required: "
+                    + ", ".join(f"--{flag}" for flag in missing),
+                )
+        return loaded
     missing = [flag for flag in required if getattr(study, flag) is None]
     if missing:
         raise ValueError(
@@ -748,14 +774,37 @@ def build_config(
         record,
         registry,
     )
+    cli_registry_requested = registry is not None and (
+        registry.registry or registry.project is not None
+    )
+    if study_flags.skills is not None and not cli_registry_requested:
+        overrides.setdefault("registry", {})["registry"] = False
+    elif cli_registry_requested and study_flags.skills is None and loaded.study.skills is not None:
+        loaded = loaded.model_copy(
+            update={"study": loaded.study.model_copy(update={"skills": None})}
+        )
 
     try:
-        return loaded.with_overrides(**overrides)
+        resolved = loaded.with_overrides(**overrides)
     except PydanticValidationError as error:
         reason = _opt_error_reason(error, loaded, runtime_flags)
         if reason is None:
             raise
         raise ValueError(reason) from error
+
+    if (
+        resolved.runtime.agent == "antigravity-sdk"
+        and resolved.registry.project
+        and not resolved.runtime.options.get("project")
+    ):
+        opts = dict(resolved.runtime.options)
+        opts["project"] = resolved.registry.project
+        if "location" in resolved.registry.model_fields_set and not opts.get("location"):
+            opts["location"] = resolved.registry.location
+        resolved = resolved.model_copy(
+            update={"runtime": resolved.runtime.model_copy(update={"options": opts})}
+        )
+    return resolved
 
 
 def _opt_error_reason(

@@ -138,23 +138,34 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 BUNDLED_CONFIG_PATH = Path(__file__).resolve().parent / "reach.toml"
 
 
+def _discover_config_path(
+    config: Path | str | None = None,
+) -> tuple[Path | None, bool]:
+    """Resolve explicit config path or auto-discover project reach.toml in CWD.
+
+    Returns:
+        Tuple of (resolved_path, is_explicit).
+    """
+    if config is not None:
+        target = Path(config).expanduser().resolve()
+        if not target.is_file():
+            msg = f"Configuration file not found: {target}"
+            raise FileNotFoundError(msg)
+        return target, True
+
+    project_candidate = Path.cwd() / "reach.toml"
+    if project_candidate.is_file() and project_candidate.resolve() != BUNDLED_CONFIG_PATH:
+        return project_candidate.resolve(), False
+    return None, False
+
+
 def load_config(config_path: Path | str | None = None) -> dict[str, Any]:
     """Load configuration from bundled reach.toml overlaid with optional project config."""
     base: dict[str, Any] = {}
     if BUNDLED_CONFIG_PATH.is_file():
         base = tomllib.loads(BUNDLED_CONFIG_PATH.read_text(encoding="utf-8"))
 
-    target: Path | None = None
-    if config_path is not None:
-        target = Path(config_path).expanduser().resolve()
-        if not target.is_file():
-            msg = f"Configuration file not found: {target}"
-            raise FileNotFoundError(msg)
-    else:
-        project_candidate = Path.cwd() / "reach.toml"
-        if project_candidate.is_file() and project_candidate.resolve() != BUNDLED_CONFIG_PATH:
-            target = project_candidate.resolve()
-
+    target, _ = _discover_config_path(config_path)
     if target is not None:
         override = tomllib.loads(target.read_text(encoding="utf-8"))
         base = _deep_merge(base, override)
@@ -239,7 +250,9 @@ def resolve_registry_project(
         return cli_project.strip()
     if from_toml := _load_section("registry", RegistrySettings, config_path).project:
         return from_toml.strip()
-    return os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT_ID")
+    if env_proj := os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT_ID"):
+        return env_proj.strip()
+    return None
 
 
 def resolve_registry_location(
@@ -249,8 +262,11 @@ def resolve_registry_location(
     """Resolve active Agent Registry location using 3-tier precedence."""
     if cli_location:
         return cli_location.strip()
-    if from_toml := _load_section("registry", RegistrySettings, config_path).location:
-        return from_toml.strip()
+    target, _ = _discover_config_path(config_path)
+    if target is not None and RunConfig.declared(target, "registry", "location"):
+        reg_sec = _load_section("registry", RegistrySettings, target)
+        if reg_sec.location:
+            return reg_sec.location.strip()
     env_loc = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("GCP_LOCATION")
     if env_loc:
         return env_loc.strip()
@@ -904,22 +920,25 @@ class RunConfig(BaseModel):
         section = config.get_section(section_cls) if config is not None else None
         active_overrides = dict(overrides)
 
-        if issubclass(section_cls, RuntimeSettings) and "model" in active_overrides:
-            model = active_overrides.pop("model")
-            if model is not None:
-                configured_runtime = section if isinstance(section, RuntimeSettings) else None
-                base_opts = (
-                    dict(explicit_settings.options)
-                    if isinstance(explicit_settings, RuntimeSettings) and explicit_settings.options
-                    else (
-                        dict(configured_runtime.options)
-                        if configured_runtime is not None and configured_runtime.options
-                        else {}
-                    )
+        if issubclass(section_cls, RuntimeSettings) and (
+            "model" in active_overrides or "options" in active_overrides
+        ):
+            model = active_overrides.pop("model", None)
+            configured_runtime = section if isinstance(section, RuntimeSettings) else None
+            base_opts = (
+                dict(explicit_settings.options)
+                if isinstance(explicit_settings, RuntimeSettings) and explicit_settings.options
+                else (
+                    dict(configured_runtime.options)
+                    if configured_runtime is not None and configured_runtime.options
+                    else {}
                 )
-                if "options" in active_overrides and isinstance(active_overrides["options"], dict):
-                    base_opts.update(active_overrides["options"])
+            )
+            if "options" in active_overrides and isinstance(active_overrides["options"], dict):
+                base_opts.update(active_overrides["options"])
+            if model is not None:
                 base_opts["model"] = model
+            if base_opts or "options" in active_overrides:
                 active_overrides["options"] = base_opts
 
         resolved = resolve_sub_settings(
@@ -929,14 +948,45 @@ class RunConfig(BaseModel):
             **active_overrides,
         )
 
+        if (
+            isinstance(resolved, RuntimeSettings)
+            and resolved.agent == "antigravity-sdk"
+            and config is not None
+            and config.registry.project
+            and not resolved.options.get("project")
+        ):
+            opts = dict(resolved.options)
+            opts["project"] = config.registry.project
+            if "location" in config.registry.model_fields_set and not opts.get("location"):
+                opts["location"] = config.registry.location
+            resolved = resolved.model_copy(update={"options": opts})
+
         if isinstance(resolved, RegistrySettings):
-            project = resolve_registry_project(resolved.project)
-            location = resolve_registry_location(resolved.location)
-            return cast(
-                T,
-                resolved.model_copy(update={"project": project, "location": location}),
-            )
+            return cast(T, cls._resolve_registry_section(resolved, config))
         return cast(T, resolved)
+
+    @staticmethod
+    def _resolve_registry_section(
+        resolved: RegistrySettings,
+        config: RunConfig | None,
+    ) -> RegistrySettings:
+        """Resolve environment and TOML fallbacks for a RegistrySettings section."""
+        if resolved.project:
+            project: str | None = resolved.project.strip()
+        elif config is not None:
+            project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT_ID")
+        else:
+            project = resolve_registry_project(None)
+
+        explicit_loc = resolved.location if "location" in resolved.model_fields_set else None
+        if explicit_loc:
+            location = explicit_loc.strip()
+        elif config is not None:
+            env_loc = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("GCP_LOCATION")
+            location = env_loc.strip() if env_loc else "global"
+        else:
+            location = resolve_registry_location(None)
+        return resolved.model_copy(update={"project": project, "location": location})
 
     @classmethod
     def from_toml(
@@ -968,10 +1018,31 @@ class RunConfig(BaseModel):
 
     def with_overrides(self, **sections: dict[str, Any]) -> RunConfig:
         """Return copy of configuration with section field overrides applied."""
-        payload = self.model_dump()
+        payload: dict[str, Any] = {}
+        for section_name in type(self).model_fields:
+            section_model = getattr(self, section_name)
+            if isinstance(section_model, BaseModel):
+                sec_dump = {
+                    **section_model.model_dump(exclude_defaults=True),
+                    **section_model.model_dump(exclude_unset=True),
+                }
+                if section_name == "runtime" and "agent" not in section_model.model_fields_set:
+                    sec_dump.pop("agent", None)
+                if section_name == "optimize" and "workers" not in section_model.model_fields_set:
+                    sec_dump.pop("workers", None)
+                payload[section_name] = sec_dump
+            else:
+                payload[section_name] = section_model
+
         for section, fields in sections.items():
             live = {k: v for k, v in (fields or {}).items() if v is not None}
-            payload[section] = {**payload[section], **live}
+            if (
+                section == "runtime"
+                and isinstance(live.get("options"), dict)
+                and isinstance(payload.get("runtime", {}).get("options"), dict)
+            ):
+                live["options"] = {**payload["runtime"]["options"], **live["options"]}
+            payload[section] = {**payload.get(section, {}), **live}
         return type(self).model_validate(payload)
 
     @cached_property
@@ -1069,5 +1140,9 @@ def resolve_sub_settings[T: BaseModel](
         else (config_section if config_section is not None else default_factory())
     )
     active = {k: v for k, v in overrides.items() if v is not None}
-    payload = {**base.model_dump(), **active}
+    base_dump = {
+        **base.model_dump(exclude_defaults=True),
+        **base.model_dump(exclude_unset=True),
+    }
+    payload = {**base_dump, **active}
     return default_factory.model_validate(payload)

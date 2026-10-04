@@ -99,8 +99,14 @@ def test_select_config_omits_response_schema_by_default_and_respects_explicit_js
     assert {"const": "gke-basics", "type": "string"} in selected["anyOf"]
 
 
-def test_select_config_sets_thinking_config(tmp_path: Path) -> None:
+def test_select_config_sets_thinking_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """Verify _select_config sets thinking_config when effort is specified."""
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     runtime = AntigravitySdkRuntime(
         options=AntigravitySdkOptions(model="gemini-3.8-flash", effort="high"),
     )
@@ -134,11 +140,12 @@ def test_select_config_points_at_the_installed_skills_directory(
     runtime: AntigravitySdkRuntime,
     tmp_path: Path,
 ) -> None:
-    """Verify skills_paths in select config points to workspace skills directory."""
+    """Verify skills_paths and workspaces in select config point to workspace directories."""
     workdir = tmp_path / "work"
     runtime._resident = ("gke-basics",)
     config = runtime._select_config(workdir)
     assert config.skills_paths == [str(runtime.skills_dir(workdir))]
+    assert config.workspaces == [str(workdir)]
 
 
 def test_select_config_includes_symlink_targets_when_use_symlinks_true(
@@ -601,11 +608,7 @@ def test_select_recovers_skill_from_view_file_directory_step_error(
         '("model output error: invalid tool call error (invalid_args) failed to read file: '
         f"read '{skill_dir}': is a directory\")"
     )
-    history_step = type(
-        "_Step",
-        (),
-        {"status": "ERROR", "error": step_err, "http_code": 0},
-    )()
+    history_step = _FakeStep(status="ERROR", error=step_err, http_code=0)
     _fake_agent(
         monkeypatch,
         _FakeResponse(structured=None, text=""),
@@ -641,7 +644,7 @@ def test_select_preserves_turn1_directory_skill_order_and_cancels_on_early_exit(
     )
     step1 = _FakeStep(status="ERROR", error=step_err_a, http_code=0)
     tc_b = ag_types.ToolCall(name="view_file", args={"AbsolutePath": str(skill_b_file)})
-    step2 = type("_Step", (), {"status": "DONE", "error": "", "tool_calls": [tc_b]})()
+    step2 = _FakeStep(status="DONE", error="", tool_calls=[tc_b])
 
     # 1. Chronological trajectory order when Turn 2 fires _on_tool_call after Turn 1 dir error
     rt_multi = AntigravitySdkRuntime(
@@ -1688,3 +1691,95 @@ def test_antigravity_sdk_select_records_duration_ms(
     assert outcome.invoked_skill == "alpha"
     assert outcome.duration_ms is not None
     assert outcome.duration_ms >= 1
+
+
+class _FakeUsage:
+    """Minimal usage metadata object with prompt_token_count."""
+
+    def __init__(self, prompt_token_count: int | None) -> None:
+        self.prompt_token_count = prompt_token_count
+
+
+@pytest.mark.parametrize(
+    ("total_usage", "history_steps", "expected_tokens"),
+    [
+        pytest.param(
+            _FakeUsage(1450),
+            [],
+            1450,
+            id="from-conversation-total-usage",
+        ),
+        pytest.param(
+            None,
+            [
+                _FakeStep(status="DONE", step_index=1, usage_metadata=_FakeUsage(1200)),
+                _FakeStep(status="DONE", step_index=1, usage_metadata=_FakeUsage(1250)),
+                _FakeStep(status="DONE", step_index=2, usage_metadata=_FakeUsage(1800)),
+            ],
+            3050,
+            id="fallback-to-step-history-deduplicated-by-step-index",
+        ),
+        pytest.param(
+            _FakeUsage(0),
+            [_FakeStep(status="DONE", step_index=None, usage_metadata=_FakeUsage(900))],
+            900,
+            id="zero-total-usage-falls-back-to-unindexed-history-steps",
+        ),
+        pytest.param(
+            None,
+            [_FakeStep(status="DONE", step_index=1, usage_metadata=_FakeUsage(0))],
+            None,
+            id="zero-or-missing-tokens-returns-none",
+        ),
+    ],
+)
+def test_select_populates_prompt_tokens_from_usage_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: AntigravitySdkRuntime,
+    tmp_path: Path,
+    total_usage: object,
+    history_steps: list[_FakeStep],
+    expected_tokens: int | None,
+) -> None:
+    """Verify select populates SelectionOutcome.prompt_tokens from total_usage or step history."""
+    runtime._resident = ("gke-basics",)
+    _fake_agent(
+        monkeypatch,
+        _FakeResponse(structured={"selected_skill": "gke-basics"}),
+        history=history_steps,
+        total_usage=total_usage,
+    )
+    outcome = runtime.select("how do I set up a cluster?", tmp_path / "work")
+    assert outcome.invoked_skill == "gke-basics"
+    assert outcome.prompt_tokens == expected_tokens
+
+
+def test_auto_enables_vertex_when_project_configured_and_no_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify effective_vertex auto-enables when project is set and no Gemini API key is present."""
+    from reach.config import RegistrySettings, RunConfig, RuntimeSettings
+    from reach.runtime import build_runtime
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+
+    cfg = RunConfig(
+        runtime=RuntimeSettings(agent="antigravity-sdk"),
+        registry=RegistrySettings(project="registry-fallback-proj", location="us-central1"),
+    )
+    resolved_rt = RunConfig.resolve(RuntimeSettings, cfg)
+    driver = build_runtime(resolved_rt)
+    assert isinstance(driver, AntigravitySdkRuntime)
+    assert driver.effective_vertex is True
+    assert driver.effective_project == "registry-fallback-proj"
+    assert driver.effective_location == "us-central1"
+
+    # When GEMINI_API_KEY is present and vertex is not explicitly set, Gemini API takes precedence
+    monkeypatch.setenv("GEMINI_API_KEY", "test-dev-key")
+    assert driver.effective_vertex is False
+    assert driver.effective_api_key == "test-dev-key"

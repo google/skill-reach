@@ -1631,3 +1631,97 @@ def test_plan_settings_resolve_eval_attempts(
     assert (
         plan.resolve_eval_attempts(agent=agent, cli_attempts=cli_attempts, quick=quick) == expected
     )
+
+
+def test_discover_config_path_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _discover_config_path finds local reach.toml and errors on missing explicit."""
+    from reach.config import _discover_config_path
+
+    monkeypatch.chdir(tmp_path)
+    assert _discover_config_path(None) == (None, False)
+
+    local_toml = write_toml(tmp_path, "[general]\ndefault_agent = 'keyword'\n")
+    assert _discover_config_path(None) == (local_toml, False)
+
+    explicit_toml = tmp_path / "custom.toml"
+    explicit_toml.write_text("[general]\n", encoding="utf-8")
+    assert _discover_config_path(explicit_toml) == (explicit_toml, True)
+
+    with pytest.raises(FileNotFoundError, match="Configuration file not found"):
+        _discover_config_path(tmp_path / "nonexistent.toml")
+
+
+def test_with_overrides_and_resolve_preserve_model_fields_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify with_overrides and resolve_sub_settings preserve model_fields_set across updates."""
+    from reach.config import PlanSettings, RegistrySettings, resolve_sub_settings
+
+    cfg = RunConfig(plan=PlanSettings(attempts=4), registry=RegistrySettings(project="p1"))
+    updated = cfg.with_overrides(plan={"workers": 8})
+    assert "attempts" in updated.plan.model_fields_set
+    assert "workers" in updated.plan.model_fields_set
+    assert updated.plan.resolve_eval_attempts(agent="keyword", cli_attempts=None, quick=True) == 4
+
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-east1")
+    reg_default_loc = resolve_sub_settings(RegistrySettings, cfg.registry, fresh=True)
+    assert "location" not in reg_default_loc.model_fields_set
+    resolved_reg = RunConfig.resolve(RegistrySettings, config=cfg, fresh=True)
+    assert resolved_reg.location == "us-east1"
+
+    cfg_explicit_loc = RunConfig(
+        registry=RegistrySettings(project="p1", location="global"),
+    )
+    resolved_explicit_loc = RunConfig.resolve(
+        RegistrySettings,
+        config=cfg_explicit_loc,
+        fresh=True,
+    )
+    assert resolved_explicit_loc.location == "global"
+
+
+def test_runtime_resolve_propagates_registry_project_to_antigravity_sdk() -> None:
+    """Verify RunConfig.resolve(RuntimeSettings) propagates [registry].project to options."""
+    from reach.config import RegistrySettings
+
+    cfg = RunConfig(
+        registry=RegistrySettings(project="toml-project-id", location="us-central1"),
+        runtime=RuntimeSettings(agent="antigravity-sdk", options={"use_symlinks": False}),
+    )
+    rt = RunConfig.resolve(RuntimeSettings, config=cfg)
+    assert rt.options["project"] == "toml-project-id"
+    assert rt.options["location"] == "us-central1"
+    assert rt.options["use_symlinks"] is False
+
+
+def test_build_config_decouples_implicit_queries_when_cli_skills_overridden(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skill_repo: Path,
+    query_file: Path,
+) -> None:
+    """Verify build_config clears implicit TOML queries when --skills is passed alone."""
+    monkeypatch.chdir(tmp_path)
+    write_toml(
+        tmp_path,
+        f"""
+        [study]
+        skills = "{skill_repo}"
+        queries = "{query_file}"
+        workdir = "{tmp_path / "work"}"
+        """,
+    )
+    other_skills = tmp_path / "other_skills"
+    other_skills.mkdir()
+
+    # Overriding --skills without --queries decouples implicit TOML queries
+    cfg = build_config(
+        config=None,
+        study=StudyFlags(skills=other_skills),
+        required=("skills", "workdir"),
+    )
+    assert cfg.study.skills == other_skills.resolve()
+    assert cfg.study.queries is None
