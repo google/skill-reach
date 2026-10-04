@@ -75,6 +75,8 @@ __all__ = [
     "DEFAULT_COMPLETION_WINDOW",
     "DEFAULT_CONTEXT_WINDOW",
     "DEFAULT_DENIED_TOOLS",
+    "DEFAULT_ENABLED_PLUGINS",
+    "DEFAULT_ISOLATION_ENV_VARS",
     "DEFAULT_LISTING_BUDGET_CHARS",
     "DEFAULT_SKILL_OVERRIDES",
     "EXPECTED_TERMINAL_SUBTYPES",
@@ -148,7 +150,19 @@ DEFAULT_DENIED_TOOLS: tuple[str, ...] = (
 )
 
 #: Bundled skills explicitly disabled via skillOverrides settings.
-DEFAULT_SKILL_OVERRIDES: Mapping[str, str] = {"doctor": "off"}
+DEFAULT_SKILL_OVERRIDES: Mapping[str, str] = {
+    "doctor": "off",
+    "plugin-authoring": "off",
+}
+
+#: Built-in Claude Code mods (@builtin) explicitly disabled via enabledPlugins settings.
+DEFAULT_ENABLED_PLUGINS: Mapping[str, bool] = {
+    "cc-plugin-agents-md@builtin": False,
+    "cc-plugin-diff@builtin": False,
+    "cc-plugin-plugin-authoring@builtin": False,
+    "cc-plugin-telemetry@builtin": False,
+    "cc-plugin-you-should-know@builtin": False,
+}
 
 
 class ClaudeCodeOptions(CliOptions):
@@ -164,6 +178,9 @@ class ClaudeCodeOptions(CliOptions):
     disable_bundled_skills: bool = True
     skill_overrides: Mapping[str, str] = Field(
         default_factory=lambda: dict(DEFAULT_SKILL_OVERRIDES),
+    )
+    enabled_plugins: Mapping[str, bool] = Field(
+        default_factory=lambda: dict(DEFAULT_ENABLED_PLUGINS),
     )
     skill_listing_budget_fraction: float | None = Field(default=None, gt=0.0, le=1.0)
     skill_listing_max_desc_chars: int | None = Field(default=None, gt=0)
@@ -192,8 +209,15 @@ class ClaudeCodeOptions(CliOptions):
         payload: dict[str, object] = {}
         if self.disable_bundled_skills:
             payload["disableBundledSkills"] = True
-        if self.skill_overrides:
-            payload["skillOverrides"] = dict(self.skill_overrides)
+            if self.skill_overrides:
+                payload["skillOverrides"] = dict(self.skill_overrides)
+            if self.enabled_plugins:
+                payload["enabledPlugins"] = dict(self.enabled_plugins)
+        else:
+            if self.skill_overrides and self.skill_overrides != DEFAULT_SKILL_OVERRIDES:
+                payload["skillOverrides"] = dict(self.skill_overrides)
+            if self.enabled_plugins and self.enabled_plugins != DEFAULT_ENABLED_PLUGINS:
+                payload["enabledPlugins"] = dict(self.enabled_plugins)
         if self.skill_listing_budget_fraction is not None:
             payload["skillListingBudgetFraction"] = self.skill_listing_budget_fraction
         if self.skill_listing_max_desc_chars is not None:
@@ -398,6 +422,38 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
     )
 
 
+#: Environment variables disabling Claude Code features during clean-room isolation.
+DEFAULT_ISOLATION_ENV_VARS: tuple[str, ...] = (
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS",
+    "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+    "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS",
+    "CLAUDE_CODE_DISABLE_POLICY_SKILLS",
+)
+
+
+def _apply_claude_options_env(
+    env: dict[str, str],
+    options: ClaudeCodeOptions,
+    *,
+    blocked_env_vars: Iterable[str] | None = None,
+) -> None:
+    """Populate Claude Code provider and isolation environment variables from options."""
+    sync_claude_settings_env(env, blocked_env_vars=blocked_env_vars)
+    if options.cloud_ml_region:
+        env["CLOUD_ML_REGION"] = str(options.cloud_ml_region)
+    if options.vertex_project_id:
+        env["ANTHROPIC_VERTEX_PROJECT_ID"] = str(options.vertex_project_id)
+    if options.api_key:
+        env["ANTHROPIC_API_KEY"] = str(options.api_key)
+    if options.disable_bundled_skills:
+        for var in DEFAULT_ISOLATION_ENV_VARS:
+            env[var] = "1"
+    else:
+        for var in DEFAULT_ISOLATION_ENV_VARS:
+            env.pop(var, None)
+
+
 class ClaudeCodeRuntime(CliAgentRuntime[ClaudeCodeOptions]):
     """Execute agent skill selection probes via the Claude Code CLI."""
 
@@ -571,13 +627,7 @@ class ClaudeCodeRuntime(CliAgentRuntime[ClaudeCodeOptions]):
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with API keys and workspace directory."""
         env = super().build_env(workdir)
-        sync_claude_settings_env(env, blocked_env_vars=self.blocked_env_vars)
-        if self.options.cloud_ml_region:
-            env["CLOUD_ML_REGION"] = self.options.cloud_ml_region
-        if self.options.vertex_project_id:
-            env["ANTHROPIC_VERTEX_PROJECT_ID"] = self.options.vertex_project_id
-        if self.options.disable_bundled_skills:
-            env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] = "1"
+        _apply_claude_options_env(env, self.options, blocked_env_vars=self.blocked_env_vars)
         if workdir is not None and (iso_dir := self.effective_isolation_dir(workdir)) is not None:
             config_dir = ensure_private_directory(iso_dir)
             env["CLAUDE_CONFIG_DIR"] = str(config_dir)
@@ -671,13 +721,10 @@ class ClaudeGenerator(BaseTextGenerator[ClaudeCodeOptions]):
     def build_env(self) -> dict[str, str]:
         """Assemble process environment with API keys for Claude Code completion."""
         env = super().build_env()
-        sync_claude_settings_env(env, blocked_env_vars=self.blocked_env_vars)
-        if (cloud_ml_region := getattr(self.options, "cloud_ml_region", None)) is not None:
-            env["CLOUD_ML_REGION"] = str(cloud_ml_region)
-        if (vertex_project_id := getattr(self.options, "vertex_project_id", None)) is not None:
-            env["ANTHROPIC_VERTEX_PROJECT_ID"] = str(vertex_project_id)
-        if (api_key := getattr(self.options, "api_key", None)) is not None:
-            env["ANTHROPIC_API_KEY"] = str(api_key)
+        _apply_claude_options_env(env, self.options, blocked_env_vars=self.blocked_env_vars)
+        if (custom_iso := getattr(self.options, "custom_isolation_dir", None)) is not None:
+            config_dir = ensure_private_directory(custom_iso)
+            env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         return env
 
     @override

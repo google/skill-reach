@@ -18,14 +18,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from reach.catalog import build_catalogs, load_skills
+from reach.config import RuntimeSettings
 from reach.models import CatalogMode
+from reach.runtime import resolve_options
 from reach.runtime.claude_code import (
+    DEFAULT_ENABLED_PLUGINS,
+    DEFAULT_ISOLATION_ENV_VARS,
+    DEFAULT_SKILL_OVERRIDES,
     POSIX_ENTERPRISE_SKILL_DIRS,
     ClaudeCodeOptions,
     ClaudeCodeRuntime,
@@ -319,13 +325,32 @@ def test_env_disables_bundled_skills(
     runtime: ClaudeCodeRuntime,
     tmp_path: Path,
 ) -> None:
-    """Verify build_env sets CLAUDE_CODE_DISABLE_BUNDLED_SKILLS env variable."""
+    """Verify build_env sets isolation env vars when disable_bundled_skills is enabled."""
+    expected_vars = (
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+        "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS",
+        "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+        "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS",
+        "CLAUDE_CODE_DISABLE_POLICY_SKILLS",
+    )
     env = runtime.build_env(tmp_path)
-    assert env.get("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS") == "1"
+    for var in expected_vars:
+        assert env.get(var) == "1"
+
+    gen_env = ClaudeGenerator().build_env()
+    for var in expected_vars:
+        assert gen_env.get(var) == "1"
 
     kept_runtime = ClaudeCodeRuntime(options=ClaudeCodeOptions(disable_bundled_skills=False))
     kept_env = kept_runtime.build_env(tmp_path)
-    assert "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS" not in kept_env
+    for var in expected_vars:
+        assert var not in kept_env
+
+    kept_gen_env = ClaudeGenerator(
+        options=ClaudeCodeOptions(disable_bundled_skills=False),
+    ).build_env()
+    for var in expected_vars:
+        assert var not in kept_gen_env
 
 
 def test_env_configures_isolated_claude_config_dir(
@@ -412,25 +437,43 @@ def test_claude_code_build_env_strips_blocked_vars_from_settings(
 def test_command_removes_the_skills_the_cli_ships_with(
     runtime: ClaudeCodeRuntime,
 ) -> None:
-    """Verify build_command sets disableBundledSkills and disables doctor override."""
+    """Verify build_command sets disableBundledSkills, skillOverrides, and enabledPlugins."""
     command = runtime.build_command("do a thing")
     payload = json.loads(command[command.index("--settings") + 1])
     assert payload["disableBundledSkills"] is True
-    assert payload["skillOverrides"] == {"doctor": "off"}
+    assert payload["skillOverrides"] == dict(DEFAULT_SKILL_OVERRIDES)
+    assert payload["enabledPlugins"] == dict(DEFAULT_ENABLED_PLUGINS)
 
 
 def test_residency_controls_can_be_turned_off() -> None:
-    """Verify --settings is omitted when bundled skill disabling is turned off."""
-    options = ClaudeCodeOptions(disable_bundled_skills=False, skill_overrides={})
+    """Verify --settings is omitted when bundled skill and plugin disabling is turned off."""
+    options = ClaudeCodeOptions(disable_bundled_skills=False)
     assert options.settings_json() is None
     assert "--settings" not in ClaudeCodeRuntime(options=options).build_command("q")
 
 
+def test_residency_controls_custom_overrides_when_bundled_skills_not_disabled() -> None:
+    """Verify custom overrides are preserved when bundled skills disabling is turned off."""
+    options = ClaudeCodeOptions(
+        disable_bundled_skills=False,
+        skill_overrides={"my-skill": "off"},
+    )
+    payload = json.loads(options.settings_json() or "{}")
+    assert "disableBundledSkills" not in payload
+    assert payload["skillOverrides"] == {"my-skill": "off"}
+    assert "enabledPlugins" not in payload
+
+
 def test_settings_payload_is_ordered_so_a_command_line_is_reproducible() -> None:
     """Verify settings JSON serialization produces sorted keys."""
-    options = ClaudeCodeOptions(skill_overrides={"z": "off", "a": "off"})
+    options = ClaudeCodeOptions(
+        skill_overrides={"z": "off", "a": "off"},
+        enabled_plugins={"b": False, "a": False},
+    )
     assert options.settings_json() == (
-        '{"disableBundledSkills": true, "skillOverrides": {"a": "off", "z": "off"}}'
+        '{"disableBundledSkills": true, '
+        '"enabledPlugins": {"a": false, "b": false}, '
+        '"skillOverrides": {"a": "off", "z": "off"}}'
     )
 
 
@@ -1089,3 +1132,192 @@ def test_claude_usage_schema_validation_and_token_resolution() -> None:
     assert _extract_usage_prompt_tokens(None) is None
     assert _extract_usage_prompt_tokens("invalid") is None
     assert _extract_usage_prompt_tokens({"input_tokens": -5}) is None
+
+
+def test_default_claude_options_isolates_plugins_and_bundled_skills() -> None:
+    """Verify default ClaudeCodeOptions specifies complete isolation settings."""
+    opts = ClaudeCodeOptions()
+    assert opts.disable_bundled_skills is True
+    assert opts.skill_overrides == {"doctor": "off", "plugin-authoring": "off"}
+    assert opts.enabled_plugins == dict(DEFAULT_ENABLED_PLUGINS)
+    assert opts.enabled_plugins["cc-plugin-plugin-authoring@builtin"] is False
+    assert opts.enabled_plugins["cc-plugin-agents-md@builtin"] is False
+
+
+def test_settings_json_renders_custom_plugin_and_skill_overrides() -> None:
+    """Verify settings_json serializes custom plugin and skill override mappings."""
+    opts = ClaudeCodeOptions(
+        skill_overrides={"my-tool": "off", "doctor": "off"},
+        enabled_plugins={"custom-mod@builtin": False, "other-mod": True},
+    )
+    payload = json.loads(opts.settings_json() or "{}")
+    assert payload["skillOverrides"] == {"doctor": "off", "my-tool": "off"}
+    assert payload["enabledPlugins"] == {"custom-mod@builtin": False, "other-mod": True}
+    assert payload["disableBundledSkills"] is True
+
+
+def test_select_flags_plugin_authoring_as_residency_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    make_stream: Callable[..., list[str]],
+    runtime: ClaudeCodeRuntime,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify select detects and reports plugin-authoring as an undeclared resident."""
+    workdir = tmp_path / "work"
+    resident = install_one(runtime, skill_repo, workdir)
+    canned(monkeypatch, make_stream(catalog=[resident, "plugin-authoring"], invoked=resident))
+    outcome = runtime.select("profile perf", workdir)
+    assert outcome.error == "residency leak: plugin-authoring"
+    assert outcome.observed_catalog == (resident, "plugin-authoring")
+
+
+def test_select_flags_multiple_undeclared_residents_in_sorted_order(
+    monkeypatch: pytest.MonkeyPatch,
+    make_stream: Callable[..., list[str]],
+    runtime: ClaudeCodeRuntime,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify select reports multiple undeclared resident skills in sorted order."""
+    workdir = tmp_path / "work"
+    resident = install_one(runtime, skill_repo, workdir)
+    canned(
+        monkeypatch,
+        make_stream(
+            catalog=[resident, "zebra-plugin", "alpha-mod", "plugin-authoring"],
+            invoked=resident,
+        ),
+    )
+    outcome = runtime.select("profile perf", workdir)
+    assert outcome.error == "residency leak: alpha-mod, plugin-authoring, zebra-plugin"
+
+
+def test_validate_outcome_prioritizes_tool_leak_before_residency_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    make_stream: Callable[..., list[str]],
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify tool leakage takes precedence over residency leakage in validation."""
+    settings = RuntimeSettings(agent="claude-code", allowed_tools=["Skill"])
+    runtime = ClaudeCodeRuntime(settings=settings)
+    workdir = tmp_path / "work"
+    resident = install_one(runtime, skill_repo, workdir)
+    canned(
+        monkeypatch,
+        make_stream(
+            catalog=[resident, "plugin-authoring"],
+            tools=["Skill", "Bash"],
+            invoked=resident,
+        ),
+    )
+    outcome = runtime.select("profile perf", workdir)
+    assert outcome.error == "tool leak: Bash"
+
+
+def test_empty_enabled_plugins_omits_enabled_plugins_key() -> None:
+    """Verify empty enabled_plugins mapping is omitted from settings JSON payload."""
+    opts = ClaudeCodeOptions(enabled_plugins={})
+    payload = json.loads(opts.settings_json() or "{}")
+    assert "enabledPlugins" not in payload
+    assert "disableBundledSkills" in payload
+
+
+def test_empty_skill_overrides_omits_skill_overrides_key() -> None:
+    """Verify empty skill_overrides mapping is omitted from settings JSON payload."""
+    opts = ClaudeCodeOptions(skill_overrides={})
+    payload = json.loads(opts.settings_json() or "{}")
+    assert "skillOverrides" not in payload
+    assert "disableBundledSkills" in payload
+
+
+def test_disable_bundled_skills_false_permits_plugin_authoring(
+    monkeypatch: pytest.MonkeyPatch,
+    make_stream: Callable[..., list[str]],
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify plugin-authoring is permitted when disable_bundled_skills is explicitly False."""
+    runtime = ClaudeCodeRuntime(options=ClaudeCodeOptions(disable_bundled_skills=False))
+    workdir = tmp_path / "work"
+    resident = install_one(runtime, skill_repo, workdir)
+    canned(monkeypatch, make_stream(catalog=[resident, "plugin-authoring"], invoked=resident))
+    assert runtime.select("profile perf", workdir).error is None
+
+
+def test_resolve_options_propagates_enabled_plugins_into_claude_code_options() -> None:
+    """Verify RuntimeSettings resolves enabled_plugins into ClaudeCodeOptions."""
+    settings = RuntimeSettings(
+        agent="claude-code",
+        options={"enabled_plugins": {"custom-mod@builtin": False}},
+    )
+    resolved = resolve_options(settings)
+    assert isinstance(resolved, ClaudeCodeOptions)
+    assert resolved.enabled_plugins == {"custom-mod@builtin": False}
+    payload = json.loads(resolved.settings_json() or "{}")
+    assert payload["enabledPlugins"] == {"custom-mod@builtin": False}
+
+
+def test_generator_and_runtime_env_isolation_parity(tmp_path: Path) -> None:
+    """Verify ClaudeCodeRuntime and ClaudeGenerator share identical isolation variables."""
+    runtime = ClaudeCodeRuntime()
+    gen = ClaudeGenerator()
+    runtime_env = runtime.build_env(tmp_path)
+    gen_env = gen.build_env()
+
+    for var in DEFAULT_ISOLATION_ENV_VARS:
+        assert runtime_env[var] == "1"
+        assert gen_env[var] == "1"
+
+    kept_runtime = ClaudeCodeRuntime(options=ClaudeCodeOptions(disable_bundled_skills=False))
+    kept_gen = ClaudeGenerator(options=ClaudeCodeOptions(disable_bundled_skills=False))
+    kept_runtime_env = kept_runtime.build_env(tmp_path)
+    kept_gen_env = kept_gen.build_env()
+
+    for var in DEFAULT_ISOLATION_ENV_VARS:
+        assert var not in kept_runtime_env
+        assert var not in kept_gen_env
+
+
+def test_ambient_isolation_vars_popped_when_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ambient isolation variables from os.environ are purged on opt-out."""
+    for var in DEFAULT_ISOLATION_ENV_VARS:
+        monkeypatch.setenv(var, "1")
+
+    runtime = ClaudeCodeRuntime(options=ClaudeCodeOptions(disable_bundled_skills=False))
+    gen = ClaudeGenerator(options=ClaudeCodeOptions(disable_bundled_skills=False))
+    runtime_env = runtime.build_env(tmp_path)
+    gen_env = gen.build_env()
+
+    for var in DEFAULT_ISOLATION_ENV_VARS:
+        assert var not in runtime_env
+        assert var not in gen_env
+
+
+def test_generator_custom_config_dir_isolation(tmp_path: Path) -> None:
+    """Verify ClaudeGenerator sets CLAUDE_CONFIG_DIR when custom config_dir is configured."""
+    custom_dir = tmp_path / "custom_config"
+    gen = ClaudeGenerator(options=ClaudeCodeOptions(config_dir=custom_dir))
+    cmd = gen.build_completion_command("test")
+    assert "--settings" not in cmd
+
+    env = gen.build_env()
+    assert env["CLAUDE_CONFIG_DIR"] == str(custom_dir)
+
+
+def test_blocked_env_vars_preserves_isolation_vars(tmp_path: Path) -> None:
+    """Verify blocked_env_vars strips credentials while preserving isolation env vars."""
+    settings = RuntimeSettings(
+        agent="claude-code",
+        blocked_env_vars=["SECRET_API_TOKEN", "AWS_ACCESS_KEY_ID"],
+    )
+    runtime = ClaudeCodeRuntime(settings=settings)
+    env = runtime.build_env(tmp_path)
+    for var in DEFAULT_ISOLATION_ENV_VARS:
+        assert env.get(var) == "1"
+    assert "SECRET_API_TOKEN" not in env
+    assert "AWS_ACCESS_KEY_ID" not in env

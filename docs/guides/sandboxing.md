@@ -50,6 +50,33 @@ The keyword driver is an in-memory lexical matching engine that matches query te
 3. **Zero Network & Token Cost**: Requires no model credentials, produces no HTTP network calls, and costs $0.00.
 4. **Automatic Safety Bypass**: Because no subprocesses or tools are invoked, Reach automatically skips safety prompts when `--agent keyword` is active.
 
+## Agent Runtime Isolation & Memory Boundaries
+
+When evaluating skill reachability, Reach enforces clean-room isolation around the agent runtime. Without isolation, an agent's routing decisions can be distorted by ambient host files, default bundled tools, global user profiles, or persistent auto-memory, leading to unreproducible benchmarks.
+
+### Core Isolation Principles
+
+Every Reach agent driver operates within four isolation boundaries:
+
+1. **Catalog Residency Enforcement**: Reach tracks runtime skill discovery and tool execution events. If an agent attempts to invoke skills outside the active benchmark catalog, Reach detects and records a **residency leak** (`residency leak: <skill>`) or **tool leak** (`tool leak: <tool>`).
+2. **Bundled Capability Suppression**: Default skills, plugins, and extensions bundled with the agent runtime are suppressed during evaluation so they do not compete with or shadow benchmark catalog skills.
+3. **Ambient Context Neutralization**: Repository-level instruction files, developer preference hints, and persistent auto-memory are bypassed to prevent external prompt bias.
+4. **Session & Workspace Scoping**: Probes execute in ephemeral working directories with isolated configuration paths to ensure probe independence and prevent cross-query state leakage.
+
+---
+
+### Agent-Specific Isolation Mechanisms
+
+Reach tailors isolation mechanisms to the execution model of each supported agent runtime:
+
+| Agent Runtime                                           | Bundled Skill & Plugin Suppression                                                | Ambient Memory & Prompt Neutralization                                      | Workspace & Session Scoping                                     |
+| :------------------------------------------------------ | :-------------------------------------------------------------------------------- | :-------------------------------------------------------------------------- | :-------------------------------------------------------------- |
+| **Claude Code**<br>`claude-code`                        | Suppresses default bundled skills and built-in plugin mods via `--settings`       | Bypasses ambient `CLAUDE.md`, project auto-memory, and system policy skills | Ephemeral workspace with isolated `CLAUDE_CONFIG_DIR`           |
+| **Goose**<br>`goose`                                    | Scopes built-in extensions strictly to skill resolution (`--with-builtin skills`) | Runs with `--no-profile` to bypass developer extensions and `.goosehints`   | Dedicated working home directory per probe worker               |
+| **Pi**<br>`pi`                                          | Restricts runtime tools strictly to resident skill definitions                    | Ignores ambient host configurations and ancestor instructions               | Dedicated per-worker session directories (`.reach_pi_sessions`) |
+| **Antigravity**<br>`antigravity-cli`, `antigravity-sdk` | Scopes tool declarations strictly to resident catalog schemas                     | Enforces turn limits, early-exit invariants, and cumulative token budgets   | Ephemeral directory mounts with isolated scratch paths          |
+| **Keyword Driver**<br>`keyword`                         | N/A (zero tool execution)                                                         | N/A (zero prompt context or LLM calls)                                      | In-memory evaluation (zero disk mutations)                      |
+
 ---
 
 ## Containerized Sandboxing (Docker & Podman)
