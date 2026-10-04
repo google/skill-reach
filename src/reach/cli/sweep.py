@@ -49,6 +49,7 @@ from .flags import (
     RATE,
     REGISTRY_GROUP,
     RUNTIME_GROUP,
+    AgentName,
     ConfigFlag,
     Format,
     GenerateFlags,
@@ -782,7 +783,7 @@ def _load_sweep_base_config(
 
 def _resolve_sweep_effective_config(
     run_config: RunConfig | None = None,
-    agent: str | None = None,
+    agent: AgentName | None = None,
     model: str | None = None,
     registry: RegistryFlags | None = None,
     skills: Path | None = None,
