@@ -76,6 +76,35 @@ register_fake_agent()
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent an untracked reach.toml in the repository root from leaking into unit tests."""
+    import reach.config as _cfg_mod
+
+    orig_discover = _cfg_mod._discover_config_path
+
+    def _hermetic_discover(
+        config: Path | str | None = None,
+    ) -> tuple[Path | None, bool]:
+        if config is None and Path.cwd().resolve() == _REPO_ROOT:
+            return None, False
+        return orig_discover(config)
+
+    monkeypatch.setattr(_cfg_mod, "_discover_config_path", _hermetic_discover)
+    for mod_name in (
+        "reach.cli.flags",
+        "reach.cli.eval",
+        "reach.cli.sweep",
+        "reach.cli.overlap",
+        "reach.cli.cluster",
+        "reach.cli.check",
+    ):
+        if (mod := sys.modules.get(mod_name)) and hasattr(mod, "_discover_config_path"):
+            monkeypatch.setattr(mod, "_discover_config_path", _hermetic_discover)
+
 
 @pytest.fixture
 def clean_browser_env() -> dict[str, str]:

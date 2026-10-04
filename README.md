@@ -32,6 +32,9 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/google/skill-reach
 cd skill-reach
 uv sync
+
+# Optional: initialize project configuration from template
+cp reach.example.toml reach.toml
 ```
 
 To enable dense semantic embeddings or the Google Antigravity SDK, install the optional extras:
@@ -465,7 +468,7 @@ For static linting, schema validation, collision detection, and user global disc
 
 Reach ships with bundled baseline defaults (`src/reach/reach.toml`) defining canonical model specifications, context windows, and agent configurations.
 
-To customize settings for your project, copy the included template to `./reach.toml` in your repository root (or pass `--config <path>`):
+To customize settings for your project, copy the included template to `./reach.toml` in your repository root (which is gitignored by default so your local paths, keys, and endpoints remain private), or pass an explicit configuration with `--config <path>`:
 
 ```sh
 cp reach.example.toml reach.toml

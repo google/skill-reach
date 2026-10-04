@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict
 
 from reach.artifact import ContestedSkill, artifact_path, write_artifact
 from reach.catalog import resolve_skill_target
-from reach.config import RunConfig, resolve_path
+from reach.config import RunConfig, _discover_config_path, resolve_path
 from reach.generate import citations_path
 from reach.models import CatalogMode, Query, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
@@ -288,16 +288,20 @@ def _adjust_eval_catalog_mode(
 ) -> RunConfig:
     """Apply catalog mode defaults and neighborhood catalog ID for quick evaluation."""
     if quick is None:
+        effective_config_path, _ = _discover_config_path(config)
         explicit_partial = study_flags is not None and study_flags.partial is not None
-        if not explicit_partial and config is not None:
-            explicit_partial = RunConfig.declared(config, "study", "partial")
+        if not explicit_partial and effective_config_path is not None:
+            explicit_partial = RunConfig.declared(effective_config_path, "study", "partial")
         study_overrides: dict[str, object] = {}
         if not explicit_partial and (settings.study.queries is not None or has_target_filter):
             study_overrides["partial"] = True
 
-        if not _asks_for_a_mode(config, catalog):
+        if not _asks_for_a_mode(effective_config_path, catalog):
+            has_declared_catalog = effective_config_path is not None and RunConfig.declared(
+                effective_config_path, "study", "catalog"
+            )
             if (
-                config is None
+                not has_declared_catalog
                 and settings.study.catalog in (None, "auto", "")
                 and not settings.study.rescope
             ):
@@ -379,6 +383,7 @@ def _apply_execution_mode_defaults(
     dry_run: bool,
 ) -> tuple[StudyFlags, PlanFlags, RecordFlags, GenerateFlags]:
     """Apply execution mode defaults (quick, auto, run_dir, dry_run) to flags."""
+    effective_config_path, _ = _discover_config_path(config)
     if quick is not None and scratch is not None:
         study, plan = _quick_defaults(quick, scratch, study=study, plan=plan)
         if not generate.targets:
@@ -394,7 +399,10 @@ def _apply_execution_mode_defaults(
     elif (
         dry_run
         and study.workdir is None
-        and (config is None or not RunConfig.declared(config, "study", "workdir"))
+        and (
+            effective_config_path is None
+            or not RunConfig.declared(effective_config_path, "study", "workdir")
+        )
     ):
         study = study.model_copy(update={"workdir": Path("work")})
     elif study.workdir is None and scratch is not None:
@@ -412,7 +420,17 @@ def _validate_queries_available(
     """Ensure benchmark queries exist or raise a user-friendly instructional error."""
     if quick is not None or auto or config is not None or study.queries is not None:
         return study
-    if found := find_existing_queries_path(study.skills, prefer_local=False):
+    discovered_path, _ = _discover_config_path(config)
+    configured_skills: Path | None = None
+    if discovered_path is not None:
+        if study.skills is None and RunConfig.declared(discovered_path, "study", "queries"):
+            return study
+        if study.skills is None and RunConfig.declared(discovered_path, "study", "skills"):
+            configured_skills = RunConfig.from_toml(discovered_path).study.skills
+    if found := find_existing_queries_path(
+        study.skills if study.skills is not None else configured_skills,
+        prefer_local=False,
+    ):
         return study.model_copy(update={"queries": found})
 
     corpus_hint = f" --skills {study.skills}" if study.skills is not None else ""
@@ -471,21 +489,18 @@ def _resolve_eval_settings(
         registry=registry,
         required=() if (quick is not None or auto) else EVAL_REQUIRED,
     )
-    from reach.config import PlanSettings
+    if quick is not None:
+        quick_study_cleanup: dict[str, object] = {}
+        if record.records is None and settings.study.out is not None:
+            quick_study_cleanup["out"] = None
+        if study.catalog is None and settings.study.catalog not in (None, "auto", ""):
+            quick_study_cleanup["catalog"] = "auto"
+        if quick_study_cleanup:
+            settings = settings.model_copy(
+                update={"study": settings.study.model_copy(update=quick_study_cleanup)}
+            )
 
-    active_config = (
-        config
-        if config is not None
-        else (Path("reach.toml") if Path("reach.toml").is_file() else None)
-    )
-    has_config_attempts = active_config is not None and RunConfig.declared(
-        active_config, "plan", "attempts"
-    )
-    if has_config_attempts and active_config is not None:
-        base_plan = settings.plan if config is not None else RunConfig.from_toml(active_config).plan
-    else:
-        base_plan = PlanSettings()
-    effective_attempts = base_plan.resolve_eval_attempts(
+    effective_attempts = settings.plan.resolve_eval_attempts(
         agent=settings.runtime.agent,
         cli_attempts=cli_attempts,
         quick=quick is not None,
@@ -773,8 +788,10 @@ def _eval(
     )
     quick = _quick(target, query, expected, config, study)
     _validate_quick_save(save, quick)
+    effective_config_path, _ = _discover_config_path(config)
     has_declared_workdir = study.workdir is not None or (
-        config is not None and RunConfig.declared(config, "study", "workdir")
+        effective_config_path is not None
+        and RunConfig.declared(effective_config_path, "study", "workdir")
     )
     if (
         artifact_out is None

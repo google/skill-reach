@@ -59,7 +59,12 @@ else:
 
 from pydantic import BaseModel, Field
 
-from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
+from reach.config import (
+    DEFAULT_GEMINI_MODEL,
+    RuntimeSettings,
+    resolve_registry_location,
+    resolve_registry_project,
+)
 from reach.runtime import (
     AntigravityOptions,
     AntigravityRuntime,
@@ -419,6 +424,43 @@ def _resolve_empty_selection_error(
     return "empty selection (likely rate-limited)"
 
 
+def _extract_prompt_tokens(agent: object) -> int | None:
+    """Extract cumulative prompt token count from SDK conversation usage metadata."""
+    conv = getattr(agent, "conversation", None)
+    if conv is None:
+        return None
+    total_usage = getattr(conv, "total_usage", None)
+    if total_usage is not None:
+        total_prompt = getattr(total_usage, "prompt_token_count", None)
+        if (
+            isinstance(total_prompt, int)
+            and not isinstance(total_prompt, bool)
+            and total_prompt > 0
+        ):
+            return total_prompt
+
+    history = _iter_conversation_history(agent)
+    if not history:
+        return None
+
+    by_step: dict[int, int] = {}
+    unindexed_total = 0
+    for step in history:
+        usage = getattr(step, "usage_metadata", None)
+        if usage is None:
+            continue
+        count = getattr(usage, "prompt_token_count", None)
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            step_idx = getattr(step, "step_index", None)
+            if isinstance(step_idx, int) and not isinstance(step_idx, bool):
+                by_step[step_idx] = max(by_step.get(step_idx, 0), count)
+            else:
+                unindexed_total += count
+
+    total = sum(by_step.values()) + unindexed_total
+    return total if total > 0 else None
+
+
 class AntigravitySdkOptions(AntigravityOptions):
     """Specify runtime configuration options for the Antigravity SDK driver."""
 
@@ -455,10 +497,19 @@ class _AntigravitySdkConfigMixin:
             return self.options.vertex
         if getattr(self.options, "provider", None) == "vertex":
             return True
-        return os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE", "").lower() in (
+        if os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE", "").lower() in (
             "true",
             "1",
-        ) or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1")
+        ) or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1"):
+            return True
+        has_api_key = bool(
+            self.options.api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+        return not has_api_key and bool(
+            self.options.project or resolve_registry_project(self.options.project)
+        )
 
     @property
     def effective_project(self) -> str | None:
@@ -467,7 +518,7 @@ class _AntigravitySdkConfigMixin:
             return None
         if self.options.api_key:
             return self.options.project
-        return self.options.project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        return resolve_registry_project(self.options.project)
 
     @property
     def effective_location(self) -> str | None:
@@ -476,7 +527,7 @@ class _AntigravitySdkConfigMixin:
             return None
         if self.options.api_key:
             return self.options.location
-        return self.options.location or os.environ.get("GOOGLE_CLOUD_LOCATION") or "global"
+        return resolve_registry_location(self.options.location)
 
     @property
     def effective_api_key(self) -> str | None:
@@ -655,6 +706,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
         kwargs = self._base_config_kwargs(self._model_spec(), self.build_env(workdir))
         kwargs.update(
             {
+                "workspaces": [str(workdir)],
                 "skills_paths": skills_paths,
                 "capabilities": ag_types.CapabilitiesConfig(
                     enabled_tools=enabled_tools,
@@ -757,6 +809,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
         text_out = ""
         stream_tools: list[str] = []
         stop_reason: Any = "END_TURN"
+        prompt_tokens: int | None = None
 
         try:
             with _suppress_retryable_step_warnings():
@@ -780,6 +833,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
                         stream_tools or hook_observed_tools,
                         post_step_ran=bool(post_step_seen),
                     )
+                    prompt_tokens = _extract_prompt_tokens(agent)
         except (AntigravityValidationError, Exception) as err:
             if isinstance(err, RuntimeError):
                 raise
@@ -823,6 +877,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
                 observed_catalog=self._resident,
                 observed_tools=observed_tools,
                 cost_usd=None,
+                prompt_tokens=prompt_tokens,
                 error=error,
             ),
         )

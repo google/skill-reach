@@ -27,7 +27,13 @@ if TYPE_CHECKING:
 from cyclopts import Parameter
 
 from reach.check import CheckStage, run_check
-from reach.config import CheckSettings, RegistrySettings, RunConfig, resolve_path
+from reach.config import (
+    CheckSettings,
+    RegistrySettings,
+    RunConfig,
+    _discover_config_path,
+    resolve_path,
+)
 from reach.views import (
     Console,
     build_console,
@@ -263,20 +269,40 @@ def _check(
     """Execute two-stage CI/CD quality gate combining linting and empirical assertions."""
     console = build_console(quiet=quiet)
 
+    resolved_config, _ = _discover_config_path(config)
     run_config = None
-    if config is not None:
-        run_config = RunConfig.from_toml(config)
+    if resolved_config is not None:
+        run_config = RunConfig.from_toml(resolved_config)
 
     eff_registry = RunConfig.resolve(
         RegistrySettings,
         run_config,
         **(registry.overrides() if registry is not None else {}),
     )
+    has_cli_registry = registry is not None and (registry.registry or registry.project is not None)
+    if (
+        (registry is not None and registry.registry)
+        or (skills is None and run_config is not None and run_config.registry.registry)
+    ) and not eff_registry.project:
+        msg = "Agent Registry requires --project or GOOGLE_CLOUD_PROJECT environment variable"
+        raise ValueError(msg)
 
-    if eff_registry.project and (
-        (registry is not None and (registry.registry or registry.project is not None))
-        or (run_config is not None and run_config.registry.project is not None)
-    ):
+    should_audit_registry = bool(
+        eff_registry.project
+        and (
+            has_cli_registry
+            or (
+                skills is None
+                and run_config is not None
+                and (
+                    run_config.registry.registry
+                    or (run_config.registry.project is not None and run_config.study.skills is None)
+                )
+            )
+        )
+    )
+
+    if should_audit_registry and eff_registry.project:
         from reach.catalog import load_registry_skills, load_skills
 
         remote_skills = load_registry_skills(
@@ -325,9 +351,18 @@ def _check(
     from .safety import confirm_skill_execution
 
     trusted = run_config.study.trusted if run_config is not None else False
+    eff_skills_paths = (
+        [skills]
+        if skills is not None
+        else (
+            [run_config.study.skills]
+            if run_config is not None and run_config.study.skills is not None
+            else None
+        )
+    )
 
     outcome = run_check(
-        skills_paths=[skills] if skills is not None else None,
+        skills_paths=eff_skills_paths,
         queries_path=queries,
         changed=changed,
         since=eff_settings.since,

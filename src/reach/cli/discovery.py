@@ -57,13 +57,22 @@ def _corpus(
     agent: str | None = None,
 ) -> tuple[list[Skill], Sequence[Path], Discovery | None]:
     """Resolve skill corpus from configuration, runtime environment discovery, or Agent Registry."""
-    if settings.registry.registry or settings.registry.project is not None:
+    if settings.registry.registry or (
+        settings.registry.project is not None and settings.study.skills is None
+    ):
         from reach.catalog import load_registry_skills
         from reach.config import RegistrySettings
         from reach.registry import RegistryCacheManager
 
         eff_registry = RunConfig.resolve(RegistrySettings, settings)
-        if eff_registry.project:
+        if not eff_registry.project:
+            if settings.registry.registry:
+                msg = (
+                    "Agent Registry requires a Google Cloud project ID: pass --project, "
+                    "set [registry].project in reach.toml, or set $GOOGLE_CLOUD_PROJECT"
+                )
+                raise ValueError(msg)
+        else:
             cache_mgr = RegistryCacheManager()
             reg_skills = load_registry_skills(
                 project=eff_registry.project,

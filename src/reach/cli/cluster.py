@@ -22,7 +22,13 @@ from typing import TYPE_CHECKING, Annotated
 from cyclopts import Parameter
 
 from reach.cluster import cluster_skills
-from reach.config import RegistrySettings, RunConfig, RuntimeSettings, resolve_sub_settings
+from reach.config import (
+    RegistrySettings,
+    RunConfig,
+    RuntimeSettings,
+    _discover_config_path,
+    resolve_sub_settings,
+)
 from reach.runtime import build_runtime
 from reach.views import build_console, print_cluster, render_cluster
 
@@ -88,9 +94,10 @@ def _cluster(
     """Partition skill catalogs into cohesive subagent scopes to prevent routing decay."""
     console = build_console()
     driver = build_runtime(RuntimeSettings(agent=agent) if agent is not None else RuntimeSettings())
+    resolved_config, _ = _discover_config_path(config)
     run_config: RunConfig | None = None
-    if config is not None:
-        run_config = RunConfig.from_toml(config)
+    if resolved_config is not None:
+        run_config = RunConfig.from_toml(resolved_config)
 
     effective_config = run_config or RunConfig()
     effective_registry = resolve_sub_settings(
@@ -98,11 +105,19 @@ def _cluster(
         effective_config.registry,
         **(registry.overrides() if registry is not None else {}),
     )
+    has_cli_registry = registry is not None and (registry.registry or registry.project is not None)
+    if skills is not None and not has_cli_registry:
+        effective_registry = effective_registry.model_copy(
+            update={"registry": False, "project": None}
+        )
+    eff_skills = (
+        skills
+        if skills is not None
+        else (None if has_cli_registry else effective_config.study.skills)
+    )
     run_config = effective_config.model_copy(
         update={
-            "study": effective_config.study.model_copy(
-                update={"skills": skills or effective_config.study.skills}
-            ),
+            "study": effective_config.study.model_copy(update={"skills": eff_skills}),
             "registry": effective_registry,
         }
     )

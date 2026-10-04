@@ -20,13 +20,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NamedTuple
 
 from cyclopts import Parameter
+from pydantic import ValidationError as PydanticValidationError
 
 from reach.config import (
+    PlanSettings,
     RegistrySettings,
     RunConfig,
     RuntimeSettings,
     StudySettings,
+    _discover_config_path,
     default_agent,
+    resolve_path,
     resolve_sub_settings,
 )
 from reach.generate import checkpoint_path
@@ -40,17 +44,20 @@ from .app import LOOP, app
 from .discovery import REACH_DIR_NAME, _corpus, _no_skills, find_existing_queries_path
 from .drafting import _draft_query_set
 from .flags import (
+    PLAN_GROUP,
     POSITIVE_INT,
     RATE,
     REGISTRY_GROUP,
-    AgentName,
+    RUNTIME_GROUP,
     ConfigFlag,
     Format,
     GenerateFlags,
     Global,
+    PlanFlags,
     RegistryFlags,
+    RuntimeFlags,
     YesFlag,
-    agent_help_text,
+    _opt_error_reason,
     complete_skill_names,
 )
 from .safety import confirm_skill_execution
@@ -103,7 +110,7 @@ def _resolve_sweep_out_path(
     """Determine the file path where the sweep artifact should be written."""
     if out is not None:
         return out
-    if configured is not None:
+    if configured is not None and configured.suffix != ".jsonl":
         return configured
     if queries_path is not None:
         qp = Path(queries_path)
@@ -235,6 +242,7 @@ def _sweep(
     skills: Annotated[
         Path | None,
         Parameter(
+            alias="-s",
             help="Path to the skill directory or corpus to sweep (discovered if omitted)",
         ),
     ] = None,
@@ -280,22 +288,6 @@ def _sweep(
             help="Proportion of distractor skills selected as nearest rivals",
         ),
     ] = 0.5,
-    workers: Annotated[
-        int | None,
-        POSITIVE_INT,
-        Parameter(
-            alias="-j",
-            help="Number of concurrent probe execution workers",
-        ),
-    ] = None,
-    attempts: Annotated[
-        int | None,
-        POSITIVE_INT,
-        Parameter(
-            alias="-a",
-            help="Number of probe execution attempts per query at each scale step",
-        ),
-    ] = None,
     bootstrap_iterations: Annotated[
         int | None,
         POSITIVE_INT,
@@ -319,18 +311,13 @@ def _sweep(
             ),
         ),
     ] = None,
-    agent: Annotated[
-        AgentName | None,
-        Parameter(
-            help=agent_help_text("Agent runtime to execute scaling probes"),
-        ),
+    runtime: Annotated[
+        RuntimeFlags | None,
+        Parameter(group=RUNTIME_GROUP),
     ] = None,
-    model: Annotated[
-        str | None,
-        Parameter(
-            alias="-m",
-            help="Target model identifier",
-        ),
+    plan: Annotated[
+        PlanFlags | None,
+        Parameter(group=PLAN_GROUP),
     ] = None,
     global_: Global = False,
     registry: Annotated[
@@ -375,7 +362,19 @@ def _sweep(
 ) -> int:
     """Execute multi-scale catalog evaluation sweeps to measure reachability decay."""
     console = build_console()
-    run_config: RunConfig | None = RunConfig.from_toml(config) if config is not None else None
+    if skills is not None and target is None:
+        raw_skills = str(skills)
+        candidate = resolve_path(skills)
+        is_single_skill_dir = candidate.is_dir() and (candidate / "SKILL.md").is_file()
+        is_bare_name = (
+            not candidate.exists()
+            and "/" not in raw_skills
+            and "\\" not in raw_skills
+            and not raw_skills.startswith(("~", "."))
+        )
+        if candidate.is_file() or is_single_skill_dir or is_bare_name:
+            target = raw_skills
+            skills = None
 
     if target is not None:
         from reach.catalog import resolve_skill_target
@@ -393,9 +392,10 @@ def _sweep(
             return 2
 
     effective_config, driver = _resolve_sweep_effective_config(
-        run_config=run_config,
-        agent=agent,
-        model=model,
+        run_config=None,
+        config=config,
+        runtime=runtime,
+        plan=plan,
         registry=registry,
         skills=skills,
         queries=queries,
@@ -481,6 +481,8 @@ def _sweep(
                     f"at initial scale K={point.scale}."
                 )
 
+    cli_workers = plan.workers if plan is not None else None
+    cli_attempts = plan.attempts if plan is not None else None
     try:
         study = run_scaling_sweep(
             config=effective_config,
@@ -490,9 +492,9 @@ def _sweep(
             runtime=driver,
             rivals_share=rivals_share,
             noise_floor=noise_floor,
-            workers=workers if workers is not None else effective_config.plan.workers,
+            workers=cli_workers if cli_workers is not None else effective_config.plan.workers,
             skills=found,
-            attempts=attempts,
+            attempts=cli_attempts,
             allow_truncation=allow_truncation,
             bootstrap_iterations=bootstrap_iterations,
             seed=seed,
@@ -585,7 +587,8 @@ def _prepare_and_confirm_sweep(
             skills=found,
             scales=scales,
             target=target,
-            clamp_to_queried=not effective_config.study.auto_queries,
+            clamp_to_queried=not effective_config.study.auto_queries
+            or bool(fresh_qs is None or fresh_qs.queries),
             query_set=fresh_qs,
         )
         if driver.rations_catalog and allow_truncation and found:
@@ -623,6 +626,8 @@ def _resolve_missing_sweep_targets(
     """Identify anchor or target skills that are missing or stale in the query file."""
     existing_query_set = load_query_set(queries_path) if queries_path.is_file() else None
     query_set = existing_query_set or QuerySet(queries=())
+    has_existing_queries = bool(query_set.queries)
+    queried_names = query_set.covered_skills()
     if target is not None:
         anchor_names: tuple[str, ...] = tuple(s.name for s in skills if s.name == target)
     else:
@@ -633,14 +638,19 @@ def _resolve_missing_sweep_targets(
                 skills,
                 actual_scales,
                 query_set=query_set,
-                clamp_to_queried=False,
+                clamp_to_queried=has_existing_queries,
             )
         except ValueError:
             return _SweepQueryResolution((), existing_query_set)
         anchor_names = (
-            resolved_anchors if resolved_anchors is not None else tuple(s.name for s in skills)
+            resolved_anchors
+            if resolved_anchors is not None
+            else (
+                tuple(s.name for s in skills if s.name in queried_names)
+                if has_existing_queries
+                else tuple(s.name for s in skills)
+            )
         )
-    queried_names = query_set.covered_skills()
     stale_names = query_set.stale_skills(skills)
     missing = tuple(name for name in anchor_names if name not in queried_names)
     stale = tuple(name for name in anchor_names if name in stale_names)
@@ -721,23 +731,72 @@ def _parse_scales_cli(
         raise ValueError(msg) from err
 
 
-def _resolve_sweep_effective_config(
+def _load_sweep_base_config(
     run_config: RunConfig | None,
-    agent: str | None,
-    model: str | None,
-    registry: RegistryFlags | None,
+    config: Path | None,
     skills: Path | None,
     queries: Path | None,
-    workdir: Path | None,
-    out: Path | None,
+    *,
+    cli_registry_requested: bool,
+) -> RunConfig | None:
+    """Load and adjust base RunConfig for sweep execution."""
+    if run_config is None:
+        discovered_path, is_explicit = _discover_config_path(config)
+        if discovered_path is not None:
+            run_config = RunConfig.from_toml(discovered_path, skills=skills)
+            if not is_explicit and skills is not None and queries is None:
+                run_config = run_config.model_copy(
+                    update={"study": run_config.study.model_copy(update={"queries": None})}
+                )
+    if run_config is not None:
+        if skills is not None and not cli_registry_requested:
+            run_config = run_config.model_copy(
+                update={"registry": run_config.registry.model_copy(update={"registry": False})}
+            )
+        elif cli_registry_requested and skills is None and run_config.study.skills is not None:
+            run_config = run_config.model_copy(
+                update={"study": run_config.study.model_copy(update={"skills": None})}
+            )
+    return run_config
+
+
+def _resolve_sweep_effective_config(
+    run_config: RunConfig | None = None,
+    agent: str | None = None,
+    model: str | None = None,
+    registry: RegistryFlags | None = None,
+    skills: Path | None = None,
+    queries: Path | None = None,
+    workdir: Path | None = None,
+    out: Path | None = None,
     auto_queries: bool | None = None,
+    *,
+    config: Path | None = None,
+    runtime: RuntimeFlags | None = None,
+    plan: PlanFlags | None = None,
 ) -> tuple[RunConfig, AgentRuntime]:
-    """Resolve layered runtime, registry, and study settings across CLI flags and configs."""
+    """Resolve layered runtime, plan, registry, and study settings across CLI flags and configs."""
+    cli_registry_requested = registry is not None and (
+        registry.registry or registry.project is not None
+    )
+    run_config = _load_sweep_base_config(
+        run_config,
+        config,
+        skills,
+        queries,
+        cli_registry_requested=cli_registry_requested,
+    )
+
+    runtime_flags = runtime or RuntimeFlags(agent=agent, model=model)
+    rt_overrides = runtime_flags.overrides()
     resolved_agent = (
-        agent
+        runtime_flags.agent
+        or agent
         or (
             run_config.runtime.agent
-            if run_config is not None and run_config.runtime.agent
+            if run_config is not None
+            and "agent" in run_config.runtime.model_fields_set
+            and run_config.runtime.agent
             else None
         )
         or (
@@ -747,21 +806,53 @@ def _resolve_sweep_effective_config(
         )
         or default_agent()
     )
-    eff_runtime = RunConfig.resolve(
-        RuntimeSettings,
-        run_config,
-        agent=resolved_agent,
-        model=model,
-    )
+    rt_overrides["agent"] = resolved_agent or "keyword"
+    if model is not None and "model" not in rt_overrides:
+        rt_overrides["model"] = model
+
+    try:
+        eff_runtime = RunConfig.resolve(
+            RuntimeSettings,
+            run_config,
+            **rt_overrides,
+        )
+    except PydanticValidationError as exc:
+        base_cfg = (run_config or RunConfig()).model_copy(
+            update={"runtime": RuntimeSettings(agent=str(rt_overrides["agent"]))}
+        )
+        reason = _opt_error_reason(exc, base_cfg, runtime_flags)
+        if reason is not None:
+            raise ValueError(reason) from exc
+        raise
+
     if not eff_runtime.agent:
         eff_runtime = eff_runtime.model_copy(update={"agent": "keyword"})
 
+    reg_overrides = registry.overrides() if registry is not None else {}
+    if skills is not None and not cli_registry_requested:
+        reg_overrides["registry"] = False
     eff_registry = resolve_sub_settings(
         RegistrySettings,
         run_config.registry if run_config is not None else None,
-        **(registry.overrides() if registry is not None else {}),
+        **reg_overrides,
     )
 
+    if (
+        eff_runtime.agent == "antigravity-sdk"
+        and eff_registry.project
+        and not eff_runtime.options.get("project")
+    ):
+        opts = dict(eff_runtime.options)
+        opts["project"] = eff_registry.project
+        if "location" in eff_registry.model_fields_set and not opts.get("location"):
+            opts["location"] = eff_registry.location
+        eff_runtime = eff_runtime.model_copy(update={"options": opts})
+
+    eff_plan = RunConfig.resolve(
+        PlanSettings,
+        run_config,
+        **(plan.overrides() if plan is not None else {}),
+    )
     eff_study = RunConfig.resolve(
         StudySettings,
         run_config,
@@ -775,6 +866,7 @@ def _resolve_sweep_effective_config(
     effective_config = (run_config or RunConfig()).model_copy(
         update={
             "runtime": eff_runtime,
+            "plan": eff_plan,
             "registry": eff_registry,
             "study": eff_study,
         }
@@ -791,22 +883,15 @@ def _load_sweep_corpus(
     global_scope: bool,
 ) -> tuple[Skill, ...]:
     """Load or discover candidate skills for sweep execution."""
-    if skills is not None or effective_config.study.skills is None:
-        eff_runtime = effective_config.runtime
-        found, _roots, _discovered = _corpus(
-            console,
-            driver,
-            settings=effective_config,
-            global_scope=global_scope,
-            agent=eff_runtime.agent,
-        )
-    else:
-        from reach.catalog import load_skills
-
-        found = load_skills(effective_config.require_skills())
-
+    found, _roots, _discovered = _corpus(
+        console,
+        driver,
+        settings=effective_config,
+        global_scope=global_scope,
+        agent=effective_config.runtime.agent,
+    )
     if not found:
-        raise _no_skills(skills, global_scope=global_scope)
+        raise _no_skills(skills or effective_config.study.skills, global_scope=global_scope)
     return tuple(found)
 
 
