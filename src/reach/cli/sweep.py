@@ -237,6 +237,51 @@ def _print_anchor_coverage(
         )
 
 
+def _resolve_sweep_cli_target_and_skills(
+    skills: Path | None,
+    target: str | None,
+    console: Console,
+) -> tuple[Path | None, str | None, int | None]:
+    """Resolve target skill and catalog path from positional arguments or flags."""
+    from reach.catalog import resolve_skill_target
+
+    if skills is not None and target is None:
+        raw_skills = str(skills)
+        candidate = resolve_path(skills)
+        is_single_skill_dir = candidate.is_dir() and (candidate / "SKILL.md").is_file()
+        is_manifest_file = candidate.is_file() and candidate.name == "SKILL.md"
+        is_bare_name = (
+            not candidate.exists()
+            and "/" not in raw_skills
+            and "\\" not in raw_skills
+            and not raw_skills.startswith(("~", "."))
+        )
+        if is_single_skill_dir or is_manifest_file:
+            try:
+                resolved_target = resolve_skill_target(candidate, command_name="sweep")
+                if resolved_target is not None:
+                    return resolved_target.catalog_path, resolved_target.skill_name, None
+            except (FileNotFoundError, ValueError) as err:
+                console.print(f"[red]Error:[/] {err}")
+                return skills, target, 2
+        elif is_bare_name:
+            return None, raw_skills, None
+
+    if target is not None:
+        try:
+            resolved_target = resolve_skill_target(
+                target, explicit_catalog=skills, command_name="sweep"
+            )
+            if resolved_target is not None:
+                eff_skills = skills if skills is not None else resolved_target.catalog_path
+                return eff_skills, resolved_target.skill_name, None
+        except (FileNotFoundError, ValueError) as err:
+            console.print(f"[red]Error:[/] {err}")
+            return skills, target, 2
+
+    return skills, target, None
+
+
 @app.command(name="sweep", group=LOOP)
 def _sweep(
     skills: Annotated[
@@ -362,34 +407,9 @@ def _sweep(
 ) -> int:
     """Execute multi-scale catalog evaluation sweeps to measure reachability decay."""
     console = build_console()
-    if skills is not None and target is None:
-        raw_skills = str(skills)
-        candidate = resolve_path(skills)
-        is_single_skill_dir = candidate.is_dir() and (candidate / "SKILL.md").is_file()
-        is_bare_name = (
-            not candidate.exists()
-            and "/" not in raw_skills
-            and "\\" not in raw_skills
-            and not raw_skills.startswith(("~", "."))
-        )
-        if candidate.is_file() or is_single_skill_dir or is_bare_name:
-            target = raw_skills
-            skills = None
-
-    if target is not None:
-        from reach.catalog import resolve_skill_target
-
-        try:
-            resolved_target = resolve_skill_target(
-                target, explicit_catalog=skills, command_name="sweep"
-            )
-            if resolved_target is not None:
-                target = resolved_target.skill_name
-                if skills is None and resolved_target.catalog_path:
-                    skills = resolved_target.catalog_path
-        except (FileNotFoundError, ValueError) as err:
-            console.print(f"[red]Error:[/] {err}")
-            return 2
+    skills, target, target_err = _resolve_sweep_cli_target_and_skills(skills, target, console)
+    if target_err is not None:
+        return target_err
 
     effective_config, driver = _resolve_sweep_effective_config(
         run_config=None,

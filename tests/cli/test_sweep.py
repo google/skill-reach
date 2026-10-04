@@ -26,7 +26,7 @@ from reach.cli import main
 from reach.models import Query, QueryKind
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
 from reach.runtime.fake import FakeGenerator
-from reach.sweep import ScalingStudy
+from reach.sweep import ScalingPoint, ScalingStudy
 
 
 @pytest.fixture
@@ -101,11 +101,10 @@ def _make_stub_study(
     probes_errored: int = 0,
 ) -> ScalingStudy:
     """Construct a minimal ScalingStudy fixture for CLI plumbing tests."""
-    from reach.sweep import ScalingPoint
-
+    point_scale = scales[0] if scales else 2
     point = ScalingPoint(
-        scale=scales[0],
-        catalog_id=f"sweep:corpus:{scales[0]}",
+        scale=point_scale,
+        catalog_id=f"sweep:corpus:{point_scale}",
         pass_rate=0.0 if probes_errored else 1.0,
         pass_rate_interval=(0.0, 0.27) if probes_errored else (1.0, 1.0),
         recall=0.0 if probes_errored else 1.0,
@@ -121,14 +120,14 @@ def _make_stub_study(
         target_skill=None,
         is_corpus_sweep=True,
         scales=scales,
-        points=(point,),
+        points=(point,) if scales else (),
         baseline_pass_rate=point.pass_rate,
         final_pass_rate=point.pass_rate,
         total_delta=0.0,
         total_context_loss=0.0,
         total_shadowing_loss=0.0,
         noise_floor=0.05,
-        total_corpus_skills=max(scales),
+        total_corpus_skills=max(scales) if scales else 2,
     )
 
 
@@ -1144,23 +1143,7 @@ def test_resolve_sweep_out_and_queries_paths(
     ) == Path(".reach/queries.json")
 
     if explicit_out == "custom.json":
-        study = (
-            _make_stub_study(scales=())
-            if False
-            else ScalingStudy(
-                target_skill=None,
-                is_corpus_sweep=True,
-                scales=(),
-                points=(),
-                baseline_pass_rate=1.0,
-                final_pass_rate=1.0,
-                total_delta=0.0,
-                total_context_loss=0.0,
-                total_shadowing_loss=0.0,
-                noise_floor=0.05,
-                total_corpus_skills=2,
-            )
-        )
+        study = _make_stub_study(scales=())
         csv_out = tmp_path / "out.csv"
         _write_sweep_file(study, format="text", out=csv_out)
         assert csv_out.is_file()

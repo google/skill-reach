@@ -392,12 +392,12 @@ Parameters for synthetic query drafting and leakage detection.
 
 Parameters for Google Cloud Agent Registry integration. When `--skills` or `[study].skills` is set without an explicit `--registry` or `--project` CLI flag, local skills take precedence over `[registry].project`. For `antigravity-sdk`, `[registry].project` and `[registry].location` also provide the default Agent Platform project and location when no Gemini API key is configured.
 
-| Key                 | Type    | Default    | Description                                                                         |
-| :------------------ | :------ | :--------- | :---------------------------------------------------------------------------------- |
-| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry and Agent Platform fallback.  |
-| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                   |
-| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                |
-| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating. |
+| Key                 | Type    | Default    | Description                                                                             |
+| :------------------ | :------ | :--------- | :-------------------------------------------------------------------------------------- |
+| `project`           | String  | `None`     | Default Google Cloud project ID hosting the Agent Registry and Agent Platform fallback. |
+| `location`          | String  | `"global"` | Agent Registry regional endpoint location (`global`, `us`, `eu`).                       |
+| `publisher`         | String  | `None`     | Optional publisher filter (e.g. `cloud.google.com`).                                    |
+| `cache_ttl_seconds` | Integer | `300`      | Local cache TTL in seconds for remote registry skill metadata before re-validating.     |
 
 ### `[retrieval]`
 
@@ -428,7 +428,7 @@ Controls default file paths for benchmark queries, skill roots, workspaces, and 
 | Key                    | Type                                | Default  | Description                                                                                                                                                     |
 | :--------------------- | :---------------------------------- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `anchor`               | Integer / Sequence[String] / String | `None`   | Anchor skills cohort evaluated across all scales (count, skill names list, or `"all"`).                                                                         |
-| `auto_queries`         | Boolean                             | `true`   | Automatically synthesize benchmark queries on cold start or for explicitly requested unqueried skills; existing non-empty query sets in sweeps are used as-is. |
+| `auto_queries`         | Boolean                             | `true`   | Automatically synthesize benchmark queries on cold start or for explicitly requested unqueried skills; existing non-empty query sets in sweeps are used as-is.  |
 | `bootstrap_iterations` | Integer                             | `200`    | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                                                        |
 | `bootstrap_seed`       | Integer / `None`                    | `42`     | Random seed for reproducible bootstrap resamples and curve perturbation.                                                                                        |
 | `catalog`              | String                              | `"auto"` | Target catalog scope: `"auto"` (derives from dataset/target), `"all"`, `"neighborhood:<skill>"`, or `"singleton:<skill>"`.                                      |

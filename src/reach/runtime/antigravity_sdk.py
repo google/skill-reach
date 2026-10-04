@@ -425,7 +425,11 @@ def _resolve_empty_selection_error(
 
 
 def _extract_prompt_tokens(agent: object) -> int | None:
-    """Extract cumulative prompt token count from SDK conversation usage metadata."""
+    """Extract cumulative prompt token count from SDK conversation usage metadata.
+
+    Returns cumulative prompt tokens billed across all conversational turns, or
+    None if no token usage metadata is reported.
+    """
     conv = getattr(agent, "conversation", None)
     if conv is None:
         return None

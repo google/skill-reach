@@ -93,6 +93,8 @@ def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
             return None, False
         return orig_discover(config)
 
+    import importlib
+
     monkeypatch.setattr(_cfg_mod, "_discover_config_path", _hermetic_discover)
     for mod_name in (
         "reach.cli.flags",
@@ -102,7 +104,8 @@ def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
         "reach.cli.cluster",
         "reach.cli.check",
     ):
-        if (mod := sys.modules.get(mod_name)) and hasattr(mod, "_discover_config_path"):
+        mod = importlib.import_module(mod_name)
+        if hasattr(mod, "_discover_config_path"):
             monkeypatch.setattr(mod, "_discover_config_path", _hermetic_discover)
 
 

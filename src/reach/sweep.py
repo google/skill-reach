@@ -553,19 +553,22 @@ def _resolve_sweep_target_and_queries(
         msg = f"target skill {target!r} not found in loaded skills{hint}"
         raise _SkillNotFoundError(msg)
 
-    other_covered = raw_query_set.covered_skills() - {target}
+    other_skills = sorted(
+        (set(by_name) | raw_query_set.covered_skills()) - {target},
+        key=len,
+        reverse=True,
+    )
     target_queries = tuple(
         q
         for q in raw_query_set.queries
-        if q.expected_skill == target
+        if (q.expected_skill == target and q.kind != QueryKind.NEIGHBOR_NEGATIVE)
         or q.is_out_of_scope
         or (
             q.kind == QueryKind.NEIGHBOR_NEGATIVE
             and not (
                 q.id.startswith("adv-")
-                and any(
-                    q.id.removeprefix("adv-").startswith(f"{other}-") for other in other_covered
-                )
+                and not q.id.removeprefix("adv-").startswith(f"{target}-")
+                and any(q.id.removeprefix("adv-").startswith(f"{other}-") for other in other_skills)
             )
         )
     )
