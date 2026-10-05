@@ -143,6 +143,29 @@ def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
         _ORIG_LOAD_MODEL2VEC.cache_clear()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _cache_cyclopts_completion_data() -> None:
+    """Cache cyclopts completion data extraction to eliminate redundant AST docstring parsing."""
+    import cyclopts.completion._base as c_base
+    import cyclopts.completion.bash as c_bash
+    import cyclopts.completion.fish as c_fish
+    import cyclopts.completion.zsh as c_zsh
+
+    orig = c_base.extract_completion_data
+    cache: dict[int, Any] = {}
+
+    def cached_extract(app: Any) -> Any:
+        key = id(app)
+        if key not in cache:
+            cache[key] = orig(app)
+        return cache[key]
+
+    cast("Any", c_base).extract_completion_data = cached_extract
+    cast("Any", c_bash).extract_completion_data = cached_extract
+    cast("Any", c_fish).extract_completion_data = cached_extract
+    cast("Any", c_zsh).extract_completion_data = cached_extract
+
+
 # ==============================================================================
 # 2. Pytest Hooks & Session Lifecycle
 # ==============================================================================
