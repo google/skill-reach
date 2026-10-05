@@ -22,9 +22,9 @@ import subprocess
 import tempfile
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from reach.catalog import deduplicate_skills, load_skills
 from reach.config import (
@@ -76,8 +76,8 @@ class EmpiricalMetrics(BaseModel):
     misroute_rate: float
     entrypoint_accuracy: float = 0.0
     trajectory_reachability: float = 0.0
-    step_efficiency: float | None = None
-    skill_f1: float | None = None
+    step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: float = 0.0
 
 
@@ -486,8 +486,8 @@ def _build_check_assertions(
     for name, label, observed, threshold, is_upper_bound, fmt in specs:
         if threshold is None:
             continue
+        thresh_str = f"{threshold:{fmt}}" if not fmt.startswith("+") else f"+{threshold:.2f}"
         if observed is None:
-            thresh_str = f"{threshold:{fmt}}" if not fmt.startswith("+") else f"+{threshold:.2f}"
             msg = (
                 f"{label} regression: metric was not observed (no in-scope queries evaluated) "
                 f"but required {thresh_str}"
@@ -505,7 +505,6 @@ def _build_check_assertions(
             continue
         passed = observed <= threshold if is_upper_bound else observed >= threshold
         obs_str = f"{observed:{fmt}}" if not fmt.startswith("+") else f"+{observed:.2f}"
-        thresh_str = f"{threshold:{fmt}}" if not fmt.startswith("+") else f"+{threshold:.2f}"
         if is_upper_bound:
             msg = (
                 f"{label} ({obs_str}) within threshold ({thresh_str})"

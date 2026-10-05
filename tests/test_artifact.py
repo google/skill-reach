@@ -1392,36 +1392,14 @@ def test_artifact_assembler_forwards_attempts_to_scores_and_intervals(
 
 
 def test_artifact_scores_nullable_trajectory_metrics(
-    whole_catalog,
-    corpus,
-    make_config,
-    make_result,
+    out_of_scope_artifact: Artifact,
 ) -> None:
     """Verify that step_efficiency and skill_f1 are None when all queries are out of scope."""
-    oos_query = Query(
-        id="q-oos",
-        text="Out of scope query",
-        kind=QueryKind.OUT_OF_SCOPE,
-        expected_skill=None,
-    )
-    query_set = QuerySet(
-        queries=(oos_query,),
-        provenance=QuerySetProvenance(origin=Origin.GENERATED, generator="test"),
-    )
-    results = [make_result("q-oos", None)]
-    config = make_config(catalog={"mode": CatalogMode.ALL})
-    built = assemble(
-        results,
-        query_set,
-        whole_catalog,
-        corpus,
-        config,
-    )
-    assert built.scores.step_efficiency is None
-    assert built.scores.skill_f1 is None
+    assert out_of_scope_artifact.scores.step_efficiency is None
+    assert out_of_scope_artifact.scores.skill_f1 is None
 
     # Verify round-trip serialization retains None
-    dumped = built.model_dump_json()
+    dumped = out_of_scope_artifact.model_dump_json()
     reloaded = Artifact.model_validate_json(dumped)
     assert reloaded.scores.step_efficiency is None
     assert reloaded.scores.skill_f1 is None

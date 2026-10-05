@@ -130,8 +130,8 @@ class ArmSummary(BaseModel):
     standard_error: float | None = None
     entrypoint_accuracy: float = 0.0
     trajectory_reachability: float = 0.0
-    step_efficiency: float | None = None
-    skill_f1: float | None = None
+    step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: float = 0.0
 
 

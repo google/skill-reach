@@ -343,17 +343,22 @@ def _filter_queries_by_targets(
 
     query_set = load_query_set(settings.study.queries)
     target_set = frozenset(targets)
-    filtered_queries = tuple(
+    target_matched = [
         q
         for q in query_set.queries
-        if q.expected_skill in target_set or q.truth_label in target_set or q.is_out_of_scope
-    )
-    if not filtered_queries:
+        if q.expected_skill in target_set or q.truth_label in target_set
+    ]
+    if not target_matched:
         msg = (
             f"no queries in {settings.study.queries} match --skill "
             f"{', '.join(repr(t) for t in targets)}"
         )
         raise ValueError(msg)
+    filtered_queries = tuple(
+        q
+        for q in query_set.queries
+        if q.expected_skill in target_set or q.truth_label in target_set or q.is_out_of_scope
+    )
     filtered_qs = query_set.model_copy(update={"queries": filtered_queries})
     filtered_path = scratch / "filtered-queries.json"
     save_query_set(filtered_qs, filtered_path)

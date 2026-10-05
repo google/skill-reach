@@ -774,10 +774,11 @@ def _cross_check(
 def _skill_score(
     metrics: ClassMetrics,
     root: Path | None,
-    attempts: int = 1,
+    attempts: int | None = None,
 ) -> SkillScore:
     """Construct a SkillScore model from ClassMetrics and root path."""
-    return SkillScore.from_class_metrics(metrics, root=root, attempts=attempts)
+    eff_attempts = attempts if attempts is not None else metrics.attempts
+    return SkillScore.from_class_metrics(metrics, root=root, attempts=eff_attempts)
 
 
 def _sample_queries(
@@ -962,9 +963,10 @@ def _build_run_scores(
     standard: ClassificationReport,
     unanimous: int,
     observed: int,
-    attempts: int = 1,
+    attempts: int | None = None,
 ) -> RunScores:
     """Assemble consistency, accuracy, and abstention metrics into RunScores."""
+    eff_attempts = attempts if attempts is not None else standard.attempts
     return RunScores(
         consistency=unanimous / observed if observed else 0.0,
         top1_accuracy=standard.top1_accuracy,
@@ -979,7 +981,7 @@ def _build_run_scores(
         skill_f1=standard.skill_f1,
         redundancy=standard.redundancy,
         scored=standard.scored,
-        attempts=attempts,
+        attempts=eff_attempts,
         abstention=Abstention(
             rate=standard.abstention_rate,
             false_rate=standard.false_abstention_rate,
@@ -990,7 +992,7 @@ def _build_run_scores(
             false_abstentions=standard.false_abstentions,
             out_of_scope=standard.out_of_scope,
             out_of_scope_detected=standard.out_of_scope_detected,
-            attempts=attempts,
+            attempts=eff_attempts,
         ),
         not_headline=NotHeadline(
             macro_f1=standard.macro_f1,

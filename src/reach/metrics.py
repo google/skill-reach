@@ -309,7 +309,7 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def out_of_scope_interval(self) -> Interval | None:
-        """Calculate cluster-adjusted Wilson interval for out-of-scope detection."""
+        """Calculate the cluster Wilson interval for out-of-scope detection rate."""
         return cluster_wilson_interval(
             self.out_of_scope_detected,
             self.out_of_scope,

@@ -1606,11 +1606,19 @@ def test_filter_queries_by_targets_retains_out_of_scope_queries(tmp_path: Path) 
     assert "q3" in filtered_ids
     assert "q2" not in filtered_ids
 
-    # Sad path: no targets match and no out-of-scope queries exist
+    # Sad path: no targets match even if out-of-scope queries are present
     no_match_qs = QuerySet(
         catalog_id="cat",
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
-        queries=(Query(id="q2", text="distractor 1", expected_skill="s2"),),
+        queries=(
+            Query(id="q2", text="distractor 1", expected_skill="s2"),
+            Query(
+                id="q3",
+                text="negative control",
+                expected_skill=None,
+                kind=QueryKind.OUT_OF_SCOPE,
+            ),
+        ),
     )
     no_match_path = tmp_path / "no_match_queries.json"
     save_query_set(no_match_qs, no_match_path)
