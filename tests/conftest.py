@@ -144,26 +144,37 @@ def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _cache_cyclopts_completion_data() -> None:
-    """Cache cyclopts completion data extraction to eliminate redundant AST docstring parsing."""
+def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
+    """Cache Cyclopts completion data extraction across test runs with session teardown."""
     import cyclopts.completion._base as c_base
     import cyclopts.completion.bash as c_bash
     import cyclopts.completion.fish as c_fish
     import cyclopts.completion.zsh as c_zsh
+    from cyclopts import App
 
-    orig = c_base.extract_completion_data
+    modules = (c_base, c_bash, c_fish, c_zsh)
+    orig_extract = c_base.extract_completion_data
     cache: dict[int, Any] = {}
 
-    def cached_extract(app: Any) -> Any:
+    def cached_extract(app: App) -> Any:
         key = id(app)
         if key not in cache:
-            cache[key] = orig(app)
-        return cache[key]
+            cache[key] = orig_extract(app)
+        # Callers treat completion data as immutable; return a shallow copy of the
+        # mapping to prevent dictionary mutation without attempting deepcopy on
+        # unpickleable thread locks within Cyclopts App instances.
+        return dict(cache[key])
 
-    cast("Any", c_base).extract_completion_data = cached_extract
-    cast("Any", c_bash).extract_completion_data = cached_extract
-    cast("Any", c_fish).extract_completion_data = cached_extract
-    cast("Any", c_zsh).extract_completion_data = cached_extract
+    attr_name = "extract_completion_data"
+    for mod in modules:
+        setattr(mod, attr_name, cached_extract)
+
+    try:
+        yield
+    finally:
+        for mod in modules:
+            setattr(mod, attr_name, orig_extract)
+        cache.clear()
 
 
 # ==============================================================================

@@ -377,6 +377,7 @@ def evaluated_run(draw: st.DrawFn) -> _EvaluatedRun:
     return _EvaluatedRun(queries=queries, baseline=_draw_results(), scaled=_draw_results())
 
 
+#: Cap examples to keep Shapley permutation decomposition within bounded test execution budgets.
 @settings(max_examples=25)
 @given(evaluated_run())
 def test_classification_report_and_decomposition_conservation(
