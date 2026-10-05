@@ -107,7 +107,35 @@ def test_roots_the_runtime_did_not_rank_are_reported_as_unresolved(
     (pair,) = found.ambiguous
     assert pair.name == "gke-basics"
     assert pair.paths == (first / "gke-basics", second / "gke-basics")
-    assert any("does not rank" in warning for warning in found.warnings)
+    assert any(
+        "duplicate skill 'gke-basics' found with equal precedence" in warning
+        and f"using {first / 'gke-basics'}" in warning
+        and f"(ignoring {second / 'gke-basics'})" in warning
+        for warning in found.warnings
+    )
+
+
+def test_multiple_roots_with_equal_precedence_list_all_ignored_paths(
+    make_skill_root,
+) -> None:
+    """Verify warning lists all secondary duplicate paths when three roots offer the same skill."""
+    r1 = make_skill_root("r1", {"shared": "First"})
+    r2 = make_skill_root("r2", {"shared": "Second"})
+    r3 = make_skill_root("r3", {"shared": "Third"})
+    runtime = FakeRuntime(
+        roots=[
+            SkillRoot(path=r1, scope="project", precedence=0),
+            SkillRoot(path=r2, scope="project", precedence=0),
+            SkillRoot(path=r3, scope="project", precedence=0),
+        ],
+    )
+    found = discover(runtime, Path.cwd())
+    assert len(found.ambiguous) == 1
+    (pair,) = found.ambiguous
+    assert pair.name == "shared"
+    assert pair.paths == (r1 / "shared", r2 / "shared", r3 / "shared")
+    expected_ignored = f"{r2 / 'shared'}, {r3 / 'shared'}"
+    assert any(f"using {r1 / 'shared'} (ignoring {expected_ignored})" in w for w in found.warnings)
 
 
 def test_one_skill_reached_through_nested_roots_is_not_a_duplicate(

@@ -81,10 +81,11 @@ class Discovery(BaseModel):
         """Generate warning messages for ambiguities, shadowing, and empty roots."""
         lines = []
         for pair in self.ambiguous:
-            where = ", ".join(str(path) for path in pair.paths)
+            kept = pair.paths[0]
+            ignored = ", ".join(str(path) for path in pair.paths[1:])
             lines.append(
-                f"{pair.name} is offered by roots the runtime does not rank "
-                f"against each other ({where}); the first was taken",
+                f"duplicate skill '{pair.name}' found with equal precedence; "
+                f"using {kept} (ignoring {ignored})",
             )
         lines.extend(
             f"{hidden.name} loaded from {hidden.kept}, shadowing "

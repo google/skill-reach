@@ -421,6 +421,8 @@ Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciproc
 | `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden or Google Enterprise mode is active; runner configuration variables such as `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). Set to `[]` to allow all ambient variables. |
 
+Agent-specific driver options (such as Claude Code's `disable_bundled_skills`, `skill_overrides`, and `enabled_plugins`) are configured under `[runtime.options]`. See [Driver Options](#driver-options) and the [Sandboxing Guide](guides/sandboxing.md) for full driver configuration details.
+
 ### `[study]`
 
 Controls default file paths for benchmark queries, skill roots, workspaces, and evaluation artifacts.
@@ -445,6 +447,63 @@ Controls default file paths for benchmark queries, skill roots, workspaces, and 
 > [!CAUTION]
 > **Risk of Bypassing Safety Confirmation**
 > Setting `trusted = true` bypasses interactive safety confirmation prompts across all commands that launch live agent probes. **Only enable `trusted = true` in private repositories where all skill manifests and instructions have been vetted and reviewed.** Never enable `trusted = true` on repositories that evaluate untrusted or community-contributed skills.
+
+---
+
+## Driver Options
+
+Driver-specific settings can be passed in `reach.toml` under `[runtime.options]`.
+
+### Claude Code (`claude-code`)
+
+When `agent = "claude-code"`, the following options configure Claude Code's execution, isolation, and listing budgets:
+
+| Key                             | Type                     | Default                  | Description                                                                                                            |
+| :------------------------------ | :----------------------- | :----------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| `executable`                    | String                   | `"claude"`               | Path or command name for the Claude Code CLI binary.                                                                   |
+| `model`                         | String                   | `"claude-sonnet-5"`      | Model identifier to evaluate.                                                                                          |
+| `disable_bundled_skills`        | Boolean                  | `true`                   | When true, disables default runtime-bundled skills, built-in plugin mods, and ambient instruction files (`CLAUDE.md`). |
+| `skill_overrides`               | Mapping[String, String]  | Built-in skills disabled | Explicit skill activation overrides passed to Claude Code to suppress bundled skills.                                  |
+| `enabled_plugins`               | Mapping[String, Boolean] | Built-in mods disabled   | Explicit plugin activation states to suppress default runtime mods.                                                    |
+| `skill_listing_budget_fraction` | Float                    | `None`                   | Fraction of total model context window allocated to the resident skill listing table (e.g. `0.05` for 5%).             |
+| `skill_listing_max_desc_chars`  | Integer                  | `None`                   | Maximum character length for each individual skill description before description truncation.                          |
+| `setting_sources`               | String                   | `"project"`              | Setting sources passed via `--setting-sources` (`"project"`, `"user"`, etc.).                                          |
+
+### Goose (`goose`)
+
+When `agent = "goose"`, the following options configure the Goose agent CLI:
+
+| Key            | Type    | Default              | Description                                                                       |
+| :------------- | :------ | :------------------- | :-------------------------------------------------------------------------------- |
+| `executable`   | String  | `"goose"`            | Path or command name for the Goose CLI binary.                                    |
+| `model`        | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                     |
+| `provider`     | String  | Inferred             | Model provider identifier (e.g. `"google"`, `"anthropic"`, `"openai"`).           |
+| `no_profile`   | Boolean | `true`               | When true, bypasses user developer profiles and ambient configurations.           |
+| `with_builtin` | String  | `"skills"`           | Built-in extensions to enable (restricted to `"skills"` for isolated evaluation). |
+
+### Pi (`pi`)
+
+When `agent = "pi"`, the following options configure the Pi agent harness CLI:
+
+| Key          | Type   | Default              | Description                                 |
+| :----------- | :----- | :------------------- | :------------------------------------------ |
+| `executable` | String | `"pi"`               | Path or command name for the Pi CLI binary. |
+| `model`      | String | `"gemini-3.8-flash"` | Model identifier to evaluate.               |
+| `provider`   | String | `"google"`           | Model provider identifier.                  |
+
+### Google Antigravity (`antigravity-cli` & `antigravity-sdk`)
+
+When `agent = "antigravity-cli"` or `agent = "antigravity-sdk"`, the following options configure Antigravity execution:
+
+| Key          | Type   | Default              | Description                                                                  |
+| :----------- | :----- | :------------------- | :--------------------------------------------------------------------------- |
+| `executable` | String | `"agy"`              | Path or command name for the Antigravity CLI binary (for `antigravity-cli`). |
+| `model`      | String | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                |
+| `project`    | String | Inferred             | Google Cloud project ID hosting the target endpoints or Agent Registry.      |
+
+### Keyword (`keyword`)
+
+The keyword driver runs entirely in memory without external subprocesses or model APIs and requires no driver options.
 
 ---
 

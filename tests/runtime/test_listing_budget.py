@@ -27,7 +27,9 @@ from reach.models import Catalog, CatalogMode
 from reach.runtime.claude_code import (
     DEFAULT_CHARS_PER_TOKEN,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_ENABLED_PLUGINS,
     DEFAULT_LISTING_BUDGET_CHARS,
+    DEFAULT_SKILL_OVERRIDES,
     ClaudeCodeOptions,
     ClaudeCodeRuntime,
     budget_fraction_for,
@@ -95,7 +97,11 @@ def test_a_set_control_reaches_the_command_line_under_the_runtimes_own_name(
 def test_the_settings_payload_is_unchanged_when_neither_control_is_set() -> None:
     """Verify settings_json maintains default JSON payload when listing options are unset."""
     assert ClaudeCodeOptions().settings_json() == json.dumps(
-        {"disableBundledSkills": True, "skillOverrides": {"doctor": "off"}},
+        {
+            "disableBundledSkills": True,
+            "enabledPlugins": dict(DEFAULT_ENABLED_PLUGINS),
+            "skillOverrides": dict(DEFAULT_SKILL_OVERRIDES),
+        },
         sort_keys=True,
     )
 
