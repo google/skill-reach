@@ -1043,7 +1043,7 @@ def out_of_scope_artifact(
     )
     query_set = QuerySet(
         queries=(oos_query,),
-        provenance=QuerySetProvenance(origin=Origin.GENERATED, generator="test"),
+        provenance=QuerySetProvenance(origin=Origin.GENERATED),
     )
     results = [make_result("q-oos", None)]
     config = make_config(catalog={"mode": CatalogMode.ALL})
