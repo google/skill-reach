@@ -24,6 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from reach.rendering import csv_document, dispatch_render
+from reach.sweep import _MIN_KNEE_POINTS
 from reach.uncertainty import Interval
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
     from rich.console import Console
 
-    from reach.sweep import ScalingPoint, ScalingStudy
+    from reach.sweep import ReplicateCollisionDiagnostic, ScalingPoint, ScalingStudy
 
 __all__ = [
     "SWEEP_RENDERERS",
@@ -47,8 +48,71 @@ _PASS_RATE_HIGH: float = 0.8
 _PASS_RATE_MID: float = 0.5
 _MIN_CURVE_POINTS: int = 2
 _MIN_SCALES_FOR_LOSS_DECOMPOSITION: int = 2
-_MIN_KNEE_POINTS: int = 3
-_LEVEL_TOLERANCE: float = 0.125
+_MAX_SHOWN_COLLISION_GROUPS: int = 3
+_MAX_SUSPECT_DISTRACTORS: int = 2
+_MIN_DROP_PROB_FOR_GRADUAL_LABEL: float = 0.50
+_MIN_GRADUAL_PROB_DISPLAY: float = 0.01
+
+
+def _format_knee_interval(study: ScalingStudy) -> str:
+    """Format bootstrap knee confidence interval with right-censoring indicator when present."""
+    if study.knee_scale_interval is None:
+        return ""
+    low, high = study.knee_scale_interval
+    hi_str = f">{high}" if study.knee_upper_censored else str(high)
+    return f"[{low}, {hi_str}]"
+
+
+def _format_knee_bootstrap_distribution(study: ScalingStudy) -> str:
+    """Format bootstrap knee PMF with cliff, gradual-decay, and drop probabilities."""
+    if not study.knee_scale_pmf:
+        return ""
+    pmf_parts = [f"K={k}: {prob * 100:.0f}%" for k, prob in study.knee_scale_pmf.items()]
+    extra_probs: list[str] = []
+    if study.cliff_probability is not None and study.cliff_probability > 0:
+        extra_probs.append(f"cliff P(k*=K₀)={study.cliff_probability * 100:.0f}%")
+    if study.drop_probability is not None:
+        pmf_sum = sum(study.knee_scale_pmf.values())
+        gradual_prob = max(0.0, round(study.drop_probability - pmf_sum, 4))
+        if gradual_prob >= _MIN_GRADUAL_PROB_DISPLAY:
+            extra_probs.append(f"gradual={gradual_prob * 100:.0f}%")
+        extra_probs.append(f"drop={study.drop_probability * 100:.0f}%")
+    suffix = f" ({', '.join(extra_probs)})" if extra_probs else ""
+    return f"{', '.join(pmf_parts)}{suffix}"
+
+
+def _format_replicate_collisions_summary(
+    collisions: Sequence[ReplicateCollisionDiagnostic],
+) -> str:
+    """Group replicate flips by (expected_skill, suspect_distractors) and format top entries."""
+    if not collisions:
+        return ""
+    grouped_scales: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+    for item in collisions:
+        target_label = item.expected_skill or item.query_id
+        distractors = item.suspect_distractors[:_MAX_SUSPECT_DISTRACTORS]
+        key = (target_label, distractors)
+        grouped_scales.setdefault(key, []).append(item.scale)
+
+    sorted_groups = sorted(
+        grouped_scales.items(),
+        key=lambda kv: (-len(kv[1]), kv[0][0], kv[0][1]),
+    )
+    summaries: list[str] = []
+    for (target_label, distractors), scales in sorted_groups[:_MAX_SHOWN_COLLISION_GROUPS]:
+        flips = len(scales)
+        flip_word = "flip" if flips == 1 else "flips"
+        scales_str = ",".join(str(s) for s in sorted(set(scales)))
+        if distractors:
+            summaries.append(
+                f"{target_label} ← {', '.join(distractors)} ({flips} {flip_word} @ K={scales_str})"
+            )
+        else:
+            summaries.append(f"{target_label} ({flips} {flip_word} @ K={scales_str})")
+
+    extra_groups = len(sorted_groups) - _MAX_SHOWN_COLLISION_GROUPS
+    more = f" (+{extra_groups} more)" if extra_groups > 0 else ""
+    return f"{', '.join(summaries)}{more}"
 
 
 def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:  # noqa: PLR0912, PLR0915
@@ -58,28 +122,35 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         (f"{study.total_corpus_skills} skills", "cyan bold"),
         (" across library sizes", "dim"),
     ]
-    if study.anchor_skills:
-        header.extend(
-            [
-                (" (", "dim"),
-                (f"{len(study.anchor_skills)} anchor skills", "green bold"),
-                (")", "dim"),
-            ]
-        )
+    if study.anchor_skills or study.catalog_replicates > 1:
+        header.append((" (", "dim"))
+        if study.anchor_skills:
+            header.append((f"{len(study.anchor_skills)} anchor skills", "green bold"))
+            if study.catalog_replicates > 1:
+                header.append((f", {study.catalog_replicates} replicates", "dim"))
+        else:
+            header.append((f"{study.catalog_replicates} replicates", "dim"))
+        header.append((")", "dim"))
     console.print(Text.assemble(*header))
 
     decision_lines: list[tuple[str, str]] = []
+    knee_ci_text = _format_knee_interval(study)
     if study.knee_scale is not None:
         decision_lines.append(
             (f"  • Capacity Knee Inflection (Kneedle k*): K = {study.knee_scale}", "bold cyan")
         )
-        if study.knee_scale_interval is not None:
-            decision_lines.append(
-                (
-                    f" (95% CI: [{study.knee_scale_interval[0]}, {study.knee_scale_interval[1]}])",
-                    "dim",
-                )
-            )
+        if knee_ci_text:
+            decision_lines.append((f" (95% CI: {knee_ci_text})", "dim"))
+        decision_lines.append(("\n", ""))
+    elif knee_ci_text:
+        gradual_text = f"  • Capacity Knee Inflection: gradual decay (95% CI: {knee_ci_text})"
+        decision_lines.append((gradual_text, "dim"))
+        decision_lines.append(("\n", ""))
+    elif (
+        study.drop_probability is not None
+        and study.drop_probability >= _MIN_DROP_PROB_FOR_GRADUAL_LABEL
+    ):
+        decision_lines.append(("  • Capacity Knee Inflection: gradual decay", "dim"))
         decision_lines.append(("\n", ""))
     elif len(study.scales) < _MIN_KNEE_POINTS:
         hint_text = (
@@ -87,6 +158,11 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             f"to detect (evaluated {len(study.scales)})"
         )
         decision_lines.append((hint_text, "dim"))
+        decision_lines.append(("\n", ""))
+
+    boot_dist_text = _format_knee_bootstrap_distribution(study)
+    if boot_dist_text:
+        decision_lines.append((f"  • Knee Bootstrap Distribution: {boot_dist_text}", "dim"))
         decision_lines.append(("\n", ""))
 
     if (
@@ -103,17 +179,33 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
 
     if len(study.scales) >= _MIN_SCALES_FOR_LOSS_DECOMPOSITION and (
         study.total_delta != 0
-        or study.total_shadowing_loss != 0
-        or study.total_context_loss != 0
+        or study.total_collision_loss != 0
+        or study.total_abstention_loss != 0
         or study.total_truncated_loss != 0
     ):
         loss_text = (
             f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}, "
             f"{study.total_delta * 100:+.1f}% pass-rate drop): "
-            f"Δ Shadowing {study.total_shadowing_loss * 100:+.1f}% | "
-            f"Δ Context {study.total_context_loss * 100:+.1f}%"
+            f"Δ Collision {study.total_collision_loss * 100:+.1f}% | "
+            f"Δ Abstention {study.total_abstention_loss * 100:+.1f}%"
         )
         decision_lines.append((loss_text, "dim"))
+        decision_lines.append(("\n", ""))
+
+    if study.skill_icc is not None:
+        decision_lines.append(
+            (f"  • Baseline Intra-Skill Correlation (ICC): rho={study.skill_icc:.2f}", "dim")
+        )
+        decision_lines.append(("\n", ""))
+
+    collision_summary = _format_replicate_collisions_summary(study.replicate_collisions)
+    if collision_summary:
+        decision_lines.append(
+            (
+                f"  • Replicate Collision Sensitivity: {collision_summary}",
+                "yellow",
+            )
+        )
         decision_lines.append(("\n", ""))
 
     if study.total_truncated_loss > 0:
@@ -153,7 +245,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         table.add_column("Abstain", justify="right", no_wrap=True)
     table.add_column("F1", justify="right", no_wrap=True)
     table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
-    table.add_column("Δ Shadow", justify="right", style="red", no_wrap=True)
+    table.add_column("Δ Collide", justify="right", style="red", no_wrap=True)
     if has_truncation:
         table.add_column("Trunc", justify="right", style="yellow", no_wrap=True)
     table.add_column("Tokens", justify="right", style="dim", no_wrap=True)
@@ -172,7 +264,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         rec_pct = f"{pt.recall * 100:.1f}%"
         prec_pct = f"{pt.precision * 100:.1f}%"
         f1_ci_str = Interval.from_tuple(pt.f1_interval).format_percent(separator="-")
-        shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
+        col_str = f"{pt.delta_collision * 100:+.1f}%" if pt.delta_collision != 0 else "0.0%"
         tok_str = f"{pt.prompt_tokens_mean:,.0f}" if pt.prompt_tokens_mean is not None else "—"
         base_probes_str = (
             f"{pt.in_scope_probes}/{pt.negative_probes}"
@@ -199,7 +291,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             [
                 Text(f1_pct, style=rate_style),
                 f1_ci_str,
-                shd_str,
+                col_str,
             ]
         )
         if has_truncation:
@@ -226,17 +318,19 @@ def _format_probes_cell(base_probes_str: str, probes_errored: int) -> str | Text
     return base_probes_str
 
 
-def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
-    """Render a Rich table and loss decomposition for single-skill scaling sweep."""
+def _print_single_skill_header(console: Console, study: ScalingStudy) -> None:
+    """Render header, knee summary, and collision lines for single-skill sweep."""
     target_display = study.target_skill or "all"
-    console.print(
-        Text.assemble(
-            ("Scaling Sweep: ", "bold"),
-            (target_display, "cyan bold"),
-            (" across library sizes", "dim"),
-        )
-    )
+    header: list[tuple[str, str]] = [
+        ("Scaling Sweep: ", "bold"),
+        (target_display, "cyan bold"),
+        (" across library sizes", "dim"),
+    ]
+    if study.catalog_replicates > 1:
+        header.append((f" ({study.catalog_replicates} replicates)", "dim"))
+    console.print(Text.assemble(*header))
 
+    knee_ci_text = _format_knee_interval(study)
     if study.knee_scale is not None:
         if (
             study.steepest_drop_scales is not None
@@ -249,11 +343,13 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
                 f"of {study.steepest_drop_delta * 100:.1f}%)"
             )
         else:
-            knee_note = " (capacity cliff where distractor shadowing accelerates)"
+            knee_note = " (capacity cliff where skill collisions accelerate)"
+        ci_suffix = f" [95% CI: {knee_ci_text}]" if knee_ci_text else ""
         console.print(
             Text.assemble(
                 ("Capacity Knee: ", "bold yellow"),
                 (f"k* = {study.knee_scale}", "bold yellow"),
+                (ci_suffix, "dim"),
                 (knee_note, "dim"),
             )
         )
@@ -266,6 +362,14 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             )
         )
 
+    boot_dist_text = _format_knee_bootstrap_distribution(study)
+    if boot_dist_text:
+        console.print(Text(f"Knee Bootstrap Distribution: {boot_dist_text}", style="dim"))
+
+    collision_summary = _format_replicate_collisions_summary(study.replicate_collisions)
+    if collision_summary:
+        console.print(Text(f"Replicate Collision Sensitivity: {collision_summary}", style="yellow"))
+
     if study.total_truncated_loss > 0:
         console.print(
             Text(
@@ -275,6 +379,10 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             )
         )
 
+
+def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
+    """Render a Rich table and loss decomposition for single-skill scaling sweep."""
+    _print_single_skill_header(console, study)
     has_truncation = any(pt.delta_truncated != 0 for pt in study.points)
     compact_cols = has_truncation
     table = Table(
@@ -289,12 +397,12 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
     table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
     table.add_column("Δ Total", justify="right", no_wrap=True)
     table.add_column(
-        "Δ Ctx" if compact_cols else "Δ Context", justify="right", style="cyan", no_wrap=True
+        "Δ Abstain" if compact_cols else "Δ Abstention", justify="right", style="cyan", no_wrap=True
     )
     if has_truncation:
         table.add_column("Δ Trunc", justify="right", style="yellow", no_wrap=True)
     table.add_column(
-        "Δ Shadow" if compact_cols else "Δ Shadowing", justify="right", style="red", no_wrap=True
+        "Δ Collide" if compact_cols else "Δ Collision", justify="right", style="red", no_wrap=True
     )
     table.add_column("Probes", justify="right", no_wrap=True)
     table.add_column(
@@ -313,8 +421,8 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         )
 
         tot_str = f"{pt.delta_vs_baseline * 100:+.1f}%" if pt.delta_vs_baseline != 0 else "0.0%"
-        ctx_str = f"{pt.delta_context * 100:+.1f}%" if pt.delta_context != 0 else "0.0%"
-        shd_str = f"{pt.delta_shadowing * 100:+.1f}%" if pt.delta_shadowing != 0 else "0.0%"
+        abs_str = f"{pt.delta_abstention * 100:+.1f}%" if pt.delta_abstention != 0 else "0.0%"
+        col_str = f"{pt.delta_collision * 100:+.1f}%" if pt.delta_collision != 0 else "0.0%"
         probes_str = f"{pt.probes_executed - pt.probes_failed}/{pt.probes_executed}"
         probes_cell = _format_probes_cell(probes_str, pt.probes_errored)
         dur_str = f"{pt.duration_ms_mean:.0f}ms" if pt.duration_ms_mean > 0 else "—"
@@ -324,12 +432,12 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             Text(pct, style=rate_style),
             ci,
             tot_str,
-            ctx_str,
+            abs_str,
         ]
         if has_truncation:
             trunc_str = f"{pt.delta_truncated * 100:+.1f}%" if pt.delta_truncated != 0 else "0.0%"
             row.append(trunc_str)
-        row.extend([shd_str, probes_cell, dur_str])
+        row.extend([col_str, probes_cell, dur_str])
         table.add_row(*row)
 
     console.print(table)
@@ -424,8 +532,11 @@ def render_sweep_json(study: ScalingStudy) -> str:
 def _extract_knee_csv_cells(study: ScalingStudy) -> tuple[str, str, str]:
     """Extract formatted knee scale and confidence interval bounds for CSV export."""
     knee_str = str(study.knee_scale) if study.knee_scale is not None else ""
-    knee_low = str(study.knee_scale_interval[0]) if study.knee_scale_interval is not None else ""
-    knee_high = str(study.knee_scale_interval[1]) if study.knee_scale_interval is not None else ""
+    if study.knee_scale_interval is None:
+        return knee_str, "", ""
+    knee_low = str(study.knee_scale_interval[0])
+    high_val = study.knee_scale_interval[1]
+    knee_high = f">{high_val}" if study.knee_upper_censored else str(high_val)
     return knee_str, knee_low, knee_high
 
 
@@ -488,9 +599,9 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             f"{pt.pass_rate_interval[0]:.4f}",
             f"{pt.pass_rate_interval[1]:.4f}",
             f"{pt.delta_vs_baseline:.4f}",
-            f"{pt.delta_context:.4f}",
+            f"{pt.delta_abstention:.4f}",
             f"{pt.delta_truncated:.4f}",
-            f"{pt.delta_shadowing:.4f}",
+            f"{pt.delta_collision:.4f}",
             knee_str,
             knee_low,
             knee_high,
@@ -508,9 +619,9 @@ def render_sweep_csv(study: ScalingStudy) -> str:
         "wilson_low",
         "wilson_high",
         "delta_total",
-        "delta_context",
+        "delta_abstention",
         "delta_truncated",
-        "delta_shadowing",
+        "delta_collision",
         "knee_scale",
         "knee_ci_low",
         "knee_ci_high",

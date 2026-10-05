@@ -21,7 +21,7 @@ import statistics
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Annotated, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from reach.models import (
     NO_SKILL,
@@ -550,17 +550,27 @@ def collisions(
 class DecompositionResult(BaseModel):
     """Represent decomposition of pass-rate drop between baseline and scaled catalogs."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     baseline_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     scaled_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     delta_total: float
-    delta_context: float
-    delta_shadowing: float
+    delta_abstention: float = Field(
+        validation_alias=AliasChoices("delta_abstention", "delta_context")
+    )
+    delta_collision: float = Field(
+        validation_alias=AliasChoices("delta_collision", "delta_shadowing")
+    )
     delta_truncated: float = 0.0
     delta_total_ci: tuple[float, float] = (0.0, 0.0)
-    delta_context_ci: tuple[float, float] = (0.0, 0.0)
-    delta_shadowing_ci: tuple[float, float] = (0.0, 0.0)
+    delta_abstention_ci: tuple[float, float] = Field(
+        default=(0.0, 0.0),
+        validation_alias=AliasChoices("delta_abstention_ci", "delta_context_ci"),
+    )
+    delta_collision_ci: tuple[float, float] = Field(
+        default=(0.0, 0.0),
+        validation_alias=AliasChoices("delta_collision_ci", "delta_shadowing_ci"),
+    )
     delta_truncated_ci: tuple[float, float] = (0.0, 0.0)
     sample_size: Annotated[int, Field(ge=0)] = 0
     baseline_ci: tuple[float, float] = (0.0, 0.0)
@@ -580,8 +590,8 @@ def _probe_outcome_is_pass(result: ProbeResult, query: Query | None = None) -> b
     return result.selected
 
 
-def _probe_failure_is_context(result: ProbeResult) -> bool:
-    """Determine whether a failed probe is attributed to context dilution or omission."""
+def _probe_failure_is_abstention(result: ProbeResult) -> bool:
+    """Determine whether a failed probe is attributed to false abstention (omission)."""
     if result.invocation_pattern is not None:
         return result.invocation_pattern is InvocationPattern.ABANDONED
     return not result.selected
@@ -599,9 +609,36 @@ class _QueryDrop(NamedTuple):
     base_pass: float
     scaled_pass: float
     delta: float
-    delta_context: float
-    delta_shadowing: float
+    delta_abstention: float
+    delta_collision: float
     delta_truncated: float = 0.0
+
+
+def _build_query_strata(
+    qids: Sequence[str],
+    truth: Mapping[str, str | None] | None = None,
+    queries_by_id: Mapping[str, Query] | None = None,
+) -> tuple[tuple[str, ...], ...]:
+    """Partition query IDs into strata grouped by expected_skill."""
+    if not truth and not queries_by_id:
+        return (tuple(qids),) if qids else ()
+    by_skill: dict[str | None, list[str]] = defaultdict(list)
+    for qid in qids:
+        q = queries_by_id.get(qid) if queries_by_id is not None else None
+        exp = q.expected_skill if q is not None else (truth.get(qid) if truth is not None else None)
+        by_skill[exp].append(qid)
+    return tuple(tuple(group) for group in by_skill.values() if group)
+
+
+def _draw_stratified_qids[T](
+    strata: Sequence[Sequence[T]],
+    rng: random.Random,
+) -> list[T]:
+    """Draw a bootstrap sample with replacement within each skill stratum."""
+    sampled: list[T] = []
+    for group in strata:
+        sampled.extend(rng.choices(group, k=len(group)))
+    return sampled
 
 
 def _bootstrap_decomposition_ci(
@@ -609,6 +646,7 @@ def _bootstrap_decomposition_ci(
     iterations: int,
     seed: int,
     confidence: float = DEFAULT_CONFIDENCE,
+    strata_indices: Sequence[tuple[int, ...]] | None = None,
 ) -> tuple[
     tuple[float, float],
     tuple[float, float],
@@ -623,31 +661,31 @@ def _bootstrap_decomposition_ci(
     # Standard pseudo-random generator is appropriate for Monte Carlo bootstrap
     rng = random.Random(seed)  # noqa: S311
     boot_deltas: list[float] = []
-    boot_ctx: list[float] = []
-    boot_shd: list[float] = []
+    boot_abs: list[float] = []
+    boot_col: list[float] = []
     boot_trunc: list[float] = []
-    indices = list(range(m))
+    effective_strata: Sequence[tuple[int, ...]] = strata_indices or (tuple(range(m)),)
 
     for _ in range(iterations):
-        sample_idx = [rng.choice(indices) for _ in range(m)]
+        sample_idx = _draw_stratified_qids(effective_strata, rng)
         boot_deltas.append(statistics.fmean([drops[i].delta for i in sample_idx]))
-        boot_ctx.append(statistics.fmean([drops[i].delta_context for i in sample_idx]))
-        boot_shd.append(statistics.fmean([drops[i].delta_shadowing for i in sample_idx]))
+        boot_abs.append(statistics.fmean([drops[i].delta_abstention for i in sample_idx]))
+        boot_col.append(statistics.fmean([drops[i].delta_collision for i in sample_idx]))
         boot_trunc.append(statistics.fmean([drops[i].delta_truncated for i in sample_idx]))
 
     boot_deltas.sort()
-    boot_ctx.sort()
-    boot_shd.sort()
+    boot_abs.sort()
+    boot_col.sort()
     boot_trunc.sort()
 
     q_low, q_high = bootstrap_quantiles(confidence)
     low_idx = max(0, int(iterations * q_low))
     high_idx = min(int(iterations * q_high), iterations - 1)
     delta_ci = (round(boot_deltas[low_idx], 4), round(boot_deltas[high_idx], 4))
-    ctx_ci = (round(boot_ctx[low_idx], 4), round(boot_ctx[high_idx], 4))
-    shd_ci = (round(boot_shd[low_idx], 4), round(boot_shd[high_idx], 4))
+    abs_ci = (round(boot_abs[low_idx], 4), round(boot_abs[high_idx], 4))
+    col_ci = (round(boot_col[low_idx], 4), round(boot_col[high_idx], 4))
     trunc_ci = (round(boot_trunc[low_idx], 4), round(boot_trunc[high_idx], 4))
-    return delta_ci, ctx_ci, shd_ci, trunc_ci
+    return delta_ci, abs_ci, col_ci, trunc_ci
 
 
 def _group_valid_results_by_query(
@@ -690,23 +728,23 @@ def _decompose_query_drop(
     s_trunc = sum(1.0 for r in s_fails if _probe_is_truncated(r)) / n_s
     delta_trunc = s_trunc - b_trunc
 
-    b_ctx = (
-        sum(1.0 for r in b_fails if not _probe_is_truncated(r) and _probe_failure_is_context(r))
+    b_abs = (
+        sum(1.0 for r in b_fails if not _probe_is_truncated(r) and _probe_failure_is_abstention(r))
         / n_b
     )
-    s_ctx = (
-        sum(1.0 for r in s_fails if not _probe_is_truncated(r) and _probe_failure_is_context(r))
+    s_abs = (
+        sum(1.0 for r in s_fails if not _probe_is_truncated(r) and _probe_failure_is_abstention(r))
         / n_s
     )
-    delta_ctx = s_ctx - b_ctx
-    delta_shd = delta - delta_ctx - delta_trunc
+    delta_abs = s_abs - b_abs
+    delta_col = delta - delta_abs - delta_trunc
 
     return _QueryDrop(
         p_base,
         p_scaled,
         delta,
-        delta_ctx,
-        delta_shd,
+        delta_abs,
+        delta_col,
         delta_trunc,
     )
 
@@ -732,7 +770,7 @@ def decompose_pass_rate_drop(
     iterations: int = 2000,
     seed: int = 42,
 ) -> DecompositionResult:
-    """Decompose overall pass-rate drop into context dilution versus skill shadowing components."""
+    """Decompose overall pass-rate drop into abstention, collision, and truncation components."""
     truth_map: dict[str, Query] = {q.id: q for q in queries} if queries else {}
     base_by_query = _group_valid_results_by_query(baseline_results)
     scaled_by_query = _group_valid_results_by_query(scaled_results)
@@ -743,12 +781,12 @@ def decompose_pass_rate_drop(
             baseline_pass_rate=0.0,
             scaled_pass_rate=0.0,
             delta_total=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
+            delta_abstention=0.0,
+            delta_collision=0.0,
             delta_truncated=0.0,
             delta_total_ci=(0.0, 0.0),
-            delta_context_ci=(0.0, 0.0),
-            delta_shadowing_ci=(0.0, 0.0),
+            delta_abstention_ci=(0.0, 0.0),
+            delta_collision_ci=(0.0, 0.0),
             delta_truncated_ci=(0.0, 0.0),
             sample_size=0,
         )
@@ -765,12 +803,18 @@ def decompose_pass_rate_drop(
     base_pass_rate = statistics.fmean(d.base_pass for d in drops)
     scaled_pass_rate = statistics.fmean(d.scaled_pass for d in drops)
     delta_total = statistics.fmean(d.delta for d in drops)
-    delta_ctx = statistics.fmean(d.delta_context for d in drops)
-    delta_shd = statistics.fmean(d.delta_shadowing for d in drops)
+    delta_abs = statistics.fmean(d.delta_abstention for d in drops)
+    delta_col = statistics.fmean(d.delta_collision for d in drops)
     delta_trunc = statistics.fmean(d.delta_truncated for d in drops)
 
-    delta_ci, ctx_ci, shd_ci, trunc_ci = _bootstrap_decomposition_ci(
-        drops, iterations=iterations, seed=seed
+    strata_indices: tuple[tuple[int, ...], ...] | None = None
+    if truth_map:
+        qid_to_idx = {qid: idx for idx, qid in enumerate(common_qids)}
+        qid_strata = _build_query_strata(common_qids, queries_by_id=truth_map)
+        strata_indices = tuple(tuple(qid_to_idx[qid] for qid in group) for group in qid_strata)
+
+    delta_ci, abs_ci, col_ci, trunc_ci = _bootstrap_decomposition_ci(
+        drops, iterations=iterations, seed=seed, strata_indices=strata_indices
     )
 
     m = len(common_qids)
@@ -778,12 +822,12 @@ def decompose_pass_rate_drop(
         baseline_pass_rate=base_pass_rate,
         scaled_pass_rate=scaled_pass_rate,
         delta_total=delta_total,
-        delta_context=delta_ctx,
-        delta_shadowing=delta_shd,
+        delta_abstention=delta_abs,
+        delta_collision=delta_col,
         delta_truncated=delta_trunc,
         delta_total_ci=delta_ci,
-        delta_context_ci=ctx_ci,
-        delta_shadowing_ci=shd_ci,
+        delta_abstention_ci=abs_ci,
+        delta_collision_ci=col_ci,
         delta_truncated_ci=trunc_ci,
         sample_size=m,
         baseline_ci=_compute_pass_rate_interval(base_pass_rate, m),

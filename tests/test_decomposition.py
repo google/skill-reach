@@ -44,12 +44,12 @@ def test_decomposition_happy_path(
     assert math.isclose(result.baseline_pass_rate, 12 / 14, rel_tol=1e-9)
     assert math.isclose(result.scaled_pass_rate, 5 / 14, rel_tol=1e-9)
     assert math.isclose(result.delta_total, 7 / 14, rel_tol=1e-9)
-    assert math.isclose(result.delta_context, 3 / 14, rel_tol=1e-9)
-    assert math.isclose(result.delta_shadowing, 4 / 14, rel_tol=1e-9)
+    assert math.isclose(result.delta_abstention, 3 / 14, rel_tol=1e-9)
+    assert math.isclose(result.delta_collision, 4 / 14, rel_tol=1e-9)
 
-    # Total drop must equal context plus shadowing drops
+    # Total drop must equal abstention plus collision drops
     assert math.isclose(
-        result.delta_total, result.delta_context + result.delta_shadowing, abs_tol=1e-9
+        result.delta_total, result.delta_abstention + result.delta_collision, abs_tol=1e-9
     )
 
 
@@ -66,8 +66,8 @@ def test_decomposition_zero_delta(
     result = decompose_pass_rate_drop(base, scaled, queries=queries, seed=42)
 
     assert result.delta_total == 0.0
-    assert result.delta_context == 0.0
-    assert result.delta_shadowing == 0.0
+    assert result.delta_abstention == 0.0
+    assert result.delta_collision == 0.0
     assert result.delta_total_ci[0] <= 0.0 <= result.delta_total_ci[1]
 
 
@@ -85,7 +85,7 @@ def test_decomposition_multi_attempt_replicates(
     result = decompose_pass_rate_drop(base, scaled, queries=queries, seed=42)
 
     assert math.isclose(
-        result.delta_total, result.delta_context + result.delta_shadowing, abs_tol=1e-9
+        result.delta_total, result.delta_abstention + result.delta_collision, abs_tol=1e-9
     )
     assert result.sample_size == 12
 
@@ -104,8 +104,8 @@ def test_decomposition_bootstrap_confidence_intervals(
     result = decompose_pass_rate_drop(base, scaled, iterations=500, seed=123)
 
     assert result.delta_total_ci[0] <= result.delta_total <= result.delta_total_ci[1]
-    assert result.delta_context_ci[0] <= result.delta_context <= result.delta_context_ci[1]
-    assert result.delta_shadowing_ci[0] <= result.delta_shadowing <= result.delta_shadowing_ci[1]
+    assert result.delta_abstention_ci[0] <= result.delta_abstention <= result.delta_abstention_ci[1]
+    assert result.delta_collision_ci[0] <= result.delta_collision <= result.delta_collision_ci[1]
 
 
 def test_decomposition_empty_results() -> None:
@@ -113,8 +113,8 @@ def test_decomposition_empty_results() -> None:
     result = decompose_pass_rate_drop([], [])
     assert result.sample_size == 0
     assert result.delta_total == 0.0
-    assert result.delta_context == 0.0
-    assert result.delta_shadowing == 0.0
+    assert result.delta_abstention == 0.0
+    assert result.delta_collision == 0.0
     assert result.delta_total_ci == (0.0, 0.0)
 
 
@@ -129,8 +129,8 @@ def test_decomposition_disjoint_queries_returns_zeroed_result(
     assert result.baseline_pass_rate == 0.0
     assert result.scaled_pass_rate == 0.0
     assert result.delta_total == 0.0
-    assert result.delta_context == 0.0
-    assert result.delta_shadowing == 0.0
+    assert result.delta_abstention == 0.0
+    assert result.delta_collision == 0.0
 
 
 def test_decomposition_bootstrap_matches_scipy_reference(
@@ -173,7 +173,7 @@ def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
     from reach.models import CatalogMode, DisclosureState, InvocationPattern, ProbeResult, Query
 
     q = Query(id="q1", text="test query", expected_skill="skill-a")
-    # Baseline: 3/5 pass, 2/5 fail due to context (p_pass=0.6, p_ctx=0.4, p_shd=0.0)
+    # Baseline: 3/5 pass, 2/5 fail due to abstention (p_pass=0.6, p_abs=0.4, p_col=0.0)
     base = [
         ProbeResult(
             query_id="q1",
@@ -191,8 +191,8 @@ def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
         )
         for i in range(1, 6)
     ]
-    # Scaled: 1/5 pass, 2/5 FULL context fail, 1/5 truncated fail, 1/5 FULL shadowing fail
-    # (p_pass=0.2, delta_total=0.4: delta_ctx=0.0, delta_trunc=0.2, delta_shd=0.2)
+    # Scaled: 1/5 pass, 2/5 FULL abstention fail, 1/5 truncated fail, 1/5 FULL collision fail
+    # (p_pass=0.2, delta_total=0.4: delta_abs=0.0, delta_trunc=0.2, delta_col=0.2)
     scaled = [
         ProbeResult(
             query_id="q1",
@@ -216,12 +216,12 @@ def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
     ]
     res = decompose_pass_rate_drop(base, scaled, queries=[q], iterations=50, seed=42)
     assert math.isclose(res.delta_total, 0.4, abs_tol=1e-9)
-    assert math.isclose(res.delta_context, 0.0, abs_tol=1e-9)
+    assert math.isclose(res.delta_abstention, 0.0, abs_tol=1e-9)
     assert math.isclose(res.delta_truncated, 0.2, abs_tol=1e-9)
-    assert math.isclose(res.delta_shadowing, 0.2, abs_tol=1e-9)
+    assert math.isclose(res.delta_collision, 0.2, abs_tol=1e-9)
     assert res.delta_truncated_ci[0] <= res.delta_truncated <= res.delta_truncated_ci[1]
     assert math.isclose(
         res.delta_total,
-        res.delta_context + res.delta_truncated + res.delta_shadowing,
+        res.delta_abstention + res.delta_truncated + res.delta_collision,
         abs_tol=1e-9,
     )

@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from statistics import NormalDist
 from typing import Annotated, Self
 
@@ -33,6 +33,7 @@ __all__ = [
     "critical_value",
     "detectable_delta",
     "effective_sample_size",
+    "estimate_skill_icc",
     "required_probes",
     "wilson_interval",
 ]
@@ -233,3 +234,48 @@ def detectable_delta(
         msg = f"power must lie strictly between 0 and 1, got {power}"
         raise ValueError(msg)
     return min(1.0, math.sqrt(_two_proportion_constant(alpha, power) / probes))
+
+
+_MIN_ANOVA_GROUPS: int = 2
+
+
+def estimate_skill_icc(
+    outcomes_by_skill: Mapping[str, Sequence[float]],
+) -> float | None:
+    """Estimate intra-skill correlation via one-way random-effects ANOVA across skills.
+
+    Args:
+        outcomes_by_skill: Mapping of skill names to sequences of per-query pass rates.
+
+    Returns:
+        Estimated intra-class correlation coefficient in [0.0, 1.0], or None when
+        fewer than two skills or zero within-skill degrees of freedom are available.
+    """
+    groups = [[float(v) for v in vals] for vals in outcomes_by_skill.values() if len(vals) >= 1]
+    s_skills = len(groups)
+    if s_skills < _MIN_ANOVA_GROUPS:
+        return None
+    total_q = sum(len(g) for g in groups)
+    if total_q <= s_skills:
+        return None
+
+    grand_mean = sum(sum(g) for g in groups) / total_q
+    ssb = 0.0
+    ssw = 0.0
+    for g in groups:
+        q_s = len(g)
+        mean_s = sum(g) / q_s
+        ssb += q_s * ((mean_s - grand_mean) ** 2)
+        ssw += sum((y - mean_s) ** 2 for y in g)
+
+    msb = ssb / (s_skills - 1)
+    msw = ssw / (total_q - s_skills)
+    if msb == 0.0 and msw == 0.0:
+        return 0.0
+
+    q_bar = (total_q - sum(len(g) ** 2 for g in groups) / total_q) / (s_skills - 1)
+    denom = msb + (q_bar - 1.0) * msw
+    if denom <= 0.0:
+        return 0.0
+    rho = (msb - msw) / denom
+    return round(max(0.0, min(1.0, rho)), 4)

@@ -139,13 +139,24 @@ Queries can declare optional `acceptable_skills` (for example, a catalog index o
 
 When queries are probed across multiple attempts (replicates), **Consistency** measures the fraction of observed queries that made the exact same raw selection (`predicted_label`) on 100% of their attempts.
 
-### Wilson Score Confidence Intervals
+### Statistical Inference, Clustering & Scaling Sweeps
 
-Small query sets are susceptible to random variation. `skill-reach` computes **Wilson score intervals** (default 95% confidence) for hit rates and recall. If a skill achieves 4/5 hits, the report displays the score as:
+Small query sets are susceptible to random variation and hierarchical correlation. `skill-reach` models uncertainty across two distinct clustering levels and reports nonparametric bootstrap diagnostics for scaling sweeps:
 
-$$\text{0.800 [0.376, 0.964]}$$
+<!-- prettier-ignore-start -->
+- **Cluster-Adjusted Wilson Score Intervals ($\rho_{\text{attempt}} = 0.60$)**: Repeated attempts (`--attempts`) on the same query are strongly correlated. `skill-reach` adjusts nominal sample sizes via survey design effect $\text{DEFF}_{\text{attempt}} = 1 + (n - 1)\rho_{\text{attempt}}$ before computing 95% Wilson score intervals:
 
-This highlights where additional queries or probes are needed before drawing conclusions.
+    $$\text{0.800 [0.376, 0.964]}$$
+
+- **Between-Query Intra-Skill Correlation ($\hat{\rho}_{\text{skill}}$)**: Queries targeting the same skill share that skill's `SKILL.md` description quality and local distractor neighborhood. `skill-reach` estimates empirical intra-skill correlation $\hat{\rho}_{\text{skill}}$ via one-way random-effects ANOVA (`estimate_skill_icc`, recorded on `Artifact.spread.skill_icc` and `ScalingStudy.skill_icc`). On production 150-skill corpora with $\bar{Q}_0 = 5$ queries per skill, $\hat{\rho}_{\text{skill}}$ typically ranges from $0.20$ to $0.34$ ($\text{DEFF}_{\text{skill}} \approx 1.8\text{–}2.4\times$).
+- **Skill-Stratified Query-Cluster Bootstrap**: Conditional on the fixed medoid anchor cohort ($S$ anchors), `reach sweep` and `decompose_pass_rate_drop` resample whole query clusters with replacement **within each skill stratum** (plus the out-of-scope stratum). This preserves exact per-skill query weights in every bootstrap replicate while propagating cross-scale covariance.
+- **Per-Replicate McNemar Noise Floor & Right-Censored Knee PMF**: Inside each bootstrap replicate, `reach sweep` recomputes the cluster-adjusted paired McNemar noise floor from the resampled queries' discordant pairs ($n_{10}, n_{01}$) and classifies the PAVA-smoothed curve into:
+  - **Detected knee ($k^* \in \{K_0, \dots, K_{\max-1}\}$)**, including **immediate cliffs** ($k^* = K_0$ or a dominant first-step drop at $K_1$, reported as `cliff_probability`),
+  - **Gradual log-linear decay above noise (`is_gradual_drop`)**, where the curve degrades steadily across the full scale window without a sharp localized elbow, or
+  - **Flat / right-censored beyond $K_{\max}$**, where no statistically significant drop has occurred by the largest evaluated scale (causing the upper confidence bound to right-censor at `[low, >K_max]` when at least 50% of replicates detect a knee).
+  Because $k^*$ lives on a coarse discrete scale grid, `ScalingStudy` reports the full discrete probability mass function (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), and `cliff_probability` alongside `knee_scale_interval`.
+- **Owen-Scrambled Catalog Replicates & Replicate Collision Detection (`--catalog-replicates`)**: At intermediate scales $K < N$, a single deterministic distractor ordering mixes scale size with the specific subset of distractors included at $K$. Passing `--catalog-replicates R` generates $R$ low-discrepancy catalog sequences using Laine–Karras bitwise Owen scrambling of the radix-2 van der Corput sequence (`seed = 0` on replicate 0 preserves the unscrambled baseline) and flags queries whose pass/fail outcome flips across orderings (`ReplicateCollisionDiagnostic`) along with suspect distractor skills.
+<!-- prettier-ignore-end -->
 
 ### Turn Budgeting & Early Exit
 

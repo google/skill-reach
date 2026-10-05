@@ -28,7 +28,7 @@ reach sweep ./skills --agent antigravity-cli --model gemini-3.8-flash
 ///
 
 /// tab | Run single-skill rival decay sweep
-Evaluate reachability and distractor shadowing for a specific target skill:
+Evaluate reachability and skill collisions for a specific target skill:
 
 ```bash
 reach sweep ./skills --target cloud-deploy --agent claude-code
@@ -37,10 +37,10 @@ reach sweep ./skills --target cloud-deploy --agent claude-code
 ///
 
 /// tab | Bootstrap replicates and seed
-Configure cluster-bootstrap iterations and random seed for curve uncertainty:
+Configure stratified query-cluster bootstrap iterations, random seed, and Owen-scrambled catalog replicates:
 
 ```bash
-reach sweep ./skills --bootstrap-iterations 500 --seed 42
+reach sweep ./skills --bootstrap-iterations 500 --catalog-replicates 3 --seed 42
 ```
 
 ///
@@ -60,6 +60,10 @@ reach sweep ./skills --format json > sweep.json
 > **Anchor Cohort Identification & Simpson's Paradox**
 > By default, `reach sweep` evaluates a fixed anchor cohort across all library sizes. This holds target-skill difficulty constant to cleanly isolate distractor interference from target-set composition shift. Using `--anchor all` subjects the decay curve to composition bias as peripheral skills enter at larger catalog scales.
 
+> [!TIP]
+> **Knee Uncertainty, Right-Censoring & Replicate Collision Diagnostics**
+> `ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision sensitivity (`replicate_collisions` when `--catalog-replicates > 1`).
+
 ## Options
 
 | Option                                         | Type          | Default                       | Description                                                                                                                                                        |
@@ -77,6 +81,7 @@ reach sweep ./skills --format json > sweep.json
 | `--pause`                                      | Float         | `0.0`                         | Seconds to pause between probes to respect rate limits.                                                                                                            |
 | `--bootstrap-iterations`                       | Integer       | `200`                         | Number of bootstrap replicates for curve confidence intervals (min: 10).                                                                                           |
 | `--seed`                                       | Integer       | `42`                          | Random seed for reproducible bootstrap resamples and curve perturbation.                                                                                           |
+| `--catalog-replicates`                         | Integer       | `1`                           | Number of independent distractor catalog permutations to probe per scale step (1–20) for replicate collision detection.                                            |
 | `--noise-floor`                                | Float         | Dynamic (paired McNemar)      | Minimum pass rate drop to trigger knee detection (defaults to paired McNemar variance scaled by cluster design effect).                                            |
 | `--agent`                                      | Choice        | `from reach.toml`             | Agent runtime to execute scaling probes: `antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `keyword`, `pi`.                                            |
 | `--model`, `-m`                                | String        | Default model                 | Target model identifier.                                                                                                                                           |

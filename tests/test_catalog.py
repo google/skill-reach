@@ -1493,3 +1493,107 @@ def test_parse_frontmatter_preserves_yaml_block_scalar_trailing_newline(tmp_path
 
     blank_content = '---\nname: blank-skill\ndescription: "   \\n\\t  "\n---\n# Body\n'
     assert parse_frontmatter(blank_content, tmp_path / "blank-skill" / "SKILL.md") is None
+
+
+@pytest.mark.parametrize(
+    ("n", "expected"),
+    [
+        (0, 0.0),
+        (1, 0.5),
+        (2, 0.25),
+        (3, 0.75),
+        (4, 0.125),
+        (5, 0.625),
+        (6, 0.375),
+        (7, 0.875),
+    ],
+)
+def test_van_der_corput_unscrambled_canonical_values(n: int, expected: float) -> None:
+    """Verify seed=0 returns exact canonical base-2 Van der Corput radical inverse values."""
+    from reach.catalog import _van_der_corput
+
+    assert _van_der_corput(n, seed=0) == expected
+
+
+@pytest.mark.parametrize("m", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("seed", [0, 1, 2, 42, 999, -17, 2**31 - 1])
+def test_van_der_corput_dyadic_elementary_interval_stratification(m: int, seed: int) -> None:
+    """Verify Owen-scrambled Van der Corput places exactly one point per 2^-m dyadic interval."""
+    from reach.catalog import _van_der_corput
+
+    block_size = 1 << m
+    for block_offset in (0, block_size):
+        points = [_van_der_corput(block_offset + i, seed=seed) for i in range(block_size)]
+        assert all(0.0 <= p < 1.0 for p in points)
+        bins = {int(p * block_size) for p in points}
+        assert bins == set(range(block_size))
+
+
+@pytest.mark.parametrize("n", [-1, -2, -100])
+@pytest.mark.parametrize("seed", [0, 1, 42])
+def test_van_der_corput_rejects_negative_index(n: int, seed: int) -> None:
+    """Verify _van_der_corput raises ValueError for negative indices."""
+    from reach.catalog import _van_der_corput
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _van_der_corput(n, seed=seed)
+
+
+@pytest.mark.parametrize("length", [0, 1, 3, 5, 7, 15, 30, 150])
+@pytest.mark.parametrize("seed", [-42, 0, 1, 42, 2**63 - 1])
+def test_permute_by_van_der_corput_bijection_and_edge_cases(length: int, seed: int) -> None:
+    """Verify _permute_by_van_der_corput is a deterministic bijection across edge-case lengths."""
+    from reach.catalog import _permute_by_van_der_corput
+
+    items = list(range(length))
+    out1 = _permute_by_van_der_corput(items, seed=seed)
+    out2 = _permute_by_van_der_corput(items, seed=seed)
+    assert out1 == out2
+    assert len(out1) == length
+    assert set(out1) == set(items)
+
+
+def test_van_der_corput_nonzero_seeds_unpin_zero_index() -> None:
+    """Verify non-zero Owen scramble seeds unpin n=0 so item 0 is not always placed first."""
+    from reach.catalog import _permute_by_van_der_corput, _van_der_corput
+
+    zero_vals = {_van_der_corput(0, seed=s) for s in range(1, 17)}
+    assert all(0.0 < v < 1.0 for v in zero_vals)
+    assert len(zero_vals) > 8
+
+    items = list(range(8))
+    first_elements = {_permute_by_van_der_corput(items, seed=s)[0] for s in range(1, 17)}
+    assert len(first_elements) > 1
+
+
+def test_owen_scrambled_corpus_scaling_plan_preserves_nestedness_and_varies_order(
+    tmp_path: Path,
+) -> None:
+    """Verify Owen-scrambled CorpusScalingPlan varies order across seeds with nested containment."""
+    import itertools
+
+    from reach.catalog import CorpusScalingPlan
+
+    skills = [
+        Skill(
+            name=f"skill-{i:02d}",
+            description=f"Domain {i % 3} service capability {i} with distinct tokens {i * 7}",
+            path=tmp_path / f"s{i}",
+        )
+        for i in range(16)
+    ]
+    anchors = ("skill-00", "skill-01")
+    scales = (2, 6, 10, 16)
+
+    plan_unscrambled = CorpusScalingPlan.create(
+        skills=skills, scales=scales, anchor_skills=anchors, seed=0
+    )
+    plan_s1 = CorpusScalingPlan.create(skills=skills, scales=scales, anchor_skills=anchors, seed=1)
+    plan_s2 = CorpusScalingPlan.create(skills=skills, scales=scales, anchor_skills=anchors, seed=2)
+
+    for plan in (plan_unscrambled, plan_s1, plan_s2):
+        assert plan.sequence[:2] == anchors
+        for earlier, later in itertools.pairwise(plan.catalogs):
+            assert set(earlier.skills).issubset(set(later.skills))
+
+    assert plan_s1.sequence != plan_s2.sequence
