@@ -30,19 +30,27 @@ from reach.lint import RULES
 from reach.runtime import FAKE_AGENT
 
 
-def test_completion_generates_shell_script_with_unique_flags(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify reach completion prints valid shell scripts and has no duplicate flags."""
-    for shell, needle in (
+@pytest.mark.parametrize(
+    ("shell", "needle"),
+    [
         ("zsh", "_cyclopts_reach"),
         ("bash", "complete -F _reach reach"),
         ("fish", "complete -c reach"),
-    ):
-        assert main(["completion", shell]) == 0
-        out = capsys.readouterr().out
-        assert needle in out
+    ],
+)
+def test_completion_generates_shell_script(
+    shell: str,
+    needle: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach completion prints valid shell scripts for supported shells."""
+    assert main(["completion", shell]) == 0
+    out = capsys.readouterr().out
+    assert needle in out
 
+
+def test_completion_options_have_no_duplicates() -> None:
+    """Verify completion extraction has no duplicate flags across commands."""
     data = extract_completion_data(app)
     for cmd_path, entry in data.items():
         seen_names: set[str] = set()
