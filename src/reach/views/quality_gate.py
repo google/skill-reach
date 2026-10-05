@@ -66,7 +66,7 @@ PERCENTAGE_ASSERTION_NAMES: Final[frozenset[str]] = frozenset(
 def _format_assertion_strings(a: CheckAssertion) -> tuple[str, str]:
     """Format observed and target values for metric assertions."""
     is_pct = "rate" in a.name or "accuracy" in a.name or a.name in PERCENTAGE_ASSERTION_NAMES
-    obs_str = f"{a.observed:.1%}" if is_pct else str(a.observed)
+    obs_str = "n/a" if a.observed is None else f"{a.observed:.1%}" if is_pct else str(a.observed)
     tgt_str = f"{a.comparison} {a.threshold:.1%}" if is_pct else f"{a.comparison} {a.threshold}"
     return obs_str, tgt_str
 

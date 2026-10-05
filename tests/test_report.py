@@ -334,3 +334,12 @@ def test_trajectory_section_renders_when_reachability_is_zero(composition: Compo
     text = render_text(built)
     assert "entrypoint acc." in text
     assert "reachability" in text
+
+
+def test_trajectory_section_renders_na_when_metrics_are_none(
+    out_of_scope_artifact: Artifact,
+) -> None:
+    """Verify step efficiency and skill F1 render as n/a when None (no in-scope queries)."""
+    text = render_text(out_of_scope_artifact)
+    assert "step efficiency      n/a" in text
+    assert "skill F1             n/a" in text

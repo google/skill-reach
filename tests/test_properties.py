@@ -317,10 +317,16 @@ def test_score_trajectory_and_invocation_pattern_invariants(
 
     if score.entrypoint_hit:
         assert score.trajectory_hit
-    assert 0.0 <= score.step_efficiency <= 1.0
-    assert 0.0 <= score.skill_f1 <= 1.0
-    assert (score.step_efficiency > 0.0) == score.trajectory_hit
-    assert (score.skill_f1 > 0.0) == score.trajectory_hit
+    if query.is_out_of_scope:
+        assert score.step_efficiency is None
+        assert score.skill_f1 is None
+    else:
+        assert score.step_efficiency is not None
+        assert score.skill_f1 is not None
+        assert 0.0 <= score.step_efficiency <= 1.0
+        assert 0.0 <= score.skill_f1 <= 1.0
+        assert (score.step_efficiency > 0.0) == score.trajectory_hit
+        assert (score.skill_f1 > 0.0) == score.trajectory_hit
     assert score.redundancy >= 0
 
     # Neutral acceptable skills do not alter trajectory scores once stripped

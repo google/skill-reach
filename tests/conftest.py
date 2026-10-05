@@ -1027,6 +1027,37 @@ def artifact(
     )
 
 
+@pytest.fixture
+def out_of_scope_artifact(
+    whole_catalog: Catalog,
+    corpus: list[Skill],
+    make_config,
+    make_result,
+) -> Artifact:
+    """Return an assembled Artifact containing exclusively out-of-scope queries."""
+    oos_query = Query(
+        id="q-oos",
+        text="Out of scope query",
+        kind=QueryKind.OUT_OF_SCOPE,
+        expected_skill=None,
+    )
+    query_set = QuerySet(
+        queries=(oos_query,),
+        provenance=QuerySetProvenance(origin=Origin.GENERATED),
+    )
+    results = [make_result("q-oos", None)]
+    config = make_config(catalog={"mode": CatalogMode.ALL})
+    return Artifact.assemble(
+        Composition(
+            config=config,
+            query_set=query_set,
+            catalog=whole_catalog,
+            skills=tuple(corpus),
+        ),
+        results,
+    )
+
+
 #: Ground truth query specifications for standard metric verification tests.
 WORKED_QUERIES = (
     Query(

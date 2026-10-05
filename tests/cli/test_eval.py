@@ -1572,3 +1572,55 @@ def test_draft_generation_aborts_with_error_when_zero_queries_produced(
     assert rc == 1
     err = capsys.readouterr().err
     assert "0 verified queries" in err
+
+
+def test_filter_queries_by_targets_retains_out_of_scope_queries(tmp_path: Path) -> None:
+    """Verify _filter_queries_by_targets keeps out-of-scope negative controls alongside targets."""
+    from reach.cli.eval import _filter_queries_by_targets
+    from reach.config import RunConfig
+    from reach.models import Query, QueryKind
+    from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set, save_query_set
+
+    queries_path = tmp_path / "all_queries.json"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    qs = QuerySet(
+        catalog_id="cat",
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        queries=(
+            Query(id="q1", text="target 1", expected_skill="s1"),
+            Query(id="q2", text="distractor 1", expected_skill="s2"),
+            Query(id="q3", text="negative 1", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        ),
+    )
+    save_query_set(qs, queries_path)
+
+    settings = RunConfig(study={"queries": queries_path})
+    adjusted = _filter_queries_by_targets(settings, ("s1",), scratch)
+
+    assert adjusted.study.queries is not None
+    filtered_qs = load_query_set(adjusted.study.queries)
+    filtered_ids = [q.id for q in filtered_qs.queries]
+    assert "q1" in filtered_ids
+    assert "q3" in filtered_ids
+    assert "q2" not in filtered_ids
+
+    # Sad path: no targets match even if out-of-scope queries are present
+    no_match_qs = QuerySet(
+        catalog_id="cat",
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        queries=(
+            Query(id="q2", text="distractor 1", expected_skill="s2"),
+            Query(
+                id="q3",
+                text="negative control",
+                expected_skill=None,
+                kind=QueryKind.OUT_OF_SCOPE,
+            ),
+        ),
+    )
+    no_match_path = tmp_path / "no_match_queries.json"
+    save_query_set(no_match_qs, no_match_path)
+    with pytest.raises(ValueError, match=r"no queries in .* match --skill 's1'"):
+        _filter_queries_by_targets(RunConfig(study={"queries": no_match_path}), ("s1",), scratch)
