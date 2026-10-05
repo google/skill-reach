@@ -837,6 +837,45 @@ def test_build_corpus_scaling_queries() -> None:
     assert all(q.expected_skill is not None for q in q_all_installed.queries)
 
 
+@pytest.mark.parametrize(
+    ("scale_skills", "anchor_skills", "expected_qids"),
+    [
+        (["alpha"], None, {"q_pos1", "q_oos1", "q_oos2"}),
+        (["beta"], None, {"q_pos2", "q_oos1", "q_oos2"}),
+        (["alpha", "beta"], ["alpha"], {"q_pos1", "q_oos1", "q_oos2"}),
+        ([], None, {"q_oos1", "q_oos2"}),
+    ],
+)
+def test_build_corpus_scaling_queries_preserves_out_of_scope(
+    scale_skills: list[str],
+    anchor_skills: list[str] | None,
+    expected_qids: set[str],
+) -> None:
+    """Verify build_corpus_scaling_queries retains out-of-scope queries."""
+    from reach.models import Query, QueryKind
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+
+    raw_queries = [
+        Query(id="q_pos1", text="run alpha", expected_skill="alpha"),
+        Query(id="q_pos2", text="run beta", expected_skill="beta"),
+        Query(id="q_oos1", text="weather report", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        Query(id="q_oos2", text="who are you", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+    ]
+    qset = QuerySet(
+        catalog_id="test-oos",
+        queries=tuple(raw_queries),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    sliced = build_corpus_scaling_queries(
+        scale_skills=scale_skills,
+        raw_query_set=qset,
+        anchor_skills=anchor_skills,
+    )
+    assert {q.id for q in sliced.queries} == expected_qids
+    assert all(q.is_out_of_scope for q in sliced.queries if q.id in {"q_oos1", "q_oos2"})
+
+
 def test_corpus_scaling_plan(tmp_path: Path) -> None:
     """Verify CorpusScalingPlan generates consistent distance geometry, catalogs, and probes."""
     from reach.catalog import CorpusScalingPlan

@@ -1107,13 +1107,15 @@ def build_corpus_scaling_queries(
     raw_query_set: QuerySet,
     anchor_skills: Sequence[str] | None = None,
 ) -> QuerySet:
-    """Slice query set into in-scope reachability probes for installed skills."""
+    """Slice query set into evaluation reachability probes for installed skills."""
     scale_set = set(scale_skills)
     target_skills = scale_set & set(anchor_skills) if anchor_skills is not None else scale_set
-    in_scope_queries = [q for q in raw_query_set.queries if q.expected_skill in target_skills]
+    eval_queries = [
+        q for q in raw_query_set.queries if (q.expected_skill in target_skills) or q.is_out_of_scope
+    ]
     return QuerySet(
         catalog_id=f"sweep:corpus:{len(scale_skills)}",
-        queries=tuple(in_scope_queries),
+        queries=tuple(eval_queries),
         provenance=raw_query_set.provenance,
     )
 
