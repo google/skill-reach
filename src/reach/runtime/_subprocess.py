@@ -346,11 +346,14 @@ def extract_content_reasoning(content: Iterable[Any]) -> list[str]:
         if not isinstance(item, dict):
             continue
         item_type = item.get("type")
+        raw: Any = None
         if item_type in ("thought", "thinking"):
-            if thought := item.get("thinking") or item.get("thought") or item.get("text"):
-                reasoning.append(str(thought).strip())
-        elif item_type == "text" and (text := item.get("text")):
-            reasoning.append(str(text).strip())
+            raw = item.get("thinking") or item.get("thought") or item.get("text")
+        elif item_type == "text":
+            raw = item.get("text")
+
+        if raw and (cleaned := str(raw).strip()):
+            reasoning.append(cleaned)
     return reasoning
 
 

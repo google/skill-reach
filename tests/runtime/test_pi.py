@@ -695,11 +695,16 @@ def test_pi_options_thinking_invalid() -> None:
 
 
 def test_pi_options_mcp_config_coercion(tmp_path: Path) -> None:
-    """Verify PiOptions coerces mcp_config string to Path."""
+    """Verify PiOptions coerces mcp_config string to canonical absolute Path."""
     mcp_path_str = str(tmp_path / "test_mcp.json")
     opts_mcp = PiOptions(mcp_config=mcp_path_str)
     assert isinstance(opts_mcp.mcp_config, Path)
     assert opts_mcp.mcp_config == Path(mcp_path_str)
+
+    opts_rel = PiOptions(mcp_config="test_mcp.json")
+    assert opts_rel.mcp_config is not None
+    assert opts_rel.mcp_config.is_absolute()
+    assert opts_rel.mcp_config == Path("test_mcp.json").resolve()
 
 
 def test_parse_session_entries_pi_native_thinking() -> None:
@@ -728,14 +733,14 @@ def test_parse_session_entries_pi_native_thinking() -> None:
 
 
 def test_parse_session_entries_accumulates_cost_across_multiple_turns() -> None:
-    """Verify parse_session_entries sums cost_usd across all assistant turns."""
+    """Verify parse_session_entries sums cost_usd across all assistant turns with exact rounding."""
     resident = ("cloud-deploy",)
     entries = [
         {
             "type": "message",
             "message": {
                 "role": "assistant",
-                "usage": {"input": 100, "cost": {"total": 0.005}},
+                "usage": {"input": 100, "cost": {"total": 0.005001}},
                 "content": [
                     {
                         "type": "toolCall",
@@ -749,14 +754,14 @@ def test_parse_session_entries_accumulates_cost_across_multiple_turns() -> None:
             "type": "message",
             "message": {
                 "role": "assistant",
-                "usage": {"input": 200, "cost": {"total": 0.007}},
+                "usage": {"input": 200, "cost": {"total": 0.007002}},
                 "content": [{"type": "text", "text": "Deployment skill instructions followed."}],
             },
         },
     ]
     summary = parse_session_entries(entries, resident)
     assert summary.turns_taken == 2
-    assert summary.cost_usd == pytest.approx(0.012)
+    assert summary.cost_usd == 0.012003
 
 
 def test_pi_usage_pi_1_0_fields() -> None:
@@ -781,6 +786,12 @@ def test_pi_usage_pi_1_0_fields() -> None:
     assert usage.cache_write == 20
     assert usage.total_tokens == 1270
     assert usage.total_prompt_tokens == 1220
+
+    usage_fallback = PiUsage(promptTokens=350)
+    assert usage_fallback.total_prompt_tokens == 350
+
+    usage_empty = PiUsage()
+    assert usage_empty.total_prompt_tokens is None
 
 
 def test_build_command_no_extensions_and_mcp_config(tmp_path: Path) -> None:
@@ -870,3 +881,37 @@ def test_pi_options_common_cli_args(tmp_path: Path) -> None:
     assert args[args.index("--api-key") + 1] == "secret-key"
     assert "--thinking" in args
     assert args[args.index("--thinking") + 1] == "low"
+
+
+@pytest.mark.parametrize(
+    ("input_thinking", "expected"),
+    [
+        ("LOW", "low"),
+        ("Medium", "medium"),
+        ("high", "high"),
+        ("MAX", "max"),
+        ("off", "off"),
+        ("OFF", "off"),
+        ("none", None),
+        ("NONE", None),
+    ],
+)
+def test_pi_options_resolve_thinking_casing(input_thinking: str, expected: str | None) -> None:
+    """Verify resolve_thinking normalizes casing for valid levels."""
+    opts = PiOptions()
+    assert opts.resolve_thinking(input_thinking) == expected
+
+
+def test_pi_options_resolve_thinking_invalid() -> None:
+    """Verify resolve_thinking raises ValueError on invalid level."""
+    opts = PiOptions()
+    with pytest.raises(ValueError, match="Invalid thinking level for Pi"):
+        opts.resolve_thinking("extreme")
+
+
+def test_pi_options_common_cli_args_explicit_thinking() -> None:
+    """Verify common_cli_args respects pre-resolved thinking parameter."""
+    opts = PiOptions(thinking="low")
+    args = opts.common_cli_args(thinking="high")
+    assert "--thinking" in args
+    assert args[args.index("--thinking") + 1] == "high"

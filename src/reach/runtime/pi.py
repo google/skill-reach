@@ -22,9 +22,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeFloat,
+    NonNegativeInt,
+    ValidationError,
+    field_validator,
+)
 
-from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
+from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings, resolve_path
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
@@ -69,6 +77,12 @@ def _newest_transcript(session_dir: Path, exclude: set[Path] | None = None) -> P
     return max(candidates, key=lambda f: f.stat().st_mtime)
 
 
+#: Valid reasoning effort levels accepted by Pi CLI.
+PI_THINKING_LEVELS: frozenset[str] = frozenset(
+    {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
+
+
 class PiOptions(CliOptions):
     """Hold configuration options for driving the Pi coding agent CLI."""
 
@@ -92,12 +106,21 @@ class PiOptions(CliOptions):
     agent_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "agent_dir"
 
+    @field_validator("mcp_config", mode="after")
+    @classmethod
+    def _resolve_mcp_config_path(cls, value: Path | None) -> Path | None:
+        """Resolve mcp_config to a canonical absolute path."""
+        return resolve_path(value) if value is not None else None
+
     def resolve_thinking(self, profile_effort: str | None = None) -> str | None:
         """Resolve effective thinking level for Pi CLI.
 
         Returns:
             Validated thinking level string ('off', 'minimal', ..., 'max') or None if thinking
             should be omitted (e.g. effort='none' or unset).
+
+        Raises:
+            ValueError: If candidate effort is unrecognized.
         """
         candidate = self.thinking or self.effort or profile_effort
         if candidate is None:
@@ -105,11 +128,20 @@ class PiOptions(CliOptions):
         candidate_lower = candidate.lower()
         if candidate_lower == "none":
             return None
-        if candidate_lower == "off":
-            return "off"
-        return candidate
+        if candidate_lower in PI_THINKING_LEVELS:
+            return candidate_lower
+        msg = (
+            f"Invalid thinking level for Pi: {candidate!r}. "
+            f"Must be one of: {', '.join(sorted(PI_THINKING_LEVELS))} or 'none'."
+        )
+        raise ValueError(msg)
 
-    def common_cli_args(self, model: str = "", profile_effort: str | None = None) -> list[str]:
+    def common_cli_args(
+        self,
+        model: str = "",
+        profile_effort: str | None = None,
+        thinking: str | None = None,
+    ) -> list[str]:
         """Assemble shared CLI arguments for Pi runtime and generator."""
         cmd: list[str] = []
         if self.no_extensions:
@@ -123,8 +155,11 @@ class PiOptions(CliOptions):
             cmd += ["--model", target_model]
         cmd += self.provider_args("--provider")
         cmd += self.api_key_args("--api-key")
-        if thinking := self.resolve_thinking(profile_effort):
-            cmd += ["--thinking", thinking]
+        effective_thinking = (
+            thinking if thinking is not None else self.resolve_thinking(profile_effort)
+        )
+        if effective_thinking:
+            cmd += ["--thinking", effective_thinking]
         return cmd
 
 
@@ -187,12 +222,16 @@ class PiUsage(BaseModel):
     cache_write: NonNegativeInt = Field(default=0, alias="cacheWrite")
     reasoning: NonNegativeInt = 0
     total_tokens: NonNegativeInt = Field(default=0, alias="totalTokens")
+    prompt_tokens: NonNegativeInt | None = Field(default=None, alias="promptTokens")
     cost: PiCost | None = None
 
     @property
-    def total_prompt_tokens(self) -> int:
+    def total_prompt_tokens(self) -> int | None:
         """Calculate total input/prompt tokens across direct and cached prompt segments."""
-        return self.input + self.cache_read + self.cache_write
+        pi_input = self.input + self.cache_read + self.cache_write
+        if pi_input > 0:
+            return pi_input
+        return self.prompt_tokens
 
 
 def _extract_pi_message_usage(msg: dict[str, Any]) -> tuple[float | None, int | None]:
@@ -234,7 +273,8 @@ def parse_session_entries(
 
         cost, toks = _extract_pi_message_usage(msg)
         if cost is not None:
-            cost_usd = (cost_usd or 0.0) + cost
+            current_cost = cost_usd if cost_usd is not None else 0.0
+            cost_usd = round(current_cost + cost, 6)
         if toks is not None:
             prompt_tokens = toks
 
@@ -311,7 +351,7 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
         ]
         cmd += options.common_cli_args(
             model=options.model,
-            profile_effort=super().effective_effort,
+            thinking=self.effective_effort,
         )
         if options.extra_args:
             cmd += list(options.extra_args)
@@ -467,7 +507,7 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
         ]
         cmd += self.options.common_cli_args(
             model=self.model,
-            profile_effort=self.effective_effort,
+            thinking=self.effective_effort,
         )
         return [*cmd, *self.options.extra_args]
 
