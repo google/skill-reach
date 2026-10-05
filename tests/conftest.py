@@ -1624,12 +1624,59 @@ def registry_handler() -> type[MockRegistryHandler]:
 
 
 @pytest.fixture
-def sample_two_scale_points() -> list[Any]:
-    """Provide a minimal two-point ScalingPoint sequence for small-scale testing."""
+def make_probe_result() -> Callable[..., Any]:
+    """Provide factory fixture for creating ProbeResult instances with sensible defaults."""
+    from reach.models import CatalogMode, ProbeResult
+
+    def _factory(**kwargs: Any) -> ProbeResult:
+        invoked = kwargs.pop("invoked", None)
+        if invoked is not None and "invoked_skills" not in kwargs:
+            kwargs["invoked_skills"] = (invoked,) if isinstance(invoked, str) else tuple(invoked)
+        defaults: dict[str, Any] = {
+            "query_id": "q1",
+            "catalog_id": "test-cat",
+            "catalog_mode": CatalogMode.SWEEP,
+            "catalog_size": 10,
+            "model": "mock-model",
+            "runtime": "fake-runtime",
+        }
+        defaults.update(kwargs)
+        return ProbeResult(**defaults)
+
+    return _factory
+
+
+@pytest.fixture
+def make_scaling_point() -> Callable[..., Any]:
+    """Provide factory fixture for creating ScalingPoint instances with sensible defaults."""
     from reach.sweep import ScalingPoint
 
+    def _factory(**kwargs: Any) -> ScalingPoint:
+        errored = kwargs.get("probes_errored", 0)
+        failed = kwargs.get("probes_failed", 0)
+        defaults: dict[str, Any] = {
+            "scale": 10,
+            "catalog_id": "test-cat",
+            "pass_rate": 1.0,
+            "pass_rate_interval": (0.8, 1.0),
+            "delta_vs_baseline": 0.0,
+            "delta_context": 0.0,
+            "delta_shadowing": 0.0,
+            "probes_executed": max(10, errored + failed),
+            "probes_failed": failed,
+            "probes_errored": errored,
+        }
+        defaults.update(kwargs)
+        return ScalingPoint(**defaults)
+
+    return _factory
+
+
+@pytest.fixture
+def sample_two_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any]:
+    """Provide a minimal two-point ScalingPoint sequence for small-scale testing."""
     return [
-        ScalingPoint(
+        make_scaling_point(
             scale=10,
             catalog_id="c1",
             pass_rate=1.0,
@@ -1641,12 +1688,8 @@ def sample_two_scale_points() -> list[Any]:
             f1_score=1.0,
             f1_interval=(1.0, 1.0),
             in_scope_probes=10,
-            probes_executed=10,
-            delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
         ),
-        ScalingPoint(
+        make_scaling_point(
             scale=25,
             catalog_id="c2",
             pass_rate=0.5,
@@ -1658,7 +1701,6 @@ def sample_two_scale_points() -> list[Any]:
             f1_score=0.52,
             f1_interval=(0.2, 0.8),
             in_scope_probes=10,
-            probes_executed=10,
             delta_vs_baseline=0.5,
             delta_context=0.1,
             delta_shadowing=0.4,
@@ -1667,18 +1709,41 @@ def sample_two_scale_points() -> list[Any]:
 
 
 @pytest.fixture
-def sample_scaling_study(sample_two_scale_points: list[Any]) -> Any:
-    """Provide a sample ScalingStudy fixture with 2 scales."""
+def make_scaling_study(sample_two_scale_points: list[Any]) -> Callable[..., Any]:
+    """Provide factory fixture for creating ScalingStudy instances with sensible defaults."""
     from reach.sweep import ScalingStudy
 
-    return ScalingStudy(
-        is_corpus_sweep=True,
-        scales=(10, 25),
-        points=tuple(sample_two_scale_points),
-        knee_scale=None,
-        baseline_pass_rate=1.0,
-        final_pass_rate=0.5,
-        total_delta=0.5,
+    def _factory(**kwargs: Any) -> ScalingStudy:
+        raw_points = kwargs.get("points")
+        points_tuple = tuple(sample_two_scale_points) if raw_points is None else tuple(raw_points)
+        raw_scales = kwargs.get("scales")
+        default_scales = tuple(p.scale for p in points_tuple) if points_tuple else (10, 25)
+        scales_tuple = default_scales if raw_scales is None else tuple(raw_scales)
+        baseline_rate = points_tuple[0].pass_rate if points_tuple else 1.0
+        final_rate = points_tuple[-1].pass_rate if points_tuple else 0.5
+        defaults: dict[str, Any] = {
+            "target_skill": None,
+            "is_corpus_sweep": True,
+            "scales": scales_tuple,
+            "points": points_tuple,
+            "knee_scale": None,
+            "baseline_pass_rate": baseline_rate,
+            "final_pass_rate": final_rate,
+            "total_delta": round(baseline_rate - final_rate, 4),
+            "total_context_loss": 0.0,
+            "total_shadowing_loss": 0.0,
+            "total_corpus_skills": max(scales_tuple) if scales_tuple else 50,
+        }
+        defaults.update(kwargs)
+        return ScalingStudy(**defaults)
+
+    return _factory
+
+
+@pytest.fixture
+def sample_scaling_study(make_scaling_study: Callable[..., Any]) -> Any:
+    """Provide a sample ScalingStudy fixture with 2 scales."""
+    return make_scaling_study(
         total_context_loss=0.1,
         total_shadowing_loss=0.4,
         total_corpus_skills=50,

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1054,23 +1055,24 @@ def test_print_sweep_displays_errored_probes_and_warning_banner(
     is_corpus: bool,
     target_skill: str | None,
     expected_cell: str,
+    make_scaling_point: Callable[..., Any],
+    make_scaling_study: Callable[..., Any],
 ) -> None:
     """Verify print_sweep renders (N err) in Probes column and prints warning banner."""
     import io
 
     from rich.console import Console
 
-    from reach.sweep import ScalingPoint, ScalingStudy
     from reach.views.sweep import print_sweep
 
     buf = io.StringIO()
     console = Console(file=buf, width=120, force_terminal=False)
-    study = ScalingStudy(
+    study = make_scaling_study(
         target_skill=target_skill,
         is_corpus_sweep=is_corpus,
         scales=(10,),
         points=(
-            ScalingPoint(
+            make_scaling_point(
                 scale=10,
                 catalog_id="sweep:corpus:10",
                 pass_rate=0.0,
@@ -1081,20 +1083,12 @@ def test_print_sweep_displays_errored_probes_and_warning_banner(
                 f1_interval=(0.0, 0.0),
                 in_scope_probes=10,
                 negative_probes=0,
-                delta_vs_baseline=0.0,
-                delta_context=0.0,
-                delta_shadowing=0.0,
                 probes_executed=10,
-                probes_failed=10,
+                probes_failed=0,
                 probes_errored=10,
                 duration_ms_mean=150.0,
             ),
         ),
-        baseline_pass_rate=0.0,
-        final_pass_rate=0.0,
-        total_delta=0.0,
-        total_context_loss=0.0,
-        total_shadowing_loss=0.0,
         noise_floor=0.05,
         total_corpus_skills=147,
     )

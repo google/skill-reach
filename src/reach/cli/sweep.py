@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple
 
 from cyclopts import Parameter
 from pydantic import ValidationError as PydanticValidationError
@@ -31,7 +31,6 @@ from reach.config import (
     _discover_config_path,
     default_agent,
     resolve_path,
-    resolve_sub_settings,
 )
 from reach.generate import checkpoint_path
 from reach.models import Catalog, CatalogMode
@@ -849,12 +848,12 @@ def _resolve_sweep_effective_config(
     if not eff_runtime.agent:
         eff_runtime = eff_runtime.model_copy(update={"agent": "keyword"})
 
-    reg_overrides = registry.overrides() if registry is not None else {}
+    reg_overrides: dict[str, Any] = registry.overrides() if registry is not None else {}
     if skills is not None and not cli_registry_requested:
         reg_overrides["registry"] = False
-    eff_registry = resolve_sub_settings(
+    eff_registry: RegistrySettings = RunConfig.resolve(
         RegistrySettings,
-        run_config.registry if run_config is not None else None,
+        run_config,
         **reg_overrides,
     )
 
