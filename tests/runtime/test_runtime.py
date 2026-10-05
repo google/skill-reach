@@ -1053,16 +1053,25 @@ def test_resolve_skill_from_path_variations(path_arg: Any, expected: str | None)
 
 
 def test_extract_content_reasoning() -> None:
-    """Verify extract_content_reasoning collects thought and text entries."""
+    """Verify extract_content_reasoning extracts non-empty thoughts and text."""
     content = [
         {"type": "thought", "thought": "Thinking step 1"},
         {"type": "thinking", "text": "Thinking step 2"},
+        {"type": "thinking", "thinking": "Thinking step 3 (Pi format)"},
+        {"type": "thinking", "thinking": "   "},
+        {"type": "thought", "thought": ""},
         {"type": "text", "text": "Direct response text"},
+        {"type": "text", "text": "   "},
         {"type": "toolCall", "name": "read"},
         "invalid_item",
     ]
     extracted = extract_content_reasoning(content)
-    assert extracted == ["Thinking step 1", "Thinking step 2", "Direct response text"]
+    assert extracted == [
+        "Thinking step 1",
+        "Thinking step 2",
+        "Thinking step 3 (Pi format)",
+        "Direct response text",
+    ]
 
 
 def test_format_subprocess_error() -> None:

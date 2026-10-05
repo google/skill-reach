@@ -22,9 +22,10 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -154,6 +155,8 @@ def test_pi_options_defaults() -> None:
     assert opts.thinking is None
     assert opts.use_symlinks is True
     assert opts.no_themes is True
+    assert opts.no_extensions is True
+    assert opts.mcp_config is None
     assert opts.isolate_config_dir is True
     assert opts.auto_clean is False
 
@@ -592,12 +595,21 @@ def test_pi_generator_command_and_env() -> None:
     assert env["PI_SKIP_VERSION_CHECK"] == "1"
 
 
-@pytest.mark.parametrize("effort", ["none", "off", "None", "OFF"])
+@pytest.mark.parametrize("effort", ["none", "None"])
 def test_pi_generator_suppresses_disabled_thinking(effort: str) -> None:
-    """Verify PiGenerator omits --thinking when reasoning effort is disabled."""
+    """Verify PiGenerator omits --thinking when reasoning effort is none."""
     gen = PiGenerator(options=PiOptions(effort=effort))
     cmd = gen.build_completion_command("test")
     assert "--thinking" not in cmd
+
+
+@pytest.mark.parametrize("effort", ["off", "OFF"])
+def test_pi_generator_passes_off_thinking(effort: str) -> None:
+    """Verify PiGenerator passes --thinking off when reasoning effort is off."""
+    gen = PiGenerator(options=PiOptions(effort=effort))
+    cmd = gen.build_completion_command("test")
+    assert "--thinking" in cmd
+    assert cmd[cmd.index("--thinking") + 1] == "off"
 
 
 def test_pi_generator_includes_valid_thinking() -> None:
@@ -664,3 +676,242 @@ def test_pi_select_records_duration_ms(
     outcome = rt.select("test query", workdir=tmp_path)
     assert outcome.duration_ms is not None
     assert outcome.duration_ms >= 1
+
+
+@pytest.mark.parametrize(
+    "level",
+    ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+)
+def test_pi_options_thinking_validation(level: str) -> None:
+    """Verify PiOptions accepts valid Pi 1.0 thinking levels."""
+    opts = PiOptions(thinking=cast("Any", level))
+    assert opts.thinking == level
+
+
+def test_pi_options_thinking_invalid() -> None:
+    """Verify PiOptions rejects invalid thinking level with ValidationError."""
+    with pytest.raises(ValidationError):
+        PiOptions(thinking=cast("Any", "extreme"))
+
+
+def test_pi_options_mcp_config_coercion(tmp_path: Path) -> None:
+    """Verify PiOptions coerces mcp_config string to canonical absolute Path."""
+    mcp_path_str = str(tmp_path / "test_mcp.json")
+    opts_mcp = PiOptions(mcp_config=mcp_path_str)
+    assert isinstance(opts_mcp.mcp_config, Path)
+    assert opts_mcp.mcp_config == Path(mcp_path_str)
+
+    opts_rel = PiOptions(mcp_config="test_mcp.json")
+    assert opts_rel.mcp_config is not None
+    assert opts_rel.mcp_config.is_absolute()
+    assert opts_rel.mcp_config == Path("test_mcp.json").resolve()
+
+
+def test_parse_session_entries_pi_native_thinking() -> None:
+    """Verify parsing Pi 1.0 native ThinkingContent with thinking key."""
+    resident = ("cloud-deploy",)
+    entries = [
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Analyzing candidate skills for deployment."},
+                    {
+                        "type": "toolCall",
+                        "id": "call_pi_1",
+                        "name": "read",
+                        "arguments": {"path": "/workspace/.pi/skills/cloud-deploy/SKILL.md"},
+                    },
+                ],
+            },
+        },
+    ]
+    summary = parse_session_entries(entries, resident)
+    assert summary.invoked_skill == "cloud-deploy"
+    assert summary.reasoning == ("Analyzing candidate skills for deployment.",)
+
+
+def test_parse_session_entries_accumulates_cost_across_multiple_turns() -> None:
+    """Verify parse_session_entries sums cost_usd across all assistant turns with exact rounding."""
+    resident = ("cloud-deploy",)
+    entries = [
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "usage": {"input": 100, "cost": {"total": 0.005001}},
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "name": "read",
+                        "arguments": {"path": "/workspace/.pi/skills/cloud-deploy/SKILL.md"},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "usage": {"input": 200, "cost": {"total": 0.007002}},
+                "content": [{"type": "text", "text": "Deployment skill instructions followed."}],
+            },
+        },
+    ]
+    summary = parse_session_entries(entries, resident)
+    assert summary.turns_taken == 2
+    assert summary.cost_usd == 0.012003
+
+
+def test_pi_usage_pi_1_0_fields() -> None:
+    """Verify PiUsage parses Pi 1.0 schema fields and calculates total_prompt_tokens."""
+    from reach.runtime.pi import PiCost, PiUsage
+
+    cost = PiCost(input=0.001, output=0.002, cacheRead=0.0005, total=0.0035)
+    assert cost.total == pytest.approx(0.0035)
+    assert cost.cache_read == pytest.approx(0.0005)
+
+    usage = PiUsage(
+        input=1000,
+        output=50,
+        cacheRead=200,
+        cacheWrite=20,
+        reasoning=30,
+        totalTokens=1270,
+        cost=cost,
+    )
+    assert usage.input == 1000
+    assert usage.cache_read == 200
+    assert usage.cache_write == 20
+    assert usage.total_tokens == 1270
+    assert usage.total_prompt_tokens == 1220
+
+    usage_fallback = PiUsage(promptTokens=350)
+    assert usage_fallback.total_prompt_tokens == 350
+
+    usage_empty = PiUsage()
+    assert usage_empty.total_prompt_tokens is None
+
+
+def test_build_command_no_extensions_and_mcp_config(tmp_path: Path) -> None:
+    """Verify build_command conditionally adds --no-extensions and --mcp-config."""
+    mcp_file = tmp_path / "mcp.json"
+    mcp_file.write_text("{}", encoding="utf-8")
+
+    # With no_extensions=False and mcp_config provided
+    rt = PiRuntime(
+        RuntimeSettings(
+            agent="pi",
+            options={"no_extensions": False, "mcp_config": str(mcp_file)},
+        )
+    )
+    cmd = rt.build_command("query", session_dir=tmp_path / "sessions")
+    assert "--no-extensions" not in cmd
+    assert "--mcp-config" in cmd
+    assert cmd[cmd.index("--mcp-config") + 1] == str(mcp_file)
+
+    # Default PiOptions has no_extensions=True
+    rt_default = PiRuntime(RuntimeSettings(agent="pi"))
+    cmd_default = rt_default.build_command("query", session_dir=tmp_path / "sessions")
+    assert "--no-extensions" in cmd_default
+    assert "--mcp-config" not in cmd_default
+
+
+@pytest.mark.parametrize(
+    ("options_dict", "expected_thinking"),
+    [
+        ({"effort": "none"}, None),
+        ({"effort": "off"}, "off"),
+        ({"thinking": "off"}, "off"),
+        ({"thinking": "low"}, "low"),
+    ],
+)
+def test_build_command_thinking_and_effort(
+    tmp_path: Path,
+    options_dict: dict[str, str],
+    expected_thinking: str | None,
+) -> None:
+    """Verify build_command properly translates or suppresses thinking argument."""
+    session_dir = tmp_path / "sessions"
+    settings = RuntimeSettings(
+        agent="pi",
+        options={"model": "gemini-3.8-flash", **options_dict},
+    )
+    rt = PiRuntime(settings)
+    cmd = rt.build_command("query", session_dir=session_dir)
+    if expected_thinking is None:
+        assert "--thinking" not in cmd
+    else:
+        assert "--thinking" in cmd
+        assert cmd[cmd.index("--thinking") + 1] == expected_thinking
+
+
+def test_pi_generator_no_extensions_and_mcp_config(tmp_path: Path) -> None:
+    """Verify PiGenerator completion command supports no_extensions and mcp_config."""
+    mcp_file = tmp_path / "mcp.json"
+    gen = PiGenerator(options=PiOptions(no_extensions=False, mcp_config=mcp_file))
+    cmd = gen.build_completion_command("test")
+    assert "--no-extensions" not in cmd
+    assert "--mcp-config" in cmd
+    assert cmd[cmd.index("--mcp-config") + 1] == str(mcp_file)
+
+
+def test_pi_options_common_cli_args(tmp_path: Path) -> None:
+    """Verify PiOptions.common_cli_args produces expected flags and parity."""
+    mcp_file = tmp_path / "mcp.json"
+    opts = PiOptions(
+        model="gemini-3.8-flash",
+        provider="google",
+        api_key="secret-key",
+        thinking="low",
+        no_extensions=True,
+        mcp_config=mcp_file,
+    )
+    args = opts.common_cli_args()
+    assert "--no-extensions" in args
+    assert "--mcp-config" in args
+    assert args[args.index("--mcp-config") + 1] == str(mcp_file)
+    assert "--no-themes" in args
+    assert "--model" in args
+    assert args[args.index("--model") + 1] == "gemini-3.8-flash"
+    assert "--provider" in args
+    assert args[args.index("--provider") + 1] == "google"
+    assert "--api-key" in args
+    assert args[args.index("--api-key") + 1] == "secret-key"
+    assert "--thinking" in args
+    assert args[args.index("--thinking") + 1] == "low"
+
+
+@pytest.mark.parametrize(
+    ("input_thinking", "expected"),
+    [
+        ("LOW", "low"),
+        ("Medium", "medium"),
+        ("high", "high"),
+        ("MAX", "max"),
+        ("off", "off"),
+        ("OFF", "off"),
+        ("none", None),
+        ("NONE", None),
+    ],
+)
+def test_pi_options_resolve_thinking_casing(input_thinking: str, expected: str | None) -> None:
+    """Verify resolve_thinking normalizes casing for valid levels."""
+    opts = PiOptions()
+    assert opts.resolve_thinking(input_thinking) == expected
+
+
+def test_pi_options_resolve_thinking_invalid() -> None:
+    """Verify resolve_thinking raises ValueError on invalid level."""
+    opts = PiOptions()
+    with pytest.raises(ValueError, match="Invalid thinking level for Pi"):
+        opts.resolve_thinking("extreme")
+
+
+def test_pi_options_common_cli_args_explicit_thinking() -> None:
+    """Verify common_cli_args respects pre-resolved thinking parameter."""
+    opts = PiOptions(thinking="low")
+    args = opts.common_cli_args(thinking="high")
+    assert "--thinking" in args
+    assert args[args.index("--thinking") + 1] == "high"
