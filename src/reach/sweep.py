@@ -262,8 +262,12 @@ def _compute_pava_weights(
     min_variance: float = _MIN_PAVA_VARIANCE,
 ) -> list[float]:
     """Compute inverse-variance PAVA weights from confidence intervals."""
+    if ci_span <= 0:
+        msg = f"ci_span must be strictly positive, got {ci_span}"
+        raise ValueError(msg)
+    clamped_min_var = max(1e-12, min_variance)
     return [
-        1.0 / max(min_variance, ((interval[1] - interval[0]) / ci_span) ** 2)
+        1.0 / max(clamped_min_var, (max(0.0, interval[1] - interval[0]) / ci_span) ** 2)
         for interval in intervals
     ]
 
@@ -1076,6 +1080,16 @@ def _build_scaling_point(
         results, baseline_results, queries, seed, target_skill=target_skill
     )
 
+    scoped_results = [
+        r
+        for r in results
+        if target_skill is None
+        or (
+            (q := queries_by_id.get(r.query_id)) is not None
+            and (q.expected_skill == target_skill or q.is_out_of_scope)
+        )
+    ]
+
     point = ScalingPoint(
         scale=scale,
         catalog_id=catalog_id,
@@ -1112,9 +1126,9 @@ def _build_scaling_point(
         delta_context=round(decomp_stats.delta_context, 4),
         delta_shadowing=round(decomp_stats.delta_shadowing, 4),
         delta_truncated=round(decomp_stats.delta_truncated, 4),
-        probes_executed=len(results),
+        probes_executed=len(scoped_results),
         probes_failed=pass_stats.fails,
-        probes_errored=sum(1 for r in results if r.error),
+        probes_errored=sum(1 for r in scoped_results if r.error),
         prompt_tokens_mean=telemetry.prompt_tokens_mean,
         duration_ms_mean=telemetry.duration_ms_mean,
         step_efficiency_mean=class_stats.step_efficiency_mean,
@@ -1244,13 +1258,15 @@ def _resolve_anchor_count(
     default_count: int,
 ) -> int | None:
     """Extract numeric anchor count from requested anchor specification, if applicable."""
-    if isinstance(requested_anchor, int):
-        return requested_anchor
-    if isinstance(requested_anchor, str) and requested_anchor.isdigit():
-        return int(requested_anchor)
-    if requested_anchor is None:
-        return default_count
-    return None
+    match requested_anchor:
+        case int():
+            return requested_anchor
+        case str() if requested_anchor.isdigit():
+            return int(requested_anchor)
+        case None:
+            return default_count
+        case _:
+            return None
 
 
 def _resolve_anchor_skills(
@@ -1418,7 +1434,7 @@ def _extract_bootstrap_quantiles(
     q_low: float,
     q_high: float,
 ) -> tuple[int, int] | None:
-    """Extract bootstrap empirical quantiles when knee detection meets majority threshold."""
+    """Extract bootstrap empirical quantiles when knee detection meets the majority threshold."""
     min_detections = max(1, int(iterations * 0.50))
     if len(knees) >= min_detections:
         knees.sort()
@@ -1459,8 +1475,9 @@ def _resample_cluster_curve(
                     total_hits += entry[3]
                     total_count += entry[4]
                 else:
-                    total_hits += entry[0]
-                    total_count += entry[0] + entry[2]
+                    tp, _fp, fn = entry[:3]
+                    total_hits += tp
+                    total_count += tp + fn
             val = (total_hits / total_count) if total_count > 0 else 0.0
         resampled_curve.append(val)
     return resampled_curve
@@ -1778,9 +1795,8 @@ def run_scaling_sweep(
         latest_results = outcome.results
         scale_query_map = {q.id: q for q in scale_query_set.queries}
         truth_expected = {q.id: q.expected_skill for q in scale_query_set.queries}
-        valid_scale_results = [r for r in outcome.results if not r.error]
         scale_query_sums[scale] = _extract_query_outcomes(
-            valid_scale_results,
+            outcome.results,
             truth_expected,
             set(catalog.skills),
             target_skill=target if not is_corpus else None,

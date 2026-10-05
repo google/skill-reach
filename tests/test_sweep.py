@@ -2442,6 +2442,18 @@ def test_pava_weights_zero_variance_receives_maximum_weight(
     assert weights[1] < weights[0]
     assert 1400.0 < weights[1] < 1600.0
 
+    # Defensive check: ci_span <= 0 raises ValueError
+    with pytest.raises(ValueError, match="ci_span must be strictly positive"):
+        _compute_pava_weights([(0.9, 1.0)], 0.0)
+
+    # Defensive check: inverted interval clamps negative width to 0.0
+    inverted_weights = _compute_pava_weights([(1.0, 0.9)], ci_span)
+    assert inverted_weights[0] == 10000.0
+
+    # Defensive check: min_variance=0 clamps to 1e-12 without division by zero
+    zero_min_var_weights = _compute_pava_weights([(1.0, 1.0)], ci_span, min_variance=0.0)
+    assert zero_min_var_weights[0] == 1e12
+
 
 def test_compute_effective_noise_floor_uses_rate_curve_in_corpus_mode(
     make_scaling_point: Callable[..., Any],
@@ -2788,3 +2800,65 @@ def test_extract_query_outcomes_and_single_skill_bootstrap_resampling(
     )
     assert len(resampled) == 1
     assert resampled[0] == 1.0
+
+
+def test_build_scaling_point_scopes_probe_accounting_with_rivals(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify _build_scaling_point scopes probes_executed and errored in single skill."""
+    from reach.models import Query, QueryKind
+    from reach.queries import Origin, QuerySet, QuerySetProvenance
+    from reach.sweep import _build_scaling_point
+
+    queries = [
+        Query(
+            id="q_target",
+            text="target task",
+            kind=QueryKind.IMPLICIT,
+            expected_skill="target-skill",
+        ),
+        Query(
+            id="q_oos",
+            text="out of scope task",
+            kind=QueryKind.OUT_OF_SCOPE,
+            expected_skill=None,
+        ),
+        Query(
+            id="q_rival",
+            text="rival negative task",
+            kind=QueryKind.NEIGHBOR_NEGATIVE,
+            expected_skill="rival-skill",
+        ),
+    ]
+    qs = QuerySet(
+        catalog_id="test",
+        queries=tuple(queries),
+        provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+    )
+
+    results = (
+        make_probe_result(query_id="q_target", invoked="target-skill"),
+        make_probe_result(query_id="q_oos", invoked="target-skill"),
+        make_probe_result(query_id="q_rival", invoked="rival-skill"),
+        make_probe_result(query_id="q_target", error="Connection failed"),
+        make_probe_result(query_id="q_rival", error="Timeout"),
+    )
+
+    point, _ = _build_scaling_point(
+        scale=10,
+        catalog_id="cat-10",
+        results=results,
+        resolved_query_set=qs,
+        baseline_results=(),
+        installed_skills={"target-skill", "rival-skill"},
+        target_skill="target-skill",
+    )
+
+    # Scoped probes are q_target (1 hit + 1 error = 2) and q_oos (1 fail = 1) -> 3 total
+    assert point.probes_executed == 3
+    assert point.probes_errored == 1
+    assert point.probes_failed == 1
+    # Valid non-errored probes = 2; pass rate = 1 hit / 2 valid = 0.50
+    assert point.pass_rate == 0.5
+    # Strict invariant validation holds
+    assert point.probes_failed <= point.probes_executed - point.probes_errored
