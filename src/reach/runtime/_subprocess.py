@@ -347,7 +347,7 @@ def extract_content_reasoning(content: Iterable[Any]) -> list[str]:
             continue
         item_type = item.get("type")
         if item_type in ("thought", "thinking"):
-            if thought := item.get("thought") or item.get("text"):
+            if thought := item.get("thinking") or item.get("thought") or item.get("text"):
                 reasoning.append(str(thought).strip())
         elif item_type == "text" and (text := item.get("text")):
             reasoning.append(str(text).strip())

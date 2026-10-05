@@ -20,7 +20,7 @@ import contextlib
 import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, ValidationError
 
@@ -78,11 +78,54 @@ class PiOptions(CliOptions):
         description="The model identifier to evaluate.",
     )
     provider: str | None = "google"
-    thinking: str | None = None
+    thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None,
+        description="Reasoning effort level for Pi: off, minimal, low, medium, high, xhigh, max.",
+    )
     tools: str = "read"
     no_themes: bool = True
+    no_extensions: bool = True
+    mcp_config: Path | None = Field(
+        default=None,
+        description="Path to an MCP JSON configuration file to pass via --mcp-config.",
+    )
     agent_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "agent_dir"
+
+    def resolve_thinking(self, profile_effort: str | None = None) -> str | None:
+        """Resolve effective thinking level for Pi CLI.
+
+        Returns:
+            Validated thinking level string ('off', 'minimal', ..., 'max') or None if thinking
+            should be omitted (e.g. effort='none' or unset).
+        """
+        candidate = self.thinking or self.effort or profile_effort
+        if candidate is None:
+            return None
+        candidate_lower = candidate.lower()
+        if candidate_lower == "none":
+            return None
+        if candidate_lower == "off":
+            return "off"
+        return candidate
+
+    def common_cli_args(self, model: str = "", profile_effort: str | None = None) -> list[str]:
+        """Assemble shared CLI arguments for Pi runtime and generator."""
+        cmd: list[str] = []
+        if self.no_extensions:
+            cmd.append("--no-extensions")
+        if self.mcp_config is not None:
+            cmd += ["--mcp-config", str(self.mcp_config)]
+        if self.no_themes:
+            cmd.append("--no-themes")
+        target_model = model or self.model
+        if target_model:
+            cmd += ["--model", target_model]
+        cmd += self.provider_args("--provider")
+        cmd += self.api_key_args("--api-key")
+        if thinking := self.resolve_thinking(profile_effort):
+            cmd += ["--thinking", thinking]
+        return cmd
 
 
 def _extract_pi_tool_call(
@@ -124,8 +167,12 @@ def _extract_pi_message_content(
 class PiCost(BaseModel):
     """Represent cost breakdown from Pi message usage metadata."""
 
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
+    input: NonNegativeFloat | None = None
+    output: NonNegativeFloat | None = None
+    cache_read: NonNegativeFloat | None = Field(default=None, alias="cacheRead")
+    cache_write: NonNegativeFloat | None = Field(default=None, alias="cacheWrite")
     total: NonNegativeFloat | None = None
 
 
@@ -135,18 +182,17 @@ class PiUsage(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
     input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
     cache_read: NonNegativeInt = Field(default=0, alias="cacheRead")
     cache_write: NonNegativeInt = Field(default=0, alias="cacheWrite")
-    prompt_tokens: NonNegativeInt | None = None
+    reasoning: NonNegativeInt = 0
+    total_tokens: NonNegativeInt = Field(default=0, alias="totalTokens")
     cost: PiCost | None = None
 
     @property
-    def total_prompt_tokens(self) -> int | None:
+    def total_prompt_tokens(self) -> int:
         """Calculate total input/prompt tokens across direct and cached prompt segments."""
-        pi_input = self.input + self.cache_read + self.cache_write
-        if pi_input > 0:
-            return pi_input
-        return self.prompt_tokens
+        return self.input + self.cache_read + self.cache_write
 
 
 def _extract_pi_message_usage(msg: dict[str, Any]) -> tuple[float | None, int | None]:
@@ -188,7 +234,7 @@ def parse_session_entries(
 
         cost, toks = _extract_pi_message_usage(msg)
         if cost is not None:
-            cost_usd = cost
+            cost_usd = (cost_usd or 0.0) + cost
         if toks is not None:
             prompt_tokens = toks
 
@@ -242,6 +288,11 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             )
         return summary
 
+    @property
+    def effective_effort(self) -> str | None:
+        """Return configured reasoning effort or default from model profile."""
+        return self.options.resolve_thinking(super().effective_effort)
+
     def build_command(self, query_text: str, session_dir: Path | None = None) -> list[str]:
         """Assemble command-line arguments for running a single-turn Pi probe."""
         options = self.options
@@ -256,18 +307,12 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             options.tools,
             "--no-context-files",
             "--no-prompt-templates",
-            "--no-extensions",
             "--approve",
         ]
-        if options.no_themes:
-            cmd.append("--no-themes")
-        if options.model:
-            cmd += ["--model", options.model]
-        cmd += options.provider_args("--provider")
-        cmd += options.api_key_args("--api-key")
-        effective_thinking = options.effort or options.thinking or self.effective_effort
-        if effective_thinking:
-            cmd += ["--thinking", effective_thinking]
+        cmd += options.common_cli_args(
+            model=options.model,
+            profile_effort=super().effective_effort,
+        )
         if options.extra_args:
             cmd += list(options.extra_args)
         return cmd
@@ -403,15 +448,10 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
     @property
     def effective_effort(self) -> str | None:
         """Return configured reasoning effort or default from model profile."""
-        if self.options.effort:
-            effort = self.options.effort
-            return None if effort.lower() in ("none", "off") else effort
-        if self.options.thinking:
-            return self.options.thinking
-        try:
-            return model_profile(self.model).effort
-        except (KeyError, ValueError):
-            return None
+        profile_effort = None
+        with contextlib.suppress(KeyError, ValueError):
+            profile_effort = model_profile(self.model).effort
+        return self.options.resolve_thinking(profile_effort)
 
     @override
     def build_completion_command(self, prompt: str = "") -> list[str]:
@@ -424,16 +464,11 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
             "--no-skills",
             "--no-context-files",
             "--no-prompt-templates",
-            "--no-extensions",
         ]
-        if self.options.no_themes:
-            cmd.append("--no-themes")
-        if self.model:
-            cmd += ["--model", self.model]
-        cmd += self.options.provider_args("--provider")
-        cmd += self.options.api_key_args("--api-key")
-        if self.effective_effort:
-            cmd += ["--thinking", self.effective_effort]
+        cmd += self.options.common_cli_args(
+            model=self.model,
+            profile_effort=self.effective_effort,
+        )
         return [*cmd, *self.options.extra_args]
 
     @override

@@ -1057,12 +1057,18 @@ def test_extract_content_reasoning() -> None:
     content = [
         {"type": "thought", "thought": "Thinking step 1"},
         {"type": "thinking", "text": "Thinking step 2"},
+        {"type": "thinking", "thinking": "Thinking step 3 (Pi format)"},
         {"type": "text", "text": "Direct response text"},
         {"type": "toolCall", "name": "read"},
         "invalid_item",
     ]
     extracted = extract_content_reasoning(content)
-    assert extracted == ["Thinking step 1", "Thinking step 2", "Direct response text"]
+    assert extracted == [
+        "Thinking step 1",
+        "Thinking step 2",
+        "Thinking step 3 (Pi format)",
+        "Direct response text",
+    ]
 
 
 def test_format_subprocess_error() -> None:
