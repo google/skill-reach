@@ -414,8 +414,8 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
             (),
             True,
             True,
-            1.0,
-            1.0,
+            None,
+            None,
             0,
         ),
         # Out-of-Scope (Misroute): [], invoked: [deploy]
@@ -424,8 +424,8 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
             ("deploy",),
             False,
             False,
-            0.0,
-            0.0,
+            None,
+            None,
             1,
         ),
         # Fatal Misroute: [{deploy}], invoked: [wrong]
@@ -445,16 +445,22 @@ def test_score_trajectory_behavior_matrix(
     invoked: tuple[str, ...],
     expected_entry: bool,
     expected_reach: bool,
-    expected_mrr: float,
-    expected_f1: float,
+    expected_mrr: float | None,
+    expected_f1: float | None,
     expected_redundancy: int,
 ) -> None:
     """Verify score_trajectory conforms to the comprehensive behavior matrix."""
     score = score_trajectory(query, invoked)
     assert score.entrypoint_hit is expected_entry
     assert score.trajectory_hit is expected_reach
-    assert score.step_efficiency == pytest.approx(expected_mrr, abs=1e-3)
-    assert score.skill_f1 == pytest.approx(expected_f1, abs=1e-3)
+    if expected_mrr is None:
+        assert score.step_efficiency is None
+    else:
+        assert score.step_efficiency == pytest.approx(expected_mrr, abs=1e-3)
+    if expected_f1 is None:
+        assert score.skill_f1 is None
+    else:
+        assert score.skill_f1 == pytest.approx(expected_f1, abs=1e-3)
     assert score.redundancy == expected_redundancy
 
 
@@ -469,7 +475,7 @@ def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> 
     # q1: precursor setup (entrypoint False, trajectory True, mrr 0.5, f1 0.6667, red 1)
     # q2: direct primary hit (entrypoint True, trajectory True, mrr 1.0, f1 1.0, red 0)
     # q3: fatal misroute (entrypoint False, trajectory False, mrr 0.0, f1 0.0, red 0)
-    # q4: clean abstention (entrypoint True, trajectory True, mrr 1.0, f1 1.0, red 0)
+    # q4: clean abstention (entrypoint True, trajectory True, mrr None, f1 None, red 0)
     results = [
         ProbeResult(
             query_id="q1",
@@ -515,8 +521,9 @@ def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> 
     assert report.entrypoint_accuracy == pytest.approx(2 / 4)
     assert report.trajectory_hits == 3  # q1, q2, q4
     assert report.trajectory_reachability == pytest.approx(3 / 4)
-    assert report.step_efficiency == pytest.approx((0.5 + 1.0 + 0.0 + 1.0) / 4)
-    assert report.skill_f1 == pytest.approx((0.6667 + 1.0 + 0.0 + 1.0) / 4, abs=1e-3)
+    # q1, q2, q3 are in-scope; q4 is out-of-scope and excluded from step_efficiency and skill_f1
+    assert report.step_efficiency == pytest.approx((0.5 + 1.0 + 0.0) / 3)
+    assert report.skill_f1 == pytest.approx((0.6667 + 1.0 + 0.0) / 3, abs=1e-3)
     assert report.redundancy == pytest.approx((1 + 0 + 0 + 0) / 4)
 
     # Cross-check Wilson intervals directly against scipy.stats.binomtest
@@ -529,6 +536,87 @@ def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> 
     assert report.trajectory_interval is not None
     assert report.trajectory_interval.low == pytest.approx(scipy_traj.low, abs=1e-5)
     assert report.trajectory_interval.high == pytest.approx(scipy_traj.high, abs=1e-5)
+
+
+def test_classification_report_zero_in_scope_returns_none_efficiency() -> None:
+    """Verify classification_report returns None for efficiency metrics when in-scope is 0."""
+    queries = (
+        Query(id="q1", text="oos1", kind=QueryKind.OUT_OF_SCOPE),
+        Query(id="q2", text="oos2", kind=QueryKind.OUT_OF_SCOPE),
+    )
+    results = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="cat",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=3,
+            model="m",
+            runtime="fake",
+            invoked_skills=(),
+        ),
+        ProbeResult(
+            query_id="q2",
+            catalog_id="cat",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=3,
+            model="m",
+            runtime="fake",
+            invoked_skills=("wrong",),
+        ),
+    ]
+    report = classification_report(results, queries)
+    assert report.in_scope == 0
+    assert report.out_of_scope == 2
+    assert report.step_efficiency is None
+    assert report.skill_f1 is None
+
+
+def test_classification_report_cluster_wilson_interval_adjusts_for_attempts() -> None:
+    """Verify cluster_wilson_interval is computed with design effect when attempts > 1."""
+    from reach.uncertainty import cluster_wilson_interval, wilson_interval
+
+    queries = (
+        Query(id="q1", text="deploy", expected_skill="deploy"),
+        Query(id="q2", text="scale", expected_skill="scale"),
+    )
+    results = [
+        ProbeResult(
+            query_id="q1",
+            catalog_id="cat",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=2,
+            model="m",
+            runtime="fake",
+            invoked_skills=("deploy",),
+            attempt=att,
+        )
+        for att in (1, 2, 3)
+    ] + [
+        ProbeResult(
+            query_id="q2",
+            catalog_id="cat",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=2,
+            model="m",
+            runtime="fake",
+            invoked_skills=(),
+            attempt=att,
+        )
+        for att in (1, 2, 3)
+    ]
+    report = classification_report(results, queries, attempts=3)
+    assert report.attempts == 3
+    assert report.top1_hits == 3
+    assert report.scored == 6
+
+    expected_cluster_ci = cluster_wilson_interval(3, 6, attempts=3)
+    naive_ci = wilson_interval(3, 6)
+    assert expected_cluster_ci is not None
+    assert naive_ci is not None
+    assert report.top1_interval is not None
+    cluster_span = report.top1_interval.high - report.top1_interval.low
+    naive_span = naive_ci.high - naive_ci.low
+    assert cluster_span > naive_span
 
 
 @pytest.mark.parametrize(

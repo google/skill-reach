@@ -130,8 +130,8 @@ class ArmSummary(BaseModel):
     standard_error: float | None = None
     entrypoint_accuracy: float = 0.0
     trajectory_reachability: float = 0.0
-    step_efficiency: float = 0.0
-    skill_f1: float = 0.0
+    step_efficiency: float | None = None
+    skill_f1: float | None = None
     redundancy: float = 0.0
 
 

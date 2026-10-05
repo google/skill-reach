@@ -776,3 +776,37 @@ def test_find_competing_neighbors_includes_dense_semantic_rivals(tmp_path: Path)
         dense_similarities=dense_sims,
     )
     assert neighbors == {"bigquery-slot-cost-optimizer"}
+
+
+def test_build_check_assertions_handles_unobserved_metrics() -> None:
+    """Verify check assertions fail with diagnostic message when unobserved metrics are tested."""
+    from reach.views.quality_gate import _format_assertion_strings
+
+    metrics = EmpiricalMetrics(
+        recall=1.0,
+        accuracy=1.0,
+        misroute_rate=0.0,
+        step_efficiency=None,
+        skill_f1=None,
+    )
+    # When thresholds are None (default), unobserved metrics produce no assertions
+    assertions_default = _build_check_assertions(metrics, CheckSettings())
+    assert not any(a.name in {"step_efficiency", "skill_f1"} for a in assertions_default)
+
+    # When thresholds are configured, unobserved metrics fail with clear explanation
+    strict_settings = CheckSettings(min_efficiency=0.8, min_f1=0.75)
+    assertions = _build_check_assertions(metrics, strict_settings)
+    eff_a = next(a for a in assertions if a.name == "step_efficiency")
+    assert not eff_a.passed
+    assert eff_a.observed is None
+    assert "not observed" in eff_a.message
+
+    f1_a = next(a for a in assertions if a.name == "skill_f1")
+    assert not f1_a.passed
+    assert f1_a.observed is None
+    assert "not observed" in f1_a.message
+
+    # Format assertion strings gracefully formats None observed
+    obs_str, tgt_str = _format_assertion_strings(eff_a)
+    assert obs_str == "n/a"
+    assert "0.8" in tgt_str

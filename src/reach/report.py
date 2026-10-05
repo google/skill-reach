@@ -111,8 +111,16 @@ def _render_classification_header(artifact: Artifact) -> list[str]:
                     f"  reachability      {_pct(scores.trajectory_reachability)}"
                     f"{_ci(scores.trajectory_interval)}"
                 ),
-                f"  step efficiency   {scores.step_efficiency:6.3f}",
-                f"  skill F1          {_pct(scores.skill_f1)}",
+                (
+                    f"  step efficiency   {scores.step_efficiency:6.3f}"
+                    if scores.step_efficiency is not None
+                    else "  step efficiency      n/a"
+                ),
+                (
+                    f"  skill F1          {_pct(scores.skill_f1)}"
+                    if scores.skill_f1 is not None
+                    else "  skill F1             n/a"
+                ),
                 f"  redundancy        +{scores.redundancy:.2f}",
             ]
         )

@@ -34,6 +34,7 @@ from reach.uncertainty import (
     DEFAULT_CONFIDENCE,
     Interval,
     bootstrap_quantiles,
+    cluster_wilson_interval,
     wilson_interval,
 )
 
@@ -92,8 +93,8 @@ class TrajectoryScore(BaseModel):
 
     entrypoint_hit: bool
     trajectory_hit: bool
-    step_efficiency: Annotated[float, Field(ge=0.0, le=1.0)]
-    skill_f1: Annotated[float, Field(ge=0.0, le=1.0)]
+    step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: Annotated[int, Field(ge=0)]
 
 
@@ -109,8 +110,8 @@ def score_trajectory(
         return TrajectoryScore(
             entrypoint_hit=abstained,
             trajectory_hit=abstained,
-            step_efficiency=1.0 if abstained else 0.0,
-            skill_f1=1.0 if abstained else 0.0,
+            step_efficiency=None,
+            skill_f1=None,
             redundancy=len(invoked_seq),
         )
 
@@ -154,6 +155,7 @@ class ClassMetrics(BaseModel):
     support: Annotated[int, Field(ge=0)]
     true_positives: Annotated[int, Field(ge=0)]
     trajectory_true_positives: Annotated[int, Field(ge=0)] = 0
+    attempts: Annotated[int, Field(ge=1)] = 1
 
     @model_validator(mode="after")
     def _ensure_trajectory_at_least_top1(self) -> Self:
@@ -190,18 +192,20 @@ class ClassMetrics(BaseModel):
 
     @property
     def recall_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for recall."""
-        return wilson_interval(
+        """Calculate the cluster-adjusted Wilson confidence interval for recall."""
+        return cluster_wilson_interval(
             self.true_positives,
             self.true_positives + self.false_negatives,
+            attempts=self.attempts,
         )
 
     @property
     def precision_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for precision."""
-        return wilson_interval(
+        """Calculate the cluster-adjusted Wilson confidence interval for precision."""
+        return cluster_wilson_interval(
             self.true_positives,
             self.true_positives + self.false_positives,
+            attempts=self.attempts,
         )
 
 
@@ -225,8 +229,9 @@ class ClassificationReport(BaseModel):
     top1_hits: Annotated[int, Field(ge=0)] = 0
     entrypoint_hits: Annotated[int, Field(ge=0)] = 0
     trajectory_hits: Annotated[int, Field(ge=0)] = 0
-    step_efficiency: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
-    skill_f1: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
+    attempts: Annotated[int, Field(ge=1)] = 1
+    step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: Annotated[float, Field(ge=0.0)] = 0.0
 
     @computed_field
@@ -238,8 +243,8 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def entrypoint_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for entrypoint accuracy."""
-        return wilson_interval(self.entrypoint_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for entrypoint accuracy."""
+        return cluster_wilson_interval(self.entrypoint_hits, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
@@ -250,8 +255,8 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def trajectory_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for trajectory reachability."""
-        return wilson_interval(self.trajectory_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for trajectory reachability."""
+        return cluster_wilson_interval(self.trajectory_hits, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
@@ -262,8 +267,8 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def top1_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for top-1 accuracy."""
-        return wilson_interval(self.top1_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for top-1 accuracy."""
+        return cluster_wilson_interval(self.top1_hits, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
@@ -274,8 +279,8 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def abstention_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for overall abstention rate."""
-        return wilson_interval(self.abstentions, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for overall abstention rate."""
+        return cluster_wilson_interval(self.abstentions, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
@@ -286,8 +291,12 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def false_abstention_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for false abstention rate."""
-        return wilson_interval(self.false_abstentions, self.in_scope)
+        """Calculate the cluster-adjusted Wilson confidence interval for false abstention rate."""
+        return cluster_wilson_interval(
+            self.false_abstentions,
+            self.in_scope,
+            attempts=self.attempts,
+        )
 
     @computed_field
     @property
@@ -300,8 +309,12 @@ class ClassificationReport(BaseModel):
     @computed_field
     @property
     def out_of_scope_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for out-of-scope detection."""
-        return wilson_interval(self.out_of_scope_detected, self.out_of_scope)
+        """Calculate cluster-adjusted Wilson interval for out-of-scope detection."""
+        return cluster_wilson_interval(
+            self.out_of_scope_detected,
+            self.out_of_scope,
+            attempts=self.attempts,
+        )
 
     def by_label(self, label: str) -> ClassMetrics:
         """Return per-class metrics for a specified label."""
@@ -351,6 +364,7 @@ def _class_metrics(
     y_true: Sequence[str],
     y_pred: Sequence[str],
     trajectory_tp: int | None = None,
+    attempts: int = 1,
 ) -> ClassMetrics:
     """Compute precision, recall, and support metrics for a single label."""
     tp = sum(t == label and p == label for t, p in zip(y_true, y_pred, strict=True))
@@ -364,6 +378,7 @@ def _class_metrics(
         trajectory_true_positives=max(tp, trajectory_tp) if trajectory_tp is not None else tp,
         false_positives=fp,
         false_negatives=fn,
+        attempts=attempts,
     )
 
 
@@ -372,6 +387,7 @@ def _build_per_class(
     y_pred: Sequence[str],
     universe: Sequence[str],
     trajectory_hits_by_label: Mapping[str, int] | None = None,
+    attempts: int = 1,
 ) -> tuple[ClassMetrics, ...]:
     """Compute per-class metrics across all labels in the universe."""
     return tuple(
@@ -382,6 +398,7 @@ def _build_per_class(
             trajectory_tp=trajectory_hits_by_label.get(label, 0)
             if trajectory_hits_by_label is not None
             else None,
+            attempts=attempts,
         )
         for label in universe
     )
@@ -421,6 +438,7 @@ def classification_report(
     results: Sequence[ProbeResult],
     queries: Sequence[Query],
     labels: Sequence[str] | None = None,
+    attempts: int = 1,
 ) -> ClassificationReport:
     """Generate a comprehensive classification report across all probe results."""
     pairs = _paired(results, queries)
@@ -436,17 +454,21 @@ def classification_report(
         y_pred,
         universe,
         trajectory_hits_by_label=traj_hits_by_label,
+        attempts=attempts,
     )
     precision, recall, f1 = _macro_averages(per_class)
     in_count, false_abs, out_count, out_detected = _scope_metrics(y_true, y_pred)
 
     entrypoint_hits = sum(1 for s in traj_scores if s.entrypoint_hit)
     trajectory_hits = sum(1 for s in traj_scores if s.trajectory_hit)
-    step_eff = _mean([s.step_efficiency for s in traj_scores])
-    s_f1 = _mean([s.skill_f1 for s in traj_scores])
+    in_scope_effs = [s.step_efficiency for s in traj_scores if s.step_efficiency is not None]
+    in_scope_f1s = [s.skill_f1 for s in traj_scores if s.skill_f1 is not None]
+    step_eff = statistics.fmean(in_scope_effs) if in_scope_effs else None
+    s_f1 = statistics.fmean(in_scope_f1s) if in_scope_f1s else None
     redundancy = _mean([float(s.redundancy) for s in traj_scores])
 
     return ClassificationReport(
+        attempts=attempts,
         probes=len(results),
         errors=sum(1 for r in results if r.error),
         scored=len(y_true),
@@ -454,8 +476,8 @@ def classification_report(
         top1_hits=sum(t == p for t, p in zip(y_true, y_pred, strict=True)),
         entrypoint_hits=entrypoint_hits,
         trajectory_hits=trajectory_hits,
-        step_efficiency=round(step_eff, 4),
-        skill_f1=round(s_f1, 4),
+        step_efficiency=round(step_eff, 4) if step_eff is not None else None,
+        skill_f1=round(s_f1, 4) if s_f1 is not None else None,
         redundancy=round(redundancy, 4),
         macro_precision=precision,
         macro_recall=recall,

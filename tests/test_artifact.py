@@ -1355,3 +1355,73 @@ def test_symlinked_skill_is_attributed_to_enclosing_root(
     assert [(r.path, r.skills) for r in built.resolved_roots] == [(skill_repo.resolve(), 4)]
     symlinked_score = next(s for s in built.skills if s.skill == "symlinked-skill")
     assert symlinked_score.root == skill_repo.resolve()
+
+
+def test_artifact_assembler_forwards_attempts_to_scores_and_intervals(
+    whole_catalog_results,
+    whole_catalog_queries,
+    whole_catalog,
+    corpus,
+    make_config,
+) -> None:
+    """Verify that plan.attempts propagates to scores, abstention, and skill intervals."""
+    from reach.uncertainty import cluster_wilson_interval, wilson_interval
+
+    config = make_config(catalog={"mode": CatalogMode.ALL}, plan={"attempts": 3})
+    built = assemble(
+        whole_catalog_results,
+        whole_catalog_queries,
+        whole_catalog,
+        corpus,
+        config,
+    )
+    assert built.scores.attempts == 3
+    assert built.scores.abstention.attempts == 3
+    for s in built.skills:
+        assert s.attempts == 3
+
+    # Verify cluster-adjusted Wilson intervals differ from unadjusted intervals for attempts > 1
+    expected_top1_ci = cluster_wilson_interval(
+        built.scores.top1_hits,
+        built.scores.scored,
+        attempts=3,
+    )
+    assert built.scores.top1_interval == expected_top1_ci
+    unadjusted_ci = wilson_interval(built.scores.top1_hits, built.scores.scored)
+    assert built.scores.top1_interval != unadjusted_ci
+
+
+def test_artifact_scores_nullable_trajectory_metrics(
+    whole_catalog,
+    corpus,
+    make_config,
+    make_result,
+) -> None:
+    """Verify that step_efficiency and skill_f1 are None when all queries are out of scope."""
+    oos_query = Query(
+        id="q-oos",
+        text="Out of scope query",
+        kind=QueryKind.OUT_OF_SCOPE,
+        expected_skill=None,
+    )
+    query_set = QuerySet(
+        queries=(oos_query,),
+        provenance=QuerySetProvenance(origin=Origin.GENERATED, generator="test"),
+    )
+    results = [make_result("q-oos", None)]
+    config = make_config(catalog={"mode": CatalogMode.ALL})
+    built = assemble(
+        results,
+        query_set,
+        whole_catalog,
+        corpus,
+        config,
+    )
+    assert built.scores.step_efficiency is None
+    assert built.scores.skill_f1 is None
+
+    # Verify round-trip serialization retains None
+    dumped = built.model_dump_json()
+    reloaded = Artifact.model_validate_json(dumped)
+    assert reloaded.scores.step_efficiency is None
+    assert reloaded.scores.skill_f1 is None

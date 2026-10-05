@@ -604,7 +604,7 @@ def test_scorecard_skill_table_layout_and_metrics(card, artifact) -> None:
     assert "reach" in shown
     assert shown.index("gcs-retention-policy") < shown.index("consistency")
     assert shown.index("gcs-retention-policy") < shown.index("gcs-lifecycle-rules")
-    assert re.search(r"1/3\s+33%\s+6-79%", shown)
+    assert re.search(r"1/3\s+33%\s+3-88%", shown)
 
     measured = next(s for s in artifact.skills if s.skill == "gcs-retention-policy")
     assert measured.recall_interval is not None
@@ -669,7 +669,7 @@ def test_a_name_too_long_for_the_row_gives_way_before_a_figure_does(card, artifa
     assert "…" in row
     assert measured.precision is not None
     assert row.rstrip().endswith(f"{measured.precision:.0%}")
-    assert "6-79%" in row
+    assert "3-88%" in row
     assert len(row) <= 100
 
 
@@ -681,7 +681,7 @@ def test_scorecard_headline_and_summary_metrics(card) -> None:
     assert "± 16.9pp" in shown
     assert "± 16.9%" not in shown
     assert re.search(r"consistency 50% \[9-91%\]", shown)
-    assert re.search(r"abstention 17% \[3-56%\]", shown)
+    assert re.search(r"abstention 17% \[2-71%\]", shown)
 
     figures = next(line for line in shown.splitlines() if "top-1" in line)
     assert "± 16.9pp" in figures

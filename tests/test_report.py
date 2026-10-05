@@ -26,7 +26,7 @@ import pytest
 from reach.artifact import Artifact
 from reach.config import CatalogSettings, PlanSettings, RunConfig, RuntimeSettings
 from reach.difficulty import LexicalRank
-from reach.models import Catalog, CatalogMode, ProbeResult, Query, Skill
+from reach.models import Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance
 from reach.rendering import csv_document
 from reach.report import (
@@ -334,3 +334,36 @@ def test_trajectory_section_renders_when_reachability_is_zero(composition: Compo
     text = render_text(built)
     assert "entrypoint acc." in text
     assert "reachability" in text
+
+
+def test_trajectory_section_renders_na_when_metrics_are_none(
+    whole_catalog,
+    corpus,
+    make_config,
+    make_result,
+) -> None:
+    """Verify step efficiency and skill F1 render as n/a when None (no in-scope queries)."""
+    oos_query = Query(
+        id="q-oos",
+        text="Out of scope query",
+        kind=QueryKind.OUT_OF_SCOPE,
+        expected_skill=None,
+    )
+    query_set = QuerySet(
+        queries=(oos_query,),
+        provenance=QuerySetProvenance(origin=Origin.GENERATED, generator="test"),
+    )
+    results = [make_result("q-oos", None)]
+    config = make_config(catalog={"mode": CatalogMode.ALL})
+    built = Artifact.assemble(
+        Composition(
+            config=config,
+            query_set=query_set,
+            catalog=whole_catalog,
+            skills=tuple(corpus),
+        ),
+        results,
+    )
+    text = render_text(built)
+    assert "step efficiency      n/a" in text
+    assert "skill F1             n/a" in text

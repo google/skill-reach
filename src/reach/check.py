@@ -76,8 +76,8 @@ class EmpiricalMetrics(BaseModel):
     misroute_rate: float
     entrypoint_accuracy: float = 0.0
     trajectory_reachability: float = 0.0
-    step_efficiency: float = 0.0
-    skill_f1: float = 0.0
+    step_efficiency: float | None = None
+    skill_f1: float | None = None
     redundancy: float = 0.0
 
 
@@ -89,7 +89,7 @@ class CheckAssertion(BaseModel):
     comparison: str
     message: str
     name: str
-    observed: float
+    observed: float | None = None
     passed: bool
     threshold: float
 
@@ -436,7 +436,7 @@ def _build_check_assertions(
     """Evaluate empirical thresholds and construct diagnostic assertions."""
     settings = settings if settings is not None else CheckSettings()
 
-    specs: tuple[tuple[str, str, float, float | None, bool, str], ...] = (
+    specs: tuple[tuple[str, str, float | None, float | None, bool, str], ...] = (
         ("recall", "Recall", metrics.recall, settings.min_recall, False, ".1%"),
         ("accuracy", "Accuracy", metrics.accuracy, settings.min_accuracy, False, ".1%"),
         (
@@ -485,6 +485,23 @@ def _build_check_assertions(
     assertions: list[CheckAssertion] = []
     for name, label, observed, threshold, is_upper_bound, fmt in specs:
         if threshold is None:
+            continue
+        if observed is None:
+            thresh_str = f"{threshold:{fmt}}" if not fmt.startswith("+") else f"+{threshold:.2f}"
+            msg = (
+                f"{label} regression: metric was not observed (no in-scope queries evaluated) "
+                f"but required {thresh_str}"
+            )
+            assertions.append(
+                CheckAssertion(
+                    name=name,
+                    passed=False,
+                    observed=None,
+                    threshold=threshold,
+                    comparison="<=" if is_upper_bound else ">=",
+                    message=msg,
+                )
+            )
             continue
         passed = observed <= threshold if is_upper_bound else observed >= threshold
         obs_str = f"{observed:{fmt}}" if not fmt.startswith("+") else f"+{observed:.2f}"

@@ -58,7 +58,7 @@ from reach.models import (
 )
 from reach.queries import QuerySet, query_set_digest
 from reach.runtime import CatalogFit
-from reach.uncertainty import Interval, wilson_interval
+from reach.uncertainty import Interval, cluster_wilson_interval, wilson_interval
 
 #: Numerical tolerance for rate vs count equality checks.
 RATE_TOLERANCE: float = 1e-9
@@ -131,6 +131,7 @@ class SkillScore(BaseModel):
     trajectory_recall: float | None = None
     absorbed: int = Field(default=0, ge=0)
     precision: float | None = None
+    attempts: Annotated[int, Field(ge=1)] = 1
 
     @model_validator(mode="after")
     def _rates_agree_with_their_counts(self) -> Self:
@@ -182,20 +183,25 @@ class SkillScore(BaseModel):
     @computed_field
     @property
     def recall_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for this skill's recall."""
-        return wilson_interval(self.reached, self.probes)
+        """Calculate the cluster-adjusted Wilson confidence interval for this skill's recall."""
+        return cluster_wilson_interval(self.reached, self.probes, attempts=self.attempts)
 
     @computed_field
     @property
     def precision_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for this skill's precision."""
-        return wilson_interval(self.reached, self.reached + self.absorbed)
+        """Calculate the cluster-adjusted Wilson confidence interval for this skill's precision."""
+        return cluster_wilson_interval(
+            self.reached,
+            self.reached + self.absorbed,
+            attempts=self.attempts,
+        )
 
     @classmethod
     def from_class_metrics(
         cls,
         metrics: ClassMetrics,
         root: Path | None = None,
+        attempts: int | None = None,
     ) -> SkillScore:
         """Construct a SkillScore model from ClassMetrics and optional root path."""
         selected = metrics.true_positives + metrics.false_positives
@@ -209,6 +215,7 @@ class SkillScore(BaseModel):
             trajectory_recall=metrics.trajectory_recall if metrics.support else None,
             absorbed=metrics.false_positives,
             precision=metrics.precision if selected else None,
+            attempts=attempts if attempts is not None else metrics.attempts,
         )
 
 
@@ -336,24 +343,33 @@ class Abstention(BaseModel):
     false_abstentions: int = Field(ge=0)
     out_of_scope: int = Field(default=0, ge=0)
     out_of_scope_detected: int = Field(default=0, ge=0)
+    attempts: Annotated[int, Field(ge=1)] = 1
 
     @computed_field
     @property
     def interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for overall abstention rate."""
-        return wilson_interval(self.abstentions, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for overall abstention rate."""
+        return cluster_wilson_interval(self.abstentions, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
     def false_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for false abstention rate."""
-        return wilson_interval(self.false_abstentions, self.in_scope)
+        """Calculate the cluster-adjusted Wilson confidence interval for false abstention rate."""
+        return cluster_wilson_interval(
+            self.false_abstentions,
+            self.in_scope,
+            attempts=self.attempts,
+        )
 
     @computed_field
     @property
     def out_of_scope_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for out-of-scope detection rate."""
-        return wilson_interval(self.out_of_scope_detected, self.out_of_scope)
+        """Calculate the cluster Wilson confidence interval for out-of-scope detection rate."""
+        return cluster_wilson_interval(
+            self.out_of_scope_detected,
+            self.out_of_scope,
+            attempts=self.attempts,
+        )
 
 
 class RunScores(BaseModel):
@@ -372,10 +388,11 @@ class RunScores(BaseModel):
     entrypoint_accuracy: float = 0.0
     trajectory_hits: int = Field(default=0, ge=0)
     trajectory_reachability: float = 0.0
-    step_efficiency: float = 0.0
-    skill_f1: float = 0.0
+    step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: float = 0.0
     scored: int = Field(ge=0)
+    attempts: Annotated[int, Field(ge=1)] = 1
 
     @computed_field
     @property
@@ -386,20 +403,20 @@ class RunScores(BaseModel):
     @computed_field
     @property
     def top1_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for top-1 accuracy."""
-        return wilson_interval(self.top1_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for top-1 accuracy."""
+        return cluster_wilson_interval(self.top1_hits, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
     def entrypoint_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for entrypoint accuracy."""
-        return wilson_interval(self.entrypoint_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for entrypoint accuracy."""
+        return cluster_wilson_interval(self.entrypoint_hits, self.scored, attempts=self.attempts)
 
     @computed_field
     @property
     def trajectory_interval(self) -> Interval | None:
-        """Calculate the Wilson confidence interval for trajectory reachability."""
-        return wilson_interval(self.trajectory_hits, self.scored)
+        """Calculate the cluster-adjusted Wilson confidence interval for trajectory reachability."""
+        return cluster_wilson_interval(self.trajectory_hits, self.scored, attempts=self.attempts)
 
     @model_validator(mode="after")
     def _rates_match_the_counts_they_came_from(self) -> Self:
@@ -754,9 +771,13 @@ def _cross_check(
     return tuple(verified)
 
 
-def _skill_score(metrics: ClassMetrics, root: Path | None) -> SkillScore:
+def _skill_score(
+    metrics: ClassMetrics,
+    root: Path | None,
+    attempts: int = 1,
+) -> SkillScore:
     """Construct a SkillScore model from ClassMetrics and root path."""
-    return SkillScore.from_class_metrics(metrics, root=root)
+    return SkillScore.from_class_metrics(metrics, root=root, attempts=attempts)
 
 
 def _sample_queries(
@@ -941,6 +962,7 @@ def _build_run_scores(
     standard: ClassificationReport,
     unanimous: int,
     observed: int,
+    attempts: int = 1,
 ) -> RunScores:
     """Assemble consistency, accuracy, and abstention metrics into RunScores."""
     return RunScores(
@@ -957,6 +979,7 @@ def _build_run_scores(
         skill_f1=standard.skill_f1,
         redundancy=standard.redundancy,
         scored=standard.scored,
+        attempts=attempts,
         abstention=Abstention(
             rate=standard.abstention_rate,
             false_rate=standard.false_abstention_rate,
@@ -967,6 +990,7 @@ def _build_run_scores(
             false_abstentions=standard.false_abstentions,
             out_of_scope=standard.out_of_scope,
             out_of_scope_detected=standard.out_of_scope_detected,
+            attempts=attempts,
         ),
         not_headline=NotHeadline(
             macro_f1=standard.macro_f1,
@@ -1033,12 +1057,18 @@ class _ArtifactAssembler:
         )
         verified = _cross_check(self.results, derived_digests) if self.cross_check else ()
 
+        attempts = self.config.plan.attempts
         catalog_wide = classification_report(
             self.results,
             self.queries,
             labels=[*self.catalog.skills, NO_SKILL],
+            attempts=attempts,
         )
-        standard = classification_report(self.results, self.queries)
+        standard = classification_report(
+            self.results,
+            self.queries,
+            attempts=attempts,
+        )
         named = self.roots if self.roots is not None else _named_root(self.config.study.skills)
         resolved = sorted({resolve_path(root) for root in named})
         root_of = _attribute(self.skills, resolved)
@@ -1066,10 +1096,10 @@ class _ArtifactAssembler:
             resolved_roots=_build_resolved_roots(resolved, root_of),
             contested_skills=tuple(self.contested),
             skills=tuple(
-                _skill_score(catalog_wide.by_label(name), root_of.get(name))
+                _skill_score(catalog_wide.by_label(name), root_of.get(name), attempts=attempts)
                 for name in self.catalog.skills
             ),
-            scores=_build_run_scores(standard, unanimous, observed),
+            scores=_build_run_scores(standard, unanimous, observed, attempts=attempts),
             spread=_spread(self.results, self.queries, records),
             confusion=_confusion_pairs(self.results, self.queries, self.sample_queries),
             queries=records,

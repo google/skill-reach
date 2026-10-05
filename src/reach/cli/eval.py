@@ -346,7 +346,7 @@ def _filter_queries_by_targets(
     filtered_queries = tuple(
         q
         for q in query_set.queries
-        if q.expected_skill in target_set or q.truth_label in target_set
+        if q.expected_skill in target_set or q.truth_label in target_set or q.is_out_of_scope
     )
     if not filtered_queries:
         msg = (

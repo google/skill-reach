@@ -945,8 +945,10 @@ def _calculate_scale_classification(
                 else ((r.invoked_skill,) if r.invoked_skill is not None else ())
             )
             t_score = score_trajectory(q, raw_seq)
-            step_effs.append(t_score.step_efficiency)
-            skill_f1s.append(t_score.skill_f1)
+            if t_score.step_efficiency is not None:
+                step_effs.append(t_score.step_efficiency)
+            if t_score.skill_f1 is not None:
+                skill_f1s.append(t_score.skill_f1)
 
     step_eff_mean = round(statistics.fmean(step_effs), 4) if step_effs else 0.0
     sk_f1_mean = round(statistics.fmean(skill_f1s), 4) if skill_f1s else 0.0
