@@ -1360,12 +1360,15 @@ def _check_declared_dependencies(
     return issues
 
 
+_OVERFLOW_SAMPLE_LIMIT = 3
+
+
 def _check_catalog_budget_overflow(
     skills: Sequence[Skill],
     paths_by_name: Mapping[str, Sequence[Path]],
     cfg: LintSettings,
 ) -> list[LintIssue]:
-    """Identify skills whose descriptions are truncated due to catalog listing budget limits."""
+    """Identify when resident catalog exceeds listing budget and truncates descriptions."""
     if (
         _resolve_severity("catalog-budget-overflow", cfg) is None
         or not skills
@@ -1379,16 +1382,24 @@ def _check_catalog_budget_overflow(
     if not listing.over_budget:
         return []
 
+    truncated = listing.name_only
+    preview = ", ".join(truncated[:_OVERFLOW_SAMPLE_LIMIT])
+    if len(truncated) > _OVERFLOW_SAMPLE_LIMIT:
+        preview = f"{preview}, +{len(truncated) - _OVERFLOW_SAMPLE_LIMIT} more"
+
+    first_path: Path = Path()
+    for skill_name in truncated:
+        if paths := paths_by_name.get(skill_name):
+            first_path = paths[0]
+            break
+
+    msg = (
+        f"Resident catalog ({listing.full_chars:,} chars across {len(skills)} skills) "
+        f"exceeds listing budget ({listing.budget_chars:,} chars); "
+        f"{len(truncated)} skill description(s) truncated to bare name ({preview})."
+    )
     issues: list[LintIssue] = []
-    for skill_name in listing.name_only:
-        paths = paths_by_name.get(skill_name, ())
-        for skill_path in paths:
-            msg = (
-                f"Skill '{skill_name}' description is truncated to bare name because resident "
-                f"catalog ({listing.full_chars:,} chars) exceeds listing budget "
-                f"({listing.budget_chars:,} chars)."
-            )
-            _record_issue(issues, "catalog-budget-overflow", skill_name, skill_path, msg, cfg)
+    _record_issue(issues, "catalog-budget-overflow", "<catalog>", first_path, msg, cfg)
     return issues
 
 

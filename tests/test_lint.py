@@ -1312,14 +1312,58 @@ def _populate_overflow_corpus(root: Path, count: int = 5) -> Path:
 
 
 def test_catalog_budget_overflow_detected_when_exceeding_budget(tmp_path: Path) -> None:
-    """Verify catalog-budget-overflow emits warnings when skills exceed listing budget."""
-    corpus = _populate_overflow_corpus(tmp_path)
-    # With a small budget (e.g. 100 chars), not all 5 skills can fit
+    """Verify catalog-budget-overflow emits a single consolidated warning when exceeding budget."""
+    corpus = _populate_overflow_corpus(tmp_path, count=8)
+    # With a small budget (e.g. 100 chars), not all 8 skills can fit
     report = lint_tree(corpus, config=LintSettings(catalog_budget_chars=100))
     overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
-    assert len(overflow_issues) > 0
-    assert all(i.severity == Severity.WARN for i in overflow_issues)
-    assert any("exceeds listing budget" in i.message for i in overflow_issues)
+    assert len(overflow_issues) == 1
+    issue = overflow_issues[0]
+    assert issue.severity == Severity.WARN
+    assert issue.skill == "<catalog>"
+    assert "exceeds listing budget" in issue.message
+    assert "skill description(s) truncated to bare name" in issue.message
+    assert "+5 more)" in issue.message
+
+
+@pytest.mark.parametrize("mode", ["neighborhood", "singleton"])
+def test_catalog_budget_overflow_skipped_for_scoped_catalog_modes(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    """Verify catalog-budget-overflow is skipped when catalog.mode is neighborhood or singleton."""
+    from reach.config import CatalogSettings, RunConfig
+    from reach.models import CatalogMode
+
+    corpus = _populate_overflow_corpus(tmp_path)
+    cfg = LintSettings.from_settings({"catalog": {"mode": mode}})
+    assert cfg.catalog_budget_chars is None
+    report = lint_tree(corpus, config=cfg)
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) == 0
+
+    # RunConfig with explicit mode inherits None, while unconfigured RunConfig keeps 30,000
+    assert RunConfig().lint.catalog_budget_chars == 30_000
+    rc = RunConfig(catalog=CatalogSettings(mode=CatalogMode(mode)))
+    assert rc.lint.catalog_budget_chars is None
+    assert "catalog_budget_chars" not in rc.lint.model_fields_set
+    # Overriding catalog.mode back to ALL restores default budget because lint was not explicit
+    rc_all = rc.with_overrides(catalog={"mode": CatalogMode.ALL})
+    assert rc_all.lint.catalog_budget_chars == 30_000
+
+
+def test_catalog_budget_overflow_explicit_lint_budget_overrides_catalog_mode(
+    tmp_path: Path,
+) -> None:
+    """Verify explicit lint.catalog_budget_chars is honored in neighborhood mode."""
+    corpus = _populate_overflow_corpus(tmp_path)
+    cfg = LintSettings.from_settings(
+        {"catalog": {"mode": "neighborhood"}, "lint": {"catalog_budget_chars": 100}}
+    )
+    assert cfg.catalog_budget_chars == 100
+    report = lint_tree(corpus, config=cfg)
+    overflow_issues = [i for i in report.issues if i.rule == "catalog-budget-overflow"]
+    assert len(overflow_issues) == 1
 
 
 def test_catalog_budget_overflow_suppressed_when_ignored(tmp_path: Path) -> None:

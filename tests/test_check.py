@@ -810,3 +810,35 @@ def test_build_check_assertions_handles_unobserved_metrics() -> None:
     obs_str, tgt_str = _format_assertion_strings(eff_a)
     assert obs_str == "n/a"
     assert "0.8" in tgt_str
+
+
+def test_run_check_honors_config_catalog_mode_and_explicit_lint_budget(
+    tmp_path: Path,
+) -> None:
+    """Verify run_check respects config.lint and scoped config.catalog.mode."""
+    from reach.config import CatalogSettings, LintSettings, RunConfig
+    from reach.models import CatalogMode
+
+    corpus = tmp_path / "skills"
+    for idx in range(6):
+        s_dir = corpus / f"skill-{idx}"
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            f"---\nname: skill-{idx}\n"
+            f"description: Use when handling domain task number {idx} in production.\n---\n"
+            f"# Skill {idx}\n",
+            encoding="utf-8",
+        )
+
+    # 1. Explicit config.lint.catalog_budget_chars=100 in neighborhood mode triggers overflow
+    explicit_cfg = RunConfig(
+        catalog=CatalogSettings(mode=CatalogMode.NEIGHBORHOOD),
+        lint=LintSettings(catalog_budget_chars=100),
+    )
+    outcome_explicit = run_check(skills_paths=[corpus], strict=True, config=explicit_cfg)
+    assert any(i.rule == "catalog-budget-overflow" for i in outcome_explicit.lint_report.issues)
+
+    # 2. Scoped neighborhood mode without explicit lint budget skips catalog-budget-overflow
+    scoped_cfg = RunConfig(catalog=CatalogSettings(mode=CatalogMode.NEIGHBORHOOD))
+    outcome_scoped = run_check(skills_paths=[corpus], strict=True, config=scoped_cfg)
+    assert not any(i.rule == "catalog-budget-overflow" for i in outcome_scoped.lint_report.issues)

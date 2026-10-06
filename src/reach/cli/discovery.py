@@ -26,6 +26,7 @@ from reach.views import Console, print_discovery
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from reach.config import StudySettings
     from reach.models import Skill
     from reach.runtime import AgentRuntime
 
@@ -174,3 +175,53 @@ def _run_dir_defaults(
             },
         ),
     )
+
+
+def load_discovered_study(
+    config: Path | None,
+    skills: Path | None = None,
+) -> StudySettings | None:
+    """Load StudySettings from an explicit or auto-discovered reach.toml once."""
+    from reach.config import _discover_config_path
+
+    discovered_config, is_explicit = _discover_config_path(config)
+    if discovered_config is None or (not is_explicit and skills is not None):
+        return None
+    return RunConfig.from_toml(discovered_config, skills=skills).study
+
+
+def resolve_queries_and_skills_paths(
+    queries: Path | None = None,
+    skills: Path | None = None,
+    config: Path | None = None,
+    *,
+    require_existing: bool = False,
+) -> tuple[Path, Path | None]:
+    """Resolve effective queries path and skills path from CLI flags, reach.toml, or discovery."""
+    config_study = load_discovered_study(config, skills=skills)
+    effective_skills = skills
+    if (
+        effective_skills is None
+        and config_study is not None
+        and config_study.skills is not None
+        and config_study.skills.exists()
+    ):
+        effective_skills = config_study.skills
+
+    if queries is not None:
+        resolved_queries = queries
+    elif config_study is not None and config_study.queries is not None:
+        resolved_queries = config_study.queries
+    else:
+        resolved_queries = (
+            find_existing_queries_path(effective_skills, prefer_local=skills is None)
+            or DEFAULT_QUERIES_PATH
+        )
+
+    if require_existing and not resolved_queries.is_file():
+        msg = (
+            f"No query set found at {resolved_queries}. "
+            "Run `reach query draft` to generate one, or pass an explicit query set path."
+        )
+        raise ValueError(msg)
+    return resolved_queries, effective_skills
