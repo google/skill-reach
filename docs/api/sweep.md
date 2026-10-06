@@ -11,6 +11,7 @@ Execute multi-scale catalog evaluation sweeps to measure reachability decay and 
         - compute_scaling_noise_floor
         - find_kneedle_knee
         - PairedTrialOutcomes
+        - ReplicateCollisionDiagnostic
         - run_scaling_sweep
         - ScalingPoint
         - ScalingStudy

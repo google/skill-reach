@@ -343,7 +343,14 @@ def _sweep(
     seed: Annotated[
         int | None,
         Parameter(
-            help="Random seed for bootstrap confidence intervals",
+            help="Random seed for bootstrap confidence intervals and catalog scrambling",
+        ),
+    ] = None,
+    catalog_replicates: Annotated[
+        int | None,
+        POSITIVE_INT,
+        Parameter(
+            help="Number of Owen-scrambled catalog replicates per scale step (default: 1)",
         ),
     ] = None,
     noise_floor: Annotated[
@@ -446,6 +453,7 @@ def _sweep(
         workdir,
         bootstrap_iterations=bootstrap_iterations,
         bootstrap_seed=seed,
+        catalog_replicates=catalog_replicates,
         global_scope=global_,
     )
     destination = _resolve_sweep_out_path(
@@ -518,6 +526,7 @@ def _sweep(
             allow_truncation=allow_truncation,
             bootstrap_iterations=bootstrap_iterations,
             seed=seed,
+            catalog_replicates=catalog_replicates,
             on_scale_complete=_on_scale_complete,
         )
     except ValueError as err:
@@ -924,6 +933,7 @@ def _finalize_sweep_study_config(
     *,
     bootstrap_iterations: int | None = None,
     bootstrap_seed: int | None = None,
+    catalog_replicates: int | None = None,
     global_scope: bool = False,
 ) -> tuple[RunConfig, Path]:
     """Determine working directory and resolved benchmark queries path."""
@@ -949,5 +959,7 @@ def _finalize_sweep_study_config(
         study_updates["bootstrap_iterations"] = bootstrap_iterations
     if bootstrap_seed is not None:
         study_updates["bootstrap_seed"] = bootstrap_seed
+    if catalog_replicates is not None:
+        study_updates["catalog_replicates"] = catalog_replicates
     updated_study = effective_config.study.model_copy(update=study_updates)
     return effective_config.model_copy(update={"study": updated_study}), resolved_queries

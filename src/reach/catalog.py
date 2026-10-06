@@ -590,15 +590,12 @@ def deduplicate_skills(skills: Sequence[Skill]) -> list[Skill]:
     return unique_skills
 
 
-_deduplicate_skills = deduplicate_skills
-
-
 def _compute_cosine_bm25_distance_matrix(
     skills: Sequence[Skill],
     scorer: Scorer | None = None,
 ) -> tuple[tuple[str, ...], list[list[float]], list[list[float]]]:
     """Compute symmetric Cosine-BM25 distance and similarity matrices for a skills corpus."""
-    unique_skills = _deduplicate_skills(skills)
+    unique_skills = deduplicate_skills(skills)
     names = tuple(s.name for s in unique_skills)
     n = len(names)
     if n == 0:
@@ -760,7 +757,7 @@ def find_cluster_medoids(
     if k <= 0 or not skills:
         return ()
 
-    unique_skills = _deduplicate_skills(skills)
+    unique_skills = deduplicate_skills(skills)
     names, dist, sim = _compute_cosine_bm25_distance_matrix(unique_skills, scorer=scorer)
     n = len(names)
     if n <= k:
@@ -794,18 +791,23 @@ def find_cluster_medoids(
     return tuple(names[i] for i in order)
 
 
-def _van_der_corput(n: int) -> float:
-    """Compute base-2 Van der Corput radical inverse for positive integer n."""
-    res = 0.0
-    denom = 1.0
-    while n > 0:
-        denom *= 2.0
-        res += (n % 2) / denom
-        n //= 2
-    return res
+def _van_der_corput(n: int, seed: int = 0) -> float:
+    """Compute base-2 Van der Corput radical inverse with optional Laine-Karras Owen scrambling."""
+    if n < 0:
+        msg = f"Van der Corput index n must be non-negative, got {n}"
+        raise ValueError(msg)
+    x = n & 0xFFFFFFFF
+    if seed != 0:
+        s = ((seed * 0x9E3779B9) ^ 0x85EBCA6B) & 0xFFFFFFFF
+        x = (x ^ (x * 0x3D20ADEA)) & 0xFFFFFFFF
+        x = (x + s) & 0xFFFFFFFF
+        x = (x * ((s >> 16) | 1)) & 0xFFFFFFFF
+        x = (x ^ (x * 0x05526C56)) & 0xFFFFFFFF
+        x = (x ^ (x * 0x53A22864)) & 0xFFFFFFFF
+    return int(f"{x:032b}"[::-1], 2) / 0x100000000
 
 
-def _permute_by_van_der_corput(candidates: Sequence[int]) -> list[int]:
+def _permute_by_van_der_corput(candidates: Sequence[int], seed: int = 0) -> list[int]:
     """Deterministically permute candidate indices via Van der Corput radical inverse."""
     m = len(candidates)
     if m <= 1:
@@ -815,7 +817,7 @@ def _permute_by_van_der_corput(candidates: Sequence[int]) -> list[int]:
     t = 1
     denom = max(1, m - 1)
     while available:
-        target = _van_der_corput(t)
+        target = _van_der_corput(t, seed=seed)
         best_pos = min(
             range(len(available)),
             key=lambda idx: (abs(available[idx] / denom - target), available[idx]),
@@ -875,6 +877,7 @@ def _low_discrepancy_striding(
     skills: Sequence[Skill] | None = None,
     *,
     rivals_share: float = 0.5,
+    seed: int = 0,
 ) -> list[int]:
     """Order non-anchor skills by interleaving top cluster rivals with Van der Corput filler."""
     n = len(names)
@@ -901,7 +904,10 @@ def _low_discrepancy_striding(
         clusters_by_anchor[a].sort(key=lambda i: (-sim[i][a], -widths[i], names[i]))
 
     effective_share = max(0.0, min(1.0, rivals_share))
-    cluster_order = _permute_by_van_der_corput([a for a in anchors if clusters_by_anchor[a]])
+    cluster_order = _permute_by_van_der_corput(
+        [a for a in anchors if clusters_by_anchor[a]],
+        seed=seed,
+    )
 
     rival_lists: dict[int, list[int]] = {}
     filler_lists: dict[int, list[int]] = {}
@@ -912,8 +918,14 @@ def _low_discrepancy_striding(
             if effective_share > 0.0
             else 0
         )
-        rival_lists[a] = c_list[:r_count]
-        filler_lists[a] = _permute_by_van_der_corput(c_list[r_count:])
+        rivals_slice = c_list[:r_count]
+        rival_lists[a] = (
+            _permute_by_van_der_corput(rivals_slice, seed=seed ^ ((a + 1) * 17))
+            if seed != 0
+            else rivals_slice
+        )
+        filler_seed = seed ^ ((a + 1) * 257) if seed != 0 else 0
+        filler_lists[a] = _permute_by_van_der_corput(c_list[r_count:], seed=filler_seed)
 
     offset = max(1, len(cluster_order) // 2) if cluster_order else 0
     filler_order = (
@@ -935,6 +947,7 @@ def _build_scaling_sequence(
     skills: Sequence[Skill] | None = None,
     *,
     rivals_share: float = 0.5,
+    seed: int = 0,
 ) -> tuple[str, ...]:
     """Determine complete scaling order across unique skills."""
     n = len(names)
@@ -948,11 +961,14 @@ def _build_scaling_sequence(
             initial,
             skills=skills,
             rivals_share=rivals_share,
+            seed=seed,
         )
         return tuple(names[i] for i in order)
 
     medoid_idx = max(range(n), key=lambda i: (sum(sim[i]), -i))
     order = _farthest_first_traversal(dist, [medoid_idx], n)
+    if seed != 0 and len(order) > 1:
+        order = [order[0], *_permute_by_van_der_corput(order[1:], seed=seed)]
     return tuple(names[i] for i in order)
 
 
@@ -986,6 +1002,7 @@ class CorpusScalingPlan(BaseModel):
     catalogs: tuple[Catalog, ...]
     anchor_skills: tuple[str, ...] | None = None
     rivals_share: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5
+    seed: int = 0
 
     @classmethod
     def create(
@@ -996,10 +1013,11 @@ class CorpusScalingPlan(BaseModel):
         scorer: Scorer | None = None,
         *,
         rivals_share: float = 0.5,
+        seed: int = 0,
     ) -> CorpusScalingPlan:
         """Construct a scaling plan by computing distance geometry and k-Center ordering once."""
         effective_share = max(0.0, min(1.0, rivals_share))
-        unique_skills = _deduplicate_skills(skills)
+        unique_skills = deduplicate_skills(skills)
         names, dist, sim = _compute_cosine_bm25_distance_matrix(unique_skills, scorer=scorer)
         name_to_idx = {name: i for i, name in enumerate(names)}
 
@@ -1017,6 +1035,7 @@ class CorpusScalingPlan(BaseModel):
             resolved_anchors,
             skills=unique_skills,
             rivals_share=effective_share,
+            seed=seed,
         )
         catalogs = _build_nested_catalogs(seq, scales)
 
@@ -1029,6 +1048,7 @@ class CorpusScalingPlan(BaseModel):
             catalogs=tuple(catalogs),
             anchor_skills=resolved_anchors,
             rivals_share=effective_share,
+            seed=seed,
         )
 
     def queries_for_scale(
@@ -1052,6 +1072,7 @@ def build_corpus_scaling_sequence(
     scorer: Scorer | None = None,
     *,
     rivals_share: float = 0.5,
+    seed: int = 0,
 ) -> tuple[str, ...]:
     """Order skills using Farthest-First Traversal (k-Center) on Cosine-BM25 distance."""
     plan = CorpusScalingPlan.create(
@@ -1060,6 +1081,7 @@ def build_corpus_scaling_sequence(
         anchor_skills=anchor_skills,
         scorer=scorer,
         rivals_share=rivals_share,
+        seed=seed,
     )
     return plan.sequence
 
@@ -1072,6 +1094,7 @@ def build_corpus_scaling_catalogs(
     scorer: Scorer | None = None,
     *,
     rivals_share: float = 0.5,
+    seed: int = 0,
 ) -> list[Catalog]:
     """Generate deterministic nested catalogs for whole-corpus capacity evaluation."""
     if not skills:
@@ -1098,6 +1121,7 @@ def build_corpus_scaling_catalogs(
         anchor_skills=anchor_skills,
         scorer=scorer,
         rivals_share=rivals_share,
+        seed=seed,
     )
     return list(plan.catalogs)
 

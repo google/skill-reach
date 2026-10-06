@@ -675,3 +675,36 @@ def test_cluster_wilson_interval_widens_with_attempts() -> None:
     assert clustered_int.low < std_int.low
     assert clustered_int.high > std_int.high
     assert cluster_wilson_interval(0, 0) is None
+
+
+@pytest.mark.parametrize(
+    ("outcomes_by_skill", "expected"),
+    [
+        ({"s1": [1.0, 1.0, 1.0], "s2": [0.0, 0.0, 0.0]}, 1.0),
+        ({"s1": [1.0, 0.0], "s2": [1.0, 0.0]}, 0.0),
+        ({"s1": [1.0, 1.0], "s2": [1.0, 1.0]}, 0.0),
+        ({"s1": [1.0, 1.0]}, None),
+        ({"s1": [1.0], "s2": [0.0]}, None),
+        ({"s1": [1.0, 1.0, 1.0], "s2": [1.0, 0.0]}, 0.25),
+    ],
+    ids=[
+        "perfect-between-skill-separation",
+        "negative-anova-clamped-to-zero",
+        "constant-outcomes-zero-variance",
+        "single-skill-insufficient",
+        "single-query-per-skill-insufficient",
+        "unbalanced-snedecor-cochran",
+    ],
+)
+def test_estimate_skill_icc(
+    outcomes_by_skill: dict[str, list[float]],
+    expected: float | None,
+) -> None:
+    """Verify estimate_skill_icc computes one-way random-effects ANOVA ICC."""
+    from reach.uncertainty import estimate_skill_icc
+
+    actual = estimate_skill_icc(outcomes_by_skill)
+    if expected is None:
+        assert actual is None
+    else:
+        assert actual == pytest.approx(expected, abs=1e-4)

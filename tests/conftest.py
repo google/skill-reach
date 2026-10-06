@@ -1691,8 +1691,8 @@ def make_scaling_point() -> Callable[..., Any]:
             "pass_rate": 1.0,
             "pass_rate_interval": (0.8, 1.0),
             "delta_vs_baseline": 0.0,
-            "delta_context": 0.0,
-            "delta_shadowing": 0.0,
+            "delta_abstention": 0.0,
+            "delta_collision": 0.0,
             "probes_executed": max(10, errored + failed),
             "probes_failed": failed,
             "probes_errored": errored,
@@ -1733,8 +1733,8 @@ def sample_two_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any]
             f1_interval=(0.2, 0.8),
             in_scope_probes=10,
             delta_vs_baseline=0.5,
-            delta_context=0.1,
-            delta_shadowing=0.4,
+            delta_abstention=0.1,
+            delta_collision=0.4,
         ),
     ]
 
@@ -1761,8 +1761,8 @@ def make_scaling_study(sample_two_scale_points: list[Any]) -> Callable[..., Any]
             "baseline_pass_rate": baseline_rate,
             "final_pass_rate": final_rate,
             "total_delta": round(baseline_rate - final_rate, 4),
-            "total_context_loss": 0.0,
-            "total_shadowing_loss": 0.0,
+            "total_abstention_loss": 0.0,
+            "total_collision_loss": 0.0,
             "total_corpus_skills": max(scales_tuple) if scales_tuple else 50,
         }
         defaults.update(kwargs)
@@ -1775,7 +1775,7 @@ def make_scaling_study(sample_two_scale_points: list[Any]) -> Callable[..., Any]
 def sample_scaling_study(make_scaling_study: Callable[..., Any]) -> Any:
     """Provide a sample ScalingStudy fixture with 2 scales."""
     return make_scaling_study(
-        total_context_loss=0.1,
-        total_shadowing_loss=0.4,
+        total_abstention_loss=0.1,
+        total_collision_loss=0.4,
         total_corpus_skills=50,
     )

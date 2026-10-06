@@ -1673,7 +1673,7 @@ def test_render_ascii_curve_auto_scales_high_accuracy_band(
             pass_rate_interval=(f1 - 0.05, min(1.0, f1 + 0.05)),
             f1_score=f1,
             delta_vs_baseline=0.975 - f1,
-            delta_shadowing=0.975 - f1,
+            delta_collision=0.975 - f1,
             probes_executed=41,
         )
 
@@ -1688,11 +1688,11 @@ def test_render_ascii_curve_auto_scales_high_accuracy_band(
     assert len(marker_rows) >= 3
 
 
-def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis(
+def test_print_sweep_surfaces_collision_and_truncation_without_ellipsis(
     make_scaling_point: Callable[..., Any],
     make_scaling_study: Callable[..., Any],
 ) -> None:
-    """Verify print_sweep renders Δ Shadow, Truncated, and Loss Decomposition within 80 columns."""
+    """Verify print_sweep renders Δ Collide, Truncated, and Loss Decomposition within 80 columns."""
     from io import StringIO
 
     from rich.console import Console
@@ -1706,8 +1706,8 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis(
         baseline_pass_rate=0.951,
         final_pass_rate=0.854,
         total_delta=0.097,
-        total_context_loss=0.024,
-        total_shadowing_loss=0.098,
+        total_abstention_loss=0.024,
+        total_collision_loss=0.098,
         total_corpus_skills=147,
         points=(
             make_scaling_point(
@@ -1734,7 +1734,7 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis(
                 f1_score=0.914,
                 f1_interval=(0.825, 0.988),
                 delta_vs_baseline=0.049,
-                delta_shadowing=0.073,
+                delta_collision=0.073,
                 in_scope_probes=41,
                 probes_executed=41,
                 duration_ms_mean=4472.0,
@@ -1750,8 +1750,8 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis(
                 f1_score=0.875,
                 f1_interval=(0.769, 0.975),
                 delta_vs_baseline=0.097,
-                delta_shadowing=0.098,
-                delta_context=0.024,
+                delta_collision=0.098,
+                delta_abstention=0.024,
                 in_scope_probes=41,
                 probes_executed=41,
                 duration_ms_mean=4394.0,
@@ -1764,9 +1764,9 @@ def test_print_sweep_surfaces_shadowing_and_truncation_without_ellipsis(
     print_sweep(console, study)
     out = buf.getvalue()
     assert "Loss Decomposition (K=10→147, +9.7% pass-rate drop): " in out
-    assert "Δ Shadowing +9.8%" in out
-    assert "Δ Context +2.4%" in out
-    assert "Δ Shadow" in out
+    assert "Δ Collision +9.8%" in out
+    assert "Δ Abstention +2.4%" in out
+    assert "Δ Collide" in out
     assert "Trunc" in out
     assert "51% (21)" in out
     assert "61% (25)" in out
@@ -2046,7 +2046,7 @@ def sample_four_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any
             f1_score=rate,
             f1_interval=ci,
             delta_vs_baseline=round(0.96 - rate, 2),
-            delta_shadowing=round(0.96 - rate, 2),
+            delta_collision=round(0.96 - rate, 2),
             probes_executed=20,
         )
         for scale, rate, ci in (
@@ -2060,18 +2060,31 @@ def sample_four_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any
 
 def test_scaling_study_records_knee_interval(sample_four_scale_points: list[Any]) -> None:
     """Verify _assemble_scaling_study computes uncertainty interval for knee scale."""
-    from reach.sweep import _assemble_scaling_study
+    from reach.sweep import _assemble_scaling_study, _QueryOutcome
 
+    scales = (10, 25, 50, 100)
+    scale_query_sums = {
+        s: {
+            f"q{i}": (
+                _QueryOutcome(1, 0, 0, 1, 1)
+                if (s <= 25 or i % (s // 25) == 0)
+                else _QueryOutcome(0, 1, 1, 0, 1)
+            )
+            for i in range(20)
+        }
+        for s in scales
+    }
     study = _assemble_scaling_study(
         target=None,
         is_corpus=True,
-        actual_scales=(10, 25, 50, 100),
+        actual_scales=scales,
         points=sample_four_scale_points,
         noise_floor=0.05,
         baseline_count=20,
         total_skills=100,
         decomp=None,
         anchor_skills=("s1", "s2"),
+        scale_query_sums=scale_query_sums,
     )
 
     assert study.knee_scale is not None
@@ -2080,23 +2093,31 @@ def test_scaling_study_records_knee_interval(sample_four_scale_points: list[Any]
 
 
 def test_bootstrap_knee_interval_cluster_resampling(sample_four_scale_points: list[Any]) -> None:
-    """Verify _bootstrap_knee_interval calculates interval via non-parametric cluster bootstrap."""
-    from reach.sweep import _bootstrap_knee_interval
+    """Verify _bootstrap_knee_summary calculates interval via non-parametric cluster bootstrap."""
+    from reach.sweep import _bootstrap_knee_summary, _QueryOutcome
 
     scales = [10, 25, 50, 100]
     scale_query_sums = {
-        s: {f"q{i}": (1, 0, 0) if (s <= 25 or i % (s // 25) == 0) else (0, 1, 1) for i in range(20)}
+        s: {
+            f"q{i}": (
+                _QueryOutcome(1, 0, 0, 1, 1)
+                if (s <= 25 or i % (s // 25) == 0)
+                else _QueryOutcome(0, 1, 1, 0, 1)
+            )
+            for i in range(20)
+        }
         for s in scales
     }
 
-    interval = _bootstrap_knee_interval(
+    interval = _bootstrap_knee_summary(
         scales=scales,
         points=sample_four_scale_points,
         noise_floor=0.05,
         iterations=50,
         seed=42,
         scale_query_sums=scale_query_sums,
-    )
+        raw_noise_floor=0.05,
+    ).interval
     assert interval is not None
     assert interval[0] <= interval[1]
 
@@ -2105,7 +2126,7 @@ def test_render_sweep_csv_includes_knee_and_efficiency_metrics(
     make_scaling_point: Callable[..., Any],
     make_scaling_study: Callable[..., Any],
 ) -> None:
-    """Verify render_sweep_csv includes knee uncertainty and step efficiency columns."""
+    """Verify render_sweep_csv includes knee uncertainty, right-censoring, and step efficiency."""
     from reach.views.sweep import render_sweep_csv
 
     study = make_scaling_study(
@@ -2134,6 +2155,23 @@ def test_render_sweep_csv_includes_knee_and_efficiency_metrics(
     assert "25" in csv_text
     assert "20" in csv_text
     assert "30" in csv_text
+
+    censored_study = make_scaling_study(
+        scales=(10, 25, 50),
+        knee_scale=25,
+        knee_scale_interval=(10, 50),
+        knee_upper_censored=True,
+        points=(
+            make_scaling_point(
+                scale=10,
+                catalog_id="c1",
+                pass_rate=0.95,
+                pass_rate_interval=(0.90, 0.98),
+            ),
+        ),
+    )
+    censored_csv = render_sweep_csv(censored_study)
+    assert ",10,>50" in censored_csv
 
 
 def test_paired_trial_outcomes_calculates_effective_paired(
@@ -2234,8 +2272,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
         pass_rate_interval=(0.55, 0.82),
         f1_score=0.70,
         delta_vs_baseline=0.25,
-        delta_context=0.10,
-        delta_shadowing=0.15,
+        delta_abstention=0.10,
+        delta_collision=0.15,
         delta_truncated=0.10,
         probes_executed=20,
     )
@@ -2246,8 +2284,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
         pass_rate_interval=(0.52, 0.80),
         f1_score=0.68,
         delta_vs_baseline=0.27,
-        delta_context=0.12,
-        delta_shadowing=0.15,
+        delta_abstention=0.12,
+        delta_collision=0.15,
         delta_truncated=0.10,
         probes_executed=20,
     )
@@ -2257,8 +2295,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
         knee_scale=25,
         steepest_drop_scales=(10, 25),
         steepest_drop_delta=0.25,
-        total_context_loss=0.12,
-        total_shadowing_loss=0.15,
+        total_abstention_loss=0.12,
+        total_collision_loss=0.15,
         total_truncated_loss=0.10,
     )
     console = Console(record=True, width=100)
@@ -2286,10 +2324,12 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
     console_cliff = Console(record=True, width=100)
     print_sweep(console_cliff, cliff_study)
     cliff_text = console_cliff.export_text()
-    assert "capacity cliff where distractor shadowing accelerates" in cliff_text
+    assert "capacity cliff where skill collisions accelerate" in cliff_text
 
     csv_single = render_sweep_csv(single_study)
     assert "delta_truncated" in csv_single
+    assert "delta_collision" in csv_single
+    assert "delta_abstention" in csv_single
     assert "0.1000" in csv_single
 
 
@@ -2480,21 +2520,26 @@ def test_bootstrap_knee_interval_guards_against_conditioning_bias(
     make_scaling_point: Callable[..., Any],
 ) -> None:
     """Verify bootstrap interval returns None if knee is detected in <50% of iterations."""
-    from reach.sweep import _bootstrap_knee_interval
+    from reach.sweep import _bootstrap_knee_summary, _QueryOutcome
 
     # Flat line: 1.0, 1.0, 1.0 (no true knee)
     p1 = make_scaling_point(scale=10, pass_rate=1.0, pass_rate_interval=(0.95, 1.0))
     p2 = make_scaling_point(scale=25, pass_rate=1.0, pass_rate_interval=(0.95, 1.0))
     p3 = make_scaling_point(scale=50, pass_rate=1.0, pass_rate_interval=(0.95, 1.0))
+    scale_query_sums = {
+        s: {f"q{i}": _QueryOutcome(1, 0, 0, 1, 1) for i in range(20)} for s in (10, 25, 50)
+    }
 
-    knee_ci = _bootstrap_knee_interval(
+    knee_ci = _bootstrap_knee_summary(
         scales=(10, 25, 50),
         points=[p1, p2, p3],
         noise_floor=0.05,
+        scale_query_sums=scale_query_sums,
         iterations=50,
         seed=42,
         is_corpus=False,
-    )
+        raw_noise_floor=0.05,
+    ).interval
     assert knee_ci is None
 
 
@@ -2502,21 +2547,34 @@ def test_single_skill_bootstrap_knee_ci_populated(
     make_scaling_point: Callable[..., Any],
 ) -> None:
     """Verify single-skill sweeps calculate a valid bootstrap knee interval for clear drops."""
-    from reach.sweep import _bootstrap_knee_interval
+    from reach.sweep import _bootstrap_knee_summary, _QueryOutcome
 
     # Clear knee at scale 25: 1.0 -> 0.95 -> 0.40
     p1 = make_scaling_point(scale=10, pass_rate=1.0, pass_rate_interval=(0.98, 1.0))
     p2 = make_scaling_point(scale=25, pass_rate=0.95, pass_rate_interval=(0.90, 0.98))
     p3 = make_scaling_point(scale=50, pass_rate=0.40, pass_rate_interval=(0.35, 0.45))
+    scale_query_sums = {
+        10: {f"q{i}": _QueryOutcome(1, 0, 0, 1, 1) for i in range(20)},
+        25: {
+            f"q{i}": (_QueryOutcome(1, 0, 0, 1, 1) if i < 19 else _QueryOutcome(0, 0, 1, 0, 1))
+            for i in range(20)
+        },
+        50: {
+            f"q{i}": (_QueryOutcome(1, 0, 0, 1, 1) if i < 8 else _QueryOutcome(0, 0, 1, 0, 1))
+            for i in range(20)
+        },
+    }
 
-    knee_ci = _bootstrap_knee_interval(
+    knee_ci = _bootstrap_knee_summary(
         scales=(10, 25, 50),
         points=[p1, p2, p3],
         noise_floor=0.05,
+        scale_query_sums=scale_query_sums,
         iterations=100,
         seed=42,
         is_corpus=False,
-    )
+        raw_noise_floor=0.05,
+    ).interval
     assert knee_ci is not None
     assert isinstance(knee_ci, tuple)
     assert len(knee_ci) == 2
@@ -2862,3 +2920,392 @@ def test_build_scaling_point_scopes_probe_accounting_with_rivals(
     assert point.pass_rate == 0.5
     # Strict invariant validation holds
     assert point.probes_failed <= point.probes_executed - point.probes_errored
+
+
+def test_stratified_bootstrap_preserves_skill_stratum_sizes() -> None:
+    """Verify _build_query_strata and _draw_stratified_qids preserve per-skill query counts."""
+    import random
+    from collections import Counter
+
+    from reach.models import Query, QueryKind
+    from reach.sweep import _build_query_strata, _draw_stratified_qids
+
+    queries_by_id = {
+        "q1": Query(id="q1", text="t1", expected_skill="skill-a"),
+        "q2": Query(id="q2", text="t2", expected_skill="skill-a"),
+        "q3": Query(id="q3", text="t3", expected_skill="skill-b"),
+        "q4": Query(id="q4", text="t4", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+    }
+    strata = _build_query_strata(["q1", "q2", "q3", "q4"], queries_by_id=queries_by_id)
+    assert len(strata) == 3
+
+    rng = random.Random(42)  # noqa: S311
+    for _ in range(25):
+        drawn = _draw_stratified_qids(strata, rng)
+        counts = Counter(queries_by_id[qid].expected_skill or "__oos__" for qid in drawn)
+        assert counts["skill-a"] == 2
+        assert counts["skill-b"] == 1
+        assert counts["__oos__"] == 1
+
+
+def test_summarize_bootstrap_knees_right_censoring_and_pmf() -> None:
+    """Verify _summarize_bootstrap_knees separates gradual drops from right-censored replicates."""
+    from reach.sweep import (
+        _classify_kneedle_replicate,
+        _ReplicateRegime,
+        _summarize_bootstrap_knees,
+    )
+
+    scales = (10, 25, 50, 100)
+    # 40 replicates at K=10 (cliff), 30 at K=25, 20 gradual drops, 10 flat/no-drop (>K_max)
+    regimes = (
+        [_ReplicateRegime(knee=10, is_gradual_drop=False, is_cliff=True)] * 40
+        + [_ReplicateRegime(knee=25, is_gradual_drop=False, is_cliff=False)] * 30
+        + [_ReplicateRegime(knee=None, is_gradual_drop=True, is_cliff=False)] * 20
+        + [_ReplicateRegime(knee=None, is_gradual_drop=False, is_cliff=False)] * 10
+    )
+    summary = _summarize_bootstrap_knees(regimes, scales, iterations=100, q_low=0.025, q_high=0.975)
+    assert summary.interval == (10, 100)
+    assert summary.upper_censored is True
+    assert summary.pmf == {10: 0.4, 25: 0.3}
+    assert summary.cliff_probability == 0.4
+    assert summary.drop_probability == 0.9
+
+    # Gradual-drop majority (26% localized knees, 74% gradual log-linear decay, 0% flat):
+    # Must NOT fabricate a right-censored [25, >100] interval when drop_probability == 1.0
+    gradual_majority_regimes = (
+        [_ReplicateRegime(knee=25, is_gradual_drop=False, is_cliff=False)] * 12
+        + [_ReplicateRegime(knee=50, is_gradual_drop=False, is_cliff=False)] * 14
+        + [_ReplicateRegime(knee=None, is_gradual_drop=True, is_cliff=False)] * 74
+    )
+    gradual_summary = _summarize_bootstrap_knees(
+        gradual_majority_regimes, scales, iterations=100, q_low=0.025, q_high=0.975
+    )
+    assert gradual_summary.interval is None
+    assert gradual_summary.upper_censored is False
+    assert gradual_summary.pmf == {25: 0.12, 50: 0.14}
+    assert gradual_summary.drop_probability == 1.0
+
+    # First-interval cliff detection in _classify_kneedle_replicate
+    cliff_regime = _classify_kneedle_replicate(
+        scales=(10, 25, 50, 100),
+        values=(1.0, 0.20, 0.19, 0.18),
+        noise_floor=0.05,
+        weights=None,
+    )
+    assert cliff_regime.knee == 25
+    assert cliff_regime.is_cliff is True
+
+
+def test_scaling_study_pydantic_statistical_validators(
+    make_scaling_point: Callable[..., Any],
+    make_scaling_study: Callable[..., Any],
+) -> None:
+    """Verify ScalingStudy cross-field validators, extra=forbid, and find_kneedle_knee default."""
+    from pydantic import ValidationError
+
+    from reach.sweep import ReplicateCollisionDiagnostic
+
+    # find_kneedle_knee defaults to auto_smooth=True (weighted PAVA smooths bounce to K=25)
+    assert (
+        find_kneedle_knee(
+            (10, 25, 50, 100),
+            (0.95, 0.70, 0.85, 0.50),
+            noise_floor=0.05,
+            weights=(1.0, 100.0, 1.0, 1.0),
+        )
+        == 25
+    )
+    assert (
+        find_kneedle_knee(
+            (10, 25, 50, 100),
+            (0.95, 0.70, 0.85, 0.50),
+            noise_floor=0.05,
+            weights=(1.0, 100.0, 1.0, 1.0),
+            auto_smooth=False,
+        )
+        == 50
+    )
+
+    # Valid censored study with catalog_replicates
+    valid_study = make_scaling_study(
+        scales=(10, 25, 50),
+        catalog_replicates=2,
+        knee_scale=25,
+        knee_scale_interval=(10, 50),
+        knee_upper_censored=True,
+        knee_scale_pmf={10: 0.2, 25: 0.5},
+        cliff_probability=0.2,
+        drop_probability=0.8,
+        skill_icc=0.35,
+    )
+    assert valid_study.knee_upper_censored is True
+    assert valid_study.catalog_replicates == 2
+
+    # extra="forbid" rejects unknown fields on ScalingPoint and ScalingStudy
+    with pytest.raises(ValidationError):
+        make_scaling_point(scale=10, unknown_field="bad")
+    with pytest.raises(ValidationError):
+        make_scaling_study(scales=(10, 25), unknown_field="bad")
+
+    # knee_upper_censored without interval is rejected
+    with pytest.raises(ValidationError, match="knee_upper_censored requires knee_scale_interval"):
+        make_scaling_study(
+            scales=(10, 25, 50),
+            knee_scale_interval=None,
+            knee_upper_censored=True,
+        )
+
+    # knee_upper_censored with upper bound != scales[-1] is rejected
+    with pytest.raises(ValidationError, match="upper bound must equal max scale"):
+        make_scaling_study(
+            scales=(10, 25, 50),
+            knee_scale_interval=(10, 25),
+            knee_upper_censored=True,
+        )
+
+    # knee_scale_pmf key outside scales is rejected
+    with pytest.raises(ValidationError, match="keys outside evaluated scales"):
+        make_scaling_study(
+            scales=(10, 25, 50),
+            knee_scale_pmf={99: 0.5},
+        )
+
+    # knee_scale_pmf sum > 1.0 is rejected
+    with pytest.raises(ValidationError, match=r"probabilities sum to .* > 1\.0"):
+        make_scaling_study(
+            scales=(10, 25, 50),
+            knee_scale_pmf={10: 0.7, 25: 0.5},
+        )
+
+    # ReplicateCollisionDiagnostic requires disjoint non-empty failed/passed replicate tuples
+    with pytest.raises(ValidationError, match="at least one failed and one passed"):
+        ReplicateCollisionDiagnostic(
+            query_id="q1", scale=25, failed_replicates=(), passed_replicates=(0,)
+        )
+    with pytest.raises(ValidationError, match="disjoint"):
+        ReplicateCollisionDiagnostic(
+            query_id="q1", scale=25, failed_replicates=(0,), passed_replicates=(0, 1)
+        )
+
+
+def test_detect_replicate_collisions_identifies_flipped_queries_and_suspect_distractors(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify _detect_replicate_collisions flags queries that flip across catalog replicates."""
+    from reach.models import Catalog, CatalogMode, Query
+    from reach.sweep import _detect_replicate_collisions, _QueryOutcome, _ScaleReplicateRecord
+
+    cat_r0 = Catalog(
+        id="sweep:corpus:4", mode=CatalogMode.SWEEP, skills=("s1", "s2", "rival-x", "d1")
+    )
+    cat_r1 = Catalog(
+        id="sweep:corpus:4-r1", mode=CatalogMode.SWEEP, skills=("s1", "s2", "d2", "d3")
+    )
+    queries_by_id = {
+        "q1": Query(id="q1", text="use s1", expected_skill="s1"),
+        "q2": Query(id="q2", text="use s2", expected_skill="s2"),
+    }
+    replicates_by_scale = {
+        4: (
+            _ScaleReplicateRecord(
+                catalog=cat_r0,
+                results=(
+                    make_probe_result(query_id="q1", invoked="rival-x"),
+                    make_probe_result(query_id="q2", invoked="s2"),
+                ),
+                outcomes={
+                    "q1": _QueryOutcome(tp=0, fp=1, fn=1, hits=0, total=1),
+                    "q2": _QueryOutcome(tp=1, fp=0, fn=0, hits=1, total=1),
+                },
+            ),
+            _ScaleReplicateRecord(
+                catalog=cat_r1,
+                results=(
+                    make_probe_result(query_id="q1", invoked="s1"),
+                    make_probe_result(query_id="q2", invoked="s2"),
+                ),
+                outcomes={
+                    "q1": _QueryOutcome(tp=1, fp=0, fn=0, hits=1, total=1),
+                    "q2": _QueryOutcome(tp=1, fp=0, fn=0, hits=1, total=1),
+                },
+            ),
+        )
+    }
+
+    collisions = _detect_replicate_collisions(
+        scales=(4,),
+        replicates_by_scale=replicates_by_scale,
+        queries_by_id=queries_by_id,
+    )
+    assert len(collisions) == 1
+    assert collisions[0].query_id == "q1"
+    assert collisions[0].expected_skill == "s1"
+    assert collisions[0].scale == 4
+    assert collisions[0].failed_replicates == (0,)
+    assert collisions[0].passed_replicates == (1,)
+    assert collisions[0].suspect_distractors == ("rival-x",)
+
+
+def test_print_corpus_capacity_sweep_renders_all_summary_lines(
+    make_scaling_point: Callable[..., ScalingPoint],
+    make_scaling_study: Callable[..., ScalingStudy],
+) -> None:
+    """Verify _print_corpus_capacity_sweep groups replicate collisions and shows gradual share."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from reach.sweep import ReplicateCollisionDiagnostic
+    from reach.views.sweep import _print_corpus_capacity_sweep, _print_single_skill_sweep
+
+    study = make_scaling_study(
+        target_skill=None,
+        catalog_replicates=2,
+        scales=(10, 25, 50, 100),
+        points=(
+            make_scaling_point(scale=10, pass_rate=0.80, f1_score=0.80),
+            make_scaling_point(scale=25, pass_rate=0.525, f1_score=0.525, delta_collision=0.275),
+            make_scaling_point(scale=50, pass_rate=0.338, f1_score=0.338, delta_collision=0.462),
+            make_scaling_point(scale=100, pass_rate=0.20, f1_score=0.20, delta_collision=0.60),
+        ),
+        knee_scale=None,
+        knee_scale_interval=None,
+        knee_upper_censored=False,
+        knee_scale_pmf={25: 0.12, 50: 0.14},
+        cliff_probability=0.0,
+        drop_probability=1.0,
+        skill_icc=0.43,
+        replicate_collisions=(
+            ReplicateCollisionDiagnostic(
+                query_id="gke-storage-1",
+                expected_skill="gke-storage",
+                scale=10,
+                failed_replicates=(0,),
+                passed_replicates=(1,),
+                suspect_distractors=("gke-storage-troubleshooting",),
+            ),
+            ReplicateCollisionDiagnostic(
+                query_id="gke-storage-2",
+                expected_skill="gke-storage",
+                scale=25,
+                failed_replicates=(0,),
+                passed_replicates=(1,),
+                suspect_distractors=("gke-storage-troubleshooting",),
+            ),
+            ReplicateCollisionDiagnostic(
+                query_id="secops-1",
+                expected_skill="secops-detection-engineering",
+                scale=10,
+                failed_replicates=(1,),
+                passed_replicates=(0,),
+                suspect_distractors=("secops-hunt",),
+            ),
+        ),
+    )
+    buf = StringIO()
+    console = Console(file=buf, width=200, force_terminal=False)
+    _print_corpus_capacity_sweep(console, study)
+    output = buf.getvalue()
+
+    assert "2 replicates" in output
+    assert "Capacity Knee Inflection: gradual decay" in output
+    assert "Knee Bootstrap Distribution: K=25: 12%, K=50: 14% (gradual=74%, drop=100%)" in output
+    assert "Baseline Intra-Skill Correlation (ICC): rho=0.43" in output
+    assert (
+        "Replicate Collision Sensitivity: gke-storage ← gke-storage-troubleshooting "
+        "(2 flips @ K=10,25), secops-detection-engineering ← secops-hunt (1 flip @ K=10)"
+    ) in output
+
+    # Single-skill sweep view parity
+    single_study = make_scaling_study(
+        target_skill="gcloud",
+        is_corpus_sweep=False,
+        catalog_replicates=3,
+        scales=(5, 15, 30, 60),
+        points=(
+            make_scaling_point(scale=5, pass_rate=0.95),
+            make_scaling_point(scale=15, pass_rate=0.90, delta_collision=0.05),
+            make_scaling_point(scale=30, pass_rate=0.50, delta_collision=0.45),
+            make_scaling_point(scale=60, pass_rate=0.45, delta_collision=0.50),
+        ),
+        knee_scale=15,
+        knee_scale_interval=(15, 60),
+        knee_upper_censored=True,
+        knee_scale_pmf={15: 0.70, 30: 0.15},
+        drop_probability=0.85,
+        replicate_collisions=(
+            ReplicateCollisionDiagnostic(
+                query_id="gcloud-1",
+                expected_skill="gcloud",
+                scale=30,
+                failed_replicates=(1,),
+                passed_replicates=(0, 2),
+                suspect_distractors=("cloud-run-basics",),
+            ),
+        ),
+    )
+    single_buf = StringIO()
+    single_console = Console(file=single_buf, width=120, force_terminal=False)
+    _print_single_skill_sweep(single_console, single_study)
+    single_out = single_buf.getvalue()
+
+    assert "3 replicates" in single_out
+    assert "k* = 15" in single_out
+    assert "[15, >60]" in single_out
+    assert "K=15: 70%, K=30: 15%" in single_out
+    assert "gcloud ← cloud-run-basics (1 flip @ K=30)" in single_out
+
+
+def test_legacy_decomposition_field_aliases_and_collision_bounds() -> None:
+    """Verify legacy field aliases deserialize and out-of-bounds replicates are safe."""
+    from reach.metrics import DecompositionResult
+    from reach.sweep import ScalingPoint, ScalingStudy, _resolve_collision_suspects
+
+    decomp = DecompositionResult.model_validate(
+        {
+            "baseline_pass_rate": 0.9,
+            "scaled_pass_rate": 0.7,
+            "delta_total": 0.2,
+            "delta_context": 0.08,
+            "delta_shadowing": 0.12,
+            "delta_context_ci": (0.02, 0.14),
+            "delta_shadowing_ci": (0.05, 0.19),
+        }
+    )
+    assert decomp.delta_abstention == pytest.approx(0.08)
+    assert decomp.delta_collision == pytest.approx(0.12)
+    assert decomp.delta_abstention_ci == (0.02, 0.14)
+    assert decomp.delta_collision_ci == (0.05, 0.19)
+
+    point = ScalingPoint.model_validate(
+        {
+            "scale": 10,
+            "catalog_id": "cat-10",
+            "pass_rate": 0.8,
+            "pass_rate_interval": (0.6, 0.9),
+            "delta_vs_baseline": 0.1,
+            "delta_context": 0.04,
+            "delta_shadowing": 0.06,
+            "probes_executed": 10,
+        }
+    )
+    assert point.delta_abstention == pytest.approx(0.04)
+    assert point.delta_collision == pytest.approx(0.06)
+
+    study = ScalingStudy.model_validate(
+        {
+            "is_corpus_sweep": True,
+            "scales": (10,),
+            "points": (point,),
+            "baseline_pass_rate": 0.8,
+            "final_pass_rate": 0.8,
+            "total_delta": 0.1,
+            "total_context_loss": 0.04,
+            "total_shadowing_loss": 0.06,
+        }
+    )
+    assert study.total_abstention_loss == pytest.approx(0.04)
+    assert study.total_collision_loss == pytest.approx(0.06)
+
+    assert _resolve_collision_suspects("q1", "s1", [5, 6], [0], ()) == ()

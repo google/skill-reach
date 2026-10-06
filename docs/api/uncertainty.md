@@ -15,6 +15,7 @@ Statistical uncertainty estimation, Wilson score confidence intervals, and power
         - DEFAULT_POWER
         - detectable_delta
         - effective_sample_size
+        - estimate_skill_icc
         - Interval
         - required_probes
         - wilson_interval

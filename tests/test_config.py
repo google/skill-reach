@@ -581,6 +581,7 @@ def test_the_loader_gained_no_field(variable_config: Path, skill_repo: Path) -> 
         "tag",
         "bootstrap_iterations",
         "bootstrap_seed",
+        "catalog_replicates",
         "scales",
         "anchor",
         "trusted",
@@ -1175,8 +1176,8 @@ def test_scaling_study_requires_target_skill_when_targeted() -> None:
             baseline_pass_rate=1.0,
             final_pass_rate=1.0,
             total_delta=0.0,
-            total_context_loss=0.0,
-            total_shadowing_loss=0.0,
+            total_abstention_loss=0.0,
+            total_collision_loss=0.0,
         )
 
 

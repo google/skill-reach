@@ -720,6 +720,7 @@ class StudySettings(BaseModel):
     trusted: bool = False
     bootstrap_iterations: int = Field(default=200, ge=10)
     bootstrap_seed: int | None = Field(default=42)
+    catalog_replicates: Annotated[int, Field(ge=1, le=20)] = 1
 
     @field_validator("anchor", mode="before")
     @classmethod

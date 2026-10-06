@@ -27,7 +27,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    StringConstraints,
+    model_validator,
+)
 
 from reach.catalog import (
     CorpusScalingPlan,
@@ -39,7 +48,14 @@ from reach.catalog import (
 from reach.config import RunConfig, StudySettings
 from reach.diff import DEFAULT_CONFIDENCE, NOISE_INFLATION
 from reach.diff import noise_floor as diff_noise_floor
-from reach.metrics import DecompositionResult, decompose_pass_rate_drop, score_trajectory
+from reach.metrics import (
+    DecompositionResult,
+    _build_query_strata,
+    _draw_stratified_qids,
+    compute_f1,
+    decompose_pass_rate_drop,
+    score_trajectory,
+)
 from reach.models import NO_SKILL, Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
@@ -49,6 +65,7 @@ from reach.uncertainty import (
     ci_span_sigmas,
     cluster_wilson_interval,
     effective_sample_size,
+    estimate_skill_icc,
 )
 
 if TYPE_CHECKING:
@@ -56,6 +73,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PairedTrialOutcomes",
+    "ReplicateCollisionDiagnostic",
     "ScalingPoint",
     "ScalingStudy",
     "bootstrap_f1_ci",
@@ -66,6 +84,35 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+
+type UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
+type KneePmf = dict[PositiveInt, UnitInterval]
+
+
+class ReplicateCollisionDiagnostic(BaseModel):
+    """Identify a query whose routing outcome flips across catalog replicates at scale K."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    query_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    expected_skill: str | None = None
+    scale: PositiveInt
+    failed_replicates: tuple[NonNegativeInt, ...]
+    passed_replicates: tuple[NonNegativeInt, ...]
+    suspect_distractors: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_replicate_partition(self) -> Self:
+        """Ensure failed and passed replicate sets are non-empty and disjoint."""
+        if not self.failed_replicates or not self.passed_replicates:
+            msg = (
+                "ReplicateCollisionDiagnostic requires at least one failed and one passed replicate"
+            )
+            raise ValueError(msg)
+        if set(self.failed_replicates) & set(self.passed_replicates):
+            msg = "failed_replicates and passed_replicates must be disjoint"
+            raise ValueError(msg)
+        return self
 
 
 class PairedTrialOutcomes(BaseModel):
@@ -108,7 +155,7 @@ class PairedTrialOutcomes(BaseModel):
 class ScalingPoint(BaseModel):
     """Represent evaluation outcomes and decomposition for a single catalog scale point."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     scale: int
     catalog_id: str
@@ -130,8 +177,12 @@ class ScalingPoint(BaseModel):
     negative_probes: NonNegativeInt = 0
     disclosure_states: dict[str, int] = Field(default_factory=dict)
     delta_vs_baseline: float
-    delta_context: float
-    delta_shadowing: float
+    delta_abstention: float = Field(
+        validation_alias=AliasChoices("delta_abstention", "delta_context")
+    )
+    delta_collision: float = Field(
+        validation_alias=AliasChoices("delta_collision", "delta_shadowing")
+    )
     delta_truncated: float = 0.0
     probes_executed: NonNegativeInt
     probes_failed: NonNegativeInt = 0
@@ -168,37 +219,83 @@ class ScalingPoint(BaseModel):
 class ScalingStudy(BaseModel):
     """Represent multi-scale catalog scaling study and knee curvature analysis."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     target_skill: str | None = None
     is_corpus_sweep: bool = False
+    catalog_replicates: PositiveInt = 1
     scales: tuple[int, ...]
     points: tuple[ScalingPoint, ...]
     knee_scale: int | None = None
     knee_scale_interval: tuple[int, int] | None = None
+    knee_scale_pmf: KneePmf | None = None
+    knee_upper_censored: bool = False
+    cliff_probability: UnitInterval | None = None
+    drop_probability: UnitInterval | None = None
     steepest_drop_scales: tuple[int, int] | None = None
     steepest_drop_delta: float | None = None
     baseline_pass_rate: float
     final_pass_rate: float
     total_delta: float
-    total_context_loss: float
-    total_shadowing_loss: float
+    total_abstention_loss: float = Field(
+        validation_alias=AliasChoices("total_abstention_loss", "total_context_loss")
+    )
+    total_collision_loss: float = Field(
+        validation_alias=AliasChoices("total_collision_loss", "total_shadowing_loss")
+    )
     total_truncated_loss: float = 0.0
     noise_floor: float = 0.05
     total_corpus_skills: int = 0
     decomposition: DecompositionResult | None = None
     anchor_skills: tuple[str, ...] | None = None
     paired_outcomes: PairedTrialOutcomes | None = None
+    skill_icc: UnitInterval | None = None
+    replicate_collisions: tuple[ReplicateCollisionDiagnostic, ...] = ()
 
     @model_validator(mode="after")
     def _validate_target_skill_for_mode(self) -> Self:
-        """Ensure targeted sweeps specify a target skill."""
+        """Ensure targeted sweeps specify a target skill and statistical bounds are valid."""
         if not self.is_corpus_sweep and self.target_skill is None:
             msg = "Targeted scaling sweep requires target_skill to be specified."
             raise ValueError(msg)
+        if (
+            self.knee_scale_interval is not None
+            and self.knee_scale_interval[0] > self.knee_scale_interval[1]
+        ):
+            msg = f"knee_scale_interval bounds are inverted: {self.knee_scale_interval}"
+            raise ValueError(msg)
+        if self.knee_upper_censored:
+            if self.knee_scale_interval is None:
+                msg = "knee_upper_censored requires knee_scale_interval to be set"
+                raise ValueError(msg)
+            if self.scales and self.knee_scale_interval[1] != self.scales[-1]:
+                msg = (
+                    f"knee_upper_censored upper bound must equal max scale "
+                    f"{self.scales[-1]}, got {self.knee_scale_interval[1]}"
+                )
+                raise ValueError(msg)
+        if (
+            self.cliff_probability is not None
+            and self.drop_probability is not None
+            and self.cliff_probability > self.drop_probability + 1e-6
+        ):
+            msg = (
+                f"cliff_probability ({self.cliff_probability}) cannot exceed "
+                f"drop_probability ({self.drop_probability})"
+            )
+            raise ValueError(msg)
+        if self.knee_scale_pmf:
+            if self.scales and any(k not in self.scales for k in self.knee_scale_pmf):
+                msg = f"knee_scale_pmf contains keys outside evaluated scales {self.scales}"
+                raise ValueError(msg)
+            pmf_sum = sum(self.knee_scale_pmf.values())
+            if pmf_sum > _PMF_SUM_MAX:
+                msg = f"knee_scale_pmf probabilities sum to {pmf_sum} > 1.0"
+                raise ValueError(msg)
         return self
 
 
+_PMF_SUM_MAX: float = 1.001
 _MIN_KNEE_POINTS: int = 3
 _MIN_DIFF_POINTS: int = 2
 _MIN_NOISE_FLOOR: float = 0.01
@@ -272,6 +369,26 @@ def _compute_pava_weights(
     ]
 
 
+def _compute_mcnemar_noise_floor(
+    n10: int,
+    n01: int,
+    total_paired: int,
+    effective_paired: float | None = None,
+    confidence: float = DEFAULT_CONFIDENCE,
+    noise_inflation: float = NOISE_INFLATION,
+) -> float:
+    """Compute cluster-adjusted McNemar scaling noise floor from discordant pair counts."""
+    n_raw = max(1, total_paired)
+    n_eff = max(1.0, effective_paired if effective_paired is not None else float(n_raw))
+    # Asymptotic McNemar variance scaled by cluster survey design effect (DEFF = n_raw / n_eff)
+    # Var_cluster = Var_raw * DEFF = (n10 + n01 - (n10 - n01)^2 / n_raw) / (n_raw * n_eff)
+    var_num = max(0.0, float(n10 + n01) - ((float(n10 - n01) ** 2) / n_raw))
+    var_paired = var_num / (float(n_raw) * n_eff)
+    se_paired = math.sqrt(var_paired)
+    floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, noise_inflation)
+    return max(_MIN_NOISE_FLOOR, floor)
+
+
 def compute_scaling_noise_floor(
     baseline_pass_rate: float,
     scaled_pass_rate: float,
@@ -283,16 +400,14 @@ def compute_scaling_noise_floor(
 ) -> float:
     """Calculate minimum scaling pass-rate drop distinguishable from noise using diff."""
     if paired_outcomes is not None:
-        n_raw = max(1, paired_outcomes.total_paired)
-        n_eff = max(1, paired_outcomes.effective_paired or n_raw)
-        n10, n01 = paired_outcomes.n10, paired_outcomes.n01
-        # Asymptotic McNemar variance scaled by cluster survey design effect (DEFF = n_raw / n_eff)
-        # Var_cluster = Var_raw * DEFF = (n10 + n01 - (n10 - n01)^2 / n_raw) / (n_raw * n_eff)
-        var_num = max(0.0, float(n10 + n01) - ((float(n10 - n01) ** 2) / n_raw))
-        var_paired = var_num / (float(n_raw) * float(n_eff))
-        se_paired = math.sqrt(var_paired)
-        floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, noise_inflation)
-        return max(_MIN_NOISE_FLOOR, floor)
+        return _compute_mcnemar_noise_floor(
+            paired_outcomes.n10,
+            paired_outcomes.n01,
+            paired_outcomes.total_paired,
+            paired_outcomes.effective_paired,
+            confidence=confidence,
+            noise_inflation=noise_inflation,
+        )
 
     n = max(1, sample_size)
     control_se = math.sqrt(max(0.0, baseline_pass_rate * (1.0 - baseline_pass_rate)) / n)
@@ -333,7 +448,7 @@ def find_kneedle_knee(
     noise_floor: float = 0.10,
     *,
     weights: Sequence[float] | None = None,
-    auto_smooth: bool = False,
+    auto_smooth: bool = True,
 ) -> int | None:
     """Identify the inflection knee scale k* using normalized log-scale Kneedle curvature."""
     if (
@@ -447,65 +562,6 @@ def _classify_probe_outcome(
     return is_tp, is_fp, is_fn
 
 
-def bootstrap_f1_ci(
-    results: Sequence[ProbeResult],
-    truth: Mapping[str, str | None],
-    installed_skills: set[str],
-    iterations: int = 1000,
-    seed: int = 42,
-    target_skill: str | None = None,
-    queries_by_id: Mapping[str, Query] | None = None,
-    *,
-    trajectory: bool = True,
-) -> tuple[float, float]:
-    """Compute cluster-bootstrap confidence interval for micro F1 score clustered by query."""
-    if not results or iterations <= 0:
-        return (0.0, 1.0)
-
-    outcomes_by_query: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
-    for r in results:
-        is_tp, is_fp, is_fn = _classify_probe_outcome(
-            r,
-            truth.get(r.query_id),
-            installed_skills,
-            target_skill=target_skill,
-            query=queries_by_id.get(r.query_id) if queries_by_id is not None else None,
-            trajectory=trajectory,
-        )
-        outcomes_by_query[r.query_id].append((int(is_tp), int(is_fp), int(is_fn)))
-
-    qids = list(outcomes_by_query.keys())
-    m_queries = len(qids)
-    if m_queries == 0:
-        return (0.0, 1.0)
-
-    query_sums = [
-        (
-            sum(tp for tp, _, _ in outcomes_by_query[qid]),
-            sum(fp for _, fp, _ in outcomes_by_query[qid]),
-            sum(fn for _, _, fn in outcomes_by_query[qid]),
-        )
-        for qid in qids
-    ]
-
-    rng = random.Random(seed)  # noqa: S311
-    f1_boots: list[float] = []
-
-    for _ in range(iterations):
-        sample_sums = [rng.choice(query_sums) for _ in range(m_queries)]
-        tp_s = sum(s[0] for s in sample_sums)
-        fp_s = sum(s[1] for s in sample_sums)
-        fn_s = sum(s[2] for s in sample_sums)
-        denom = 2 * tp_s + fp_s + fn_s
-        f1_boots.append(2.0 * tp_s / denom if denom > 0 else 0.0)
-
-    f1_boots.sort()
-    q_low, q_high = bootstrap_quantiles()
-    low_idx = max(0, int(iterations * q_low))
-    high_idx = min(int(iterations * q_high), iterations - 1)
-    return (round(f1_boots[low_idx], 4), round(f1_boots[high_idx], 4))
-
-
 class _QueryOutcome(NamedTuple):
     """Confusion counts and pass/hit totals for a query at a given scale."""
 
@@ -517,7 +573,6 @@ class _QueryOutcome(NamedTuple):
 
 
 _EMPTY_QUERY_OUTCOME = _QueryOutcome()
-_QUERY_OUTCOME_TUPLE_LEN: int = 5
 
 
 def _extract_query_outcomes(
@@ -528,6 +583,7 @@ def _extract_query_outcomes(
     queries_by_id: Mapping[str, Query] | None = None,
     *,
     trajectory: bool = True,
+    include_other_skills: bool = False,
 ) -> dict[str, _QueryOutcome]:
     """Aggregate (tp, fp, fn, hits, total) counts grouped by query_id for a single scale."""
     valid_results = [r for r in results if not r.error]
@@ -536,40 +592,105 @@ def _extract_query_outcomes(
         q = queries_by_id.get(r.query_id) if queries_by_id is not None else None
         exp = truth.get(r.query_id) if q is None else q.expected_skill
 
-        if target_skill is not None:
-            if exp != target_skill and exp is not None:
-                continue
-            is_tp, is_fp, is_fn = _classify_probe_outcome(
-                r,
-                exp,
-                installed_skills,
-                target_skill=target_skill,
-                query=q,
-                trajectory=trajectory,
-            )
-            hit = (exp == target_skill and is_tp) or (exp is None and not is_fp)
-        else:
-            is_tp, is_fp, is_fn = _classify_probe_outcome(
-                r,
-                exp,
-                installed_skills,
-                target_skill=None,
-                query=q,
-                trajectory=trajectory,
-            )
-            hit, _ = _evaluate_probe_trajectory(r, exp, q, trajectory=trajectory)
+        if (
+            target_skill is not None
+            and not include_other_skills
+            and exp != target_skill
+            and exp is not None
+        ):
+            continue
 
+        is_tp, is_fp, is_fn = _classify_probe_outcome(
+            r,
+            exp,
+            installed_skills,
+            target_skill=target_skill,
+            query=q,
+            trajectory=trajectory,
+        )
         counts = outcomes[r.query_id]
         counts[0] += int(is_tp)
         counts[1] += int(is_fp)
         counts[2] += int(is_fn)
-        counts[3] += int(hit)
-        counts[4] += 1
+
+        if target_skill is not None:
+            if exp == target_skill or exp is None:
+                hit = (exp == target_skill and is_tp) or (exp is None and not is_fp)
+                counts[3] += int(hit)
+                counts[4] += 1
+        else:
+            hit, _ = _evaluate_probe_trajectory(r, exp, q, trajectory=trajectory)
+            counts[3] += int(hit)
+            counts[4] += 1
 
     return {
         qid: _QueryOutcome(counts[0], counts[1], counts[2], counts[3], counts[4])
         for qid, counts in outcomes.items()
     }
+
+
+def bootstrap_f1_ci(
+    results: Sequence[ProbeResult],
+    truth: Mapping[str, str | None],
+    installed_skills: set[str],
+    iterations: int = 1000,
+    seed: int = 42,
+    target_skill: str | None = None,
+    queries_by_id: Mapping[str, Query] | None = None,
+    *,
+    trajectory: bool = True,
+) -> tuple[float, float]:
+    """Compute stratified cluster-bootstrap confidence interval for micro F1 score."""
+    if not results or iterations <= 0:
+        return (0.0, 1.0)
+
+    outcomes = _extract_query_outcomes(
+        results,
+        truth,
+        installed_skills,
+        target_skill=target_skill,
+        queries_by_id=queries_by_id,
+        trajectory=trajectory,
+        include_other_skills=True,
+    )
+    qids = list(outcomes.keys())
+    if not qids:
+        return (0.0, 1.0)
+
+    strata = _build_query_strata(qids, truth=truth, queries_by_id=queries_by_id)
+    rng = random.Random(seed)  # noqa: S311
+    f1_boots: list[float] = []
+
+    for _ in range(iterations):
+        sample_qids = _draw_stratified_qids(strata, rng)
+        tp_s = sum(outcomes[q].tp for q in sample_qids)
+        fp_s = sum(outcomes[q].fp for q in sample_qids)
+        fn_s = sum(outcomes[q].fn for q in sample_qids)
+        denom = 2 * tp_s + fp_s + fn_s
+        f1_boots.append(2.0 * tp_s / denom if denom > 0 else 0.0)
+
+    f1_boots.sort()
+    q_low, q_high = bootstrap_quantiles()
+    low_idx = max(0, int(iterations * q_low))
+    high_idx = min(int(iterations * q_high), iterations - 1)
+    return (round(f1_boots[low_idx], 4), round(f1_boots[high_idx], 4))
+
+
+def _estimate_baseline_skill_icc(
+    baseline_outcomes: Mapping[str, _QueryOutcome] | None,
+    queries_by_id: Mapping[str, Query] | None,
+) -> float | None:
+    """Estimate intra-skill correlation at baseline scale K0 across evaluated skills."""
+    if not baseline_outcomes or not queries_by_id:
+        return None
+    outcomes_by_skill: dict[str, list[float]] = defaultdict(list)
+    for qid, entry in baseline_outcomes.items():
+        q = queries_by_id.get(qid)
+        if q is None or q.expected_skill is None:
+            continue
+        if entry.total > 0:
+            outcomes_by_skill[q.expected_skill].append(entry.hits / entry.total)
+    return estimate_skill_icc(outcomes_by_skill)
 
 
 _FUZZY_MATCH_CUTOFF = 0.5
@@ -705,8 +826,8 @@ class _ScaleDecomposition(NamedTuple):
     """Represent comparative degradation components against baseline."""
 
     delta_vs_baseline: float
-    delta_context: float
-    delta_shadowing: float
+    delta_abstention: float
+    delta_collision: float
     decomposition: DecompositionResult | None
     delta_truncated: float = 0.0
 
@@ -864,12 +985,6 @@ def _compute_precision_metrics(
     return internal_precision, ext_prec, precision, precision_interval
 
 
-def _compute_f1_score(precision: float, recall: float) -> float:
-    """Compute standard harmonic mean F1 score from precision and recall."""
-    denom = precision + recall
-    return 2.0 * precision * recall / denom if denom > 0 else 0.0
-
-
 def _calculate_scale_classification(
     results: Sequence[ProbeResult],
     queries_by_id: Mapping[str, Query],
@@ -915,7 +1030,7 @@ def _calculate_scale_classification(
         tp, internal_fp, fp_distractor, bool(negative), attempts=attempts
     )
 
-    f1 = _compute_f1_score(precision, recall)
+    f1 = compute_f1(precision, recall)
     if compute_ci:
         truth_expected = {qid: q.expected_skill for qid, q in queries_by_id.items()}
         f1_ci = bootstrap_f1_ci(
@@ -1005,8 +1120,8 @@ def _evaluate_baseline_decomposition(
     if not baseline_results:
         return _ScaleDecomposition(
             delta_vs_baseline=0.0,
-            delta_context=0.0,
-            delta_shadowing=0.0,
+            delta_abstention=0.0,
+            delta_collision=0.0,
             decomposition=None,
             delta_truncated=0.0,
         )
@@ -1026,8 +1141,8 @@ def _evaluate_baseline_decomposition(
     )
     return _ScaleDecomposition(
         delta_vs_baseline=decomp.delta_total,
-        delta_context=decomp.delta_context,
-        delta_shadowing=decomp.delta_shadowing,
+        delta_abstention=decomp.delta_abstention,
+        delta_collision=decomp.delta_collision,
         decomposition=decomp,
         delta_truncated=decomp.delta_truncated,
     )
@@ -1125,8 +1240,8 @@ def _build_scaling_point(
         negative_probes=class_stats.negative_probes,
         disclosure_states=telemetry.disclosure_states,
         delta_vs_baseline=round(decomp_stats.delta_vs_baseline, 4),
-        delta_context=round(decomp_stats.delta_context, 4),
-        delta_shadowing=round(decomp_stats.delta_shadowing, 4),
+        delta_abstention=round(decomp_stats.delta_abstention, 4),
+        delta_collision=round(decomp_stats.delta_collision, 4),
         delta_truncated=round(decomp_stats.delta_truncated, 4),
         probes_executed=len(scoped_results),
         probes_failed=pass_stats.fails,
@@ -1144,6 +1259,7 @@ def _prepare_sweep_config(
     attempts: int | None,
     bootstrap_iterations: int | None = None,
     seed: int | None = None,
+    catalog_replicates: int | None = None,
 ) -> RunConfig:
     """Apply CLI overrides to execution configuration."""
     cfg = config or RunConfig()
@@ -1153,6 +1269,8 @@ def _prepare_sweep_config(
         study_update["bootstrap_iterations"] = bootstrap_iterations
     if seed is not None:
         study_update["bootstrap_seed"] = seed
+    if catalog_replicates is not None:
+        study_update["catalog_replicates"] = catalog_replicates
 
     cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
@@ -1186,40 +1304,55 @@ def _build_study_result(
     noise_floor: float,
     total_skills: int,
     decomp: DecompositionResult | None,
+    *,
+    catalog_replicates: int = 1,
     anchor_skills: Sequence[str] | None = None,
     paired_outcomes: PairedTrialOutcomes | None = None,
     knee_interval: tuple[int, int] | None = None,
+    knee_scale_pmf: Mapping[int, float] | None = None,
+    knee_upper_censored: bool = False,
+    cliff_probability: float | None = None,
+    drop_probability: float | None = None,
     steepest_drop_scales: tuple[int, int] | None = None,
     steepest_drop_delta: float | None = None,
+    skill_icc: float | None = None,
+    replicate_collisions: Sequence[ReplicateCollisionDiagnostic] = (),
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
     b_rate = points[0].pass_rate if points else 0.0
     f_rate = points[-1].pass_rate if points else 0.0
     t_delta = points[-1].delta_vs_baseline if len(points) > 1 else 0.0
-    t_ctx = points[-1].delta_context if len(points) > 1 else 0.0
-    t_shd = points[-1].delta_shadowing if len(points) > 1 else 0.0
+    t_abs = points[-1].delta_abstention if len(points) > 1 else 0.0
+    t_col = points[-1].delta_collision if len(points) > 1 else 0.0
     t_trunc = points[-1].delta_truncated if len(points) > 1 else 0.0
 
     return ScalingStudy(
         target_skill=target,
         is_corpus_sweep=is_corpus,
+        catalog_replicates=max(1, catalog_replicates),
         scales=tuple(evaluated_scales),
         points=tuple(points),
         knee_scale=knee,
         knee_scale_interval=knee_interval,
+        knee_scale_pmf=dict(knee_scale_pmf) if knee_scale_pmf is not None else None,
+        knee_upper_censored=knee_upper_censored,
+        cliff_probability=cliff_probability,
+        drop_probability=drop_probability,
         steepest_drop_scales=steepest_drop_scales,
         steepest_drop_delta=steepest_drop_delta,
         baseline_pass_rate=b_rate,
         final_pass_rate=f_rate,
         total_delta=t_delta,
-        total_context_loss=t_ctx,
-        total_shadowing_loss=t_shd,
+        total_abstention_loss=t_abs,
+        total_collision_loss=t_col,
         total_truncated_loss=t_trunc,
         noise_floor=noise_floor,
         total_corpus_skills=total_skills,
         decomposition=decomp,
         anchor_skills=tuple(anchor_skills) if anchor_skills is not None else None,
         paired_outcomes=paired_outcomes,
+        skill_icc=skill_icc,
+        replicate_collisions=tuple(replicate_collisions),
     )
 
 
@@ -1319,6 +1452,24 @@ def _scale_adaptive_workers(
     return max(1, round(base_workers * (reference_scale / scale)))
 
 
+class _ReplicateSetup(NamedTuple):
+    """Store resolved target, catalogs, query set, and corpus plan for a catalog replicate."""
+
+    target: str | None
+    catalogs: list[Catalog]
+    query_set: QuerySet
+    corpus_plan: CorpusScalingPlan | None
+    resolved_anchors: tuple[str, ...] | None
+
+
+class _ScaleReplicateRecord(NamedTuple):
+    """Store catalog, probe outcomes, and query outcome totals for a single replicate at scale K."""
+
+    catalog: Catalog
+    results: tuple[ProbeResult, ...]
+    outcomes: dict[str, _QueryOutcome]
+
+
 def _setup_sweep_execution(
     is_corpus: bool,
     target_skill: str | None,
@@ -1328,8 +1479,10 @@ def _setup_sweep_execution(
     raw_query_set: QuerySet,
     effective_config: RunConfig,
     rivals_share: float,
-) -> tuple[str | None, list[Catalog], QuerySet, CorpusScalingPlan | None, tuple[str, ...] | None]:
+    seed_override: int | None = None,
+) -> _ReplicateSetup:
     """Configure catalogs, query sets, and scaling plan for sweep execution."""
+    catalog_seed = seed_override if seed_override is not None else effective_config.catalog.seed
     if is_corpus:
         requested_anchor = anchor if anchor is not None else effective_config.study.anchor
         resolved_anchors = _resolve_anchor_skills(
@@ -1364,8 +1517,9 @@ def _setup_sweep_execution(
             scales=actual_scales,
             anchor_skills=resolved_anchors,
             rivals_share=rivals_share,
+            seed=catalog_seed,
         )
-        return None, list(plan.catalogs), raw_query_set, plan, resolved_anchors
+        return _ReplicateSetup(None, list(plan.catalogs), raw_query_set, plan, resolved_anchors)
 
     target, query_set = _resolve_sweep_target_and_queries(
         resolved_skills, raw_query_set, target_skill
@@ -1375,20 +1529,28 @@ def _setup_sweep_execution(
         target_skill=target,
         scales=actual_scales,
         rivals_share=rivals_share,
-        seed=effective_config.catalog.seed,
+        seed=catalog_seed,
     )
-    return target, catalogs, query_set, None, None
+    return _ReplicateSetup(target, catalogs, query_set, None, None)
 
 
-def _calculate_paired_outcomes(
+class _PairedQueryOutcome(NamedTuple):
+    """Represent query-level discordant pair counts between baseline and final scale."""
+
+    n10: int = 0
+    n01: int = 0
+    total_paired: int = 0
+
+
+def _extract_paired_query_outcomes(
     baseline_results: Sequence[ProbeResult],
     final_results: Sequence[ProbeResult],
     queries_by_id: Mapping[str, Query],
     target_skill: str | None = None,
-) -> PairedTrialOutcomes | None:
-    """Calculate discordant pair counts (n10, n01) between baseline and final scale runs."""
+) -> dict[str, _PairedQueryOutcome]:
+    """Extract discordant pair counts grouped by query_id between baseline and final scales."""
     if not baseline_results or not final_results:
-        return None
+        return {}
 
     def probe_hit(r: ProbeResult) -> bool:
         if r.error:
@@ -1418,37 +1580,182 @@ def _calculate_paired_outcomes(
     final_map = {(r.query_id, r.attempt): probe_hit(r) for r in final_results if is_scoped(r)}
     common_keys = set(base_map.keys()) & set(final_map.keys())
     if not common_keys:
-        return None
+        return {}
 
-    n10 = sum(1 for k in common_keys if base_map[k] and not final_map[k])
-    n01 = sum(1 for k in common_keys if not base_map[k] and final_map[k])
-    unique_qids = {k[0] for k in common_keys}
-    attempts = max(1, round(len(common_keys) / max(1, len(unique_qids))))
-    neff = effective_sample_size(len(common_keys), attempts=attempts)
+    counts_by_qid: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for key in common_keys:
+        qid = key[0]
+        b_hit = base_map[key]
+        f_hit = final_map[key]
+        counts = counts_by_qid[qid]
+        if b_hit and not f_hit:
+            counts[0] += 1
+        elif not b_hit and f_hit:
+            counts[1] += 1
+        counts[2] += 1
+
+    return {
+        qid: _PairedQueryOutcome(n10=vals[0], n01=vals[1], total_paired=vals[2])
+        for qid, vals in counts_by_qid.items()
+    }
+
+
+def _aggregate_paired_counts(
+    outcomes: Sequence[_PairedQueryOutcome],
+) -> tuple[int, int, int, float]:
+    """Aggregate discordant pair counts and cluster-adjusted effective sample size."""
+    n10 = sum(v.n10 for v in outcomes)
+    n01 = sum(v.n01 for v in outcomes)
+    total_paired = sum(v.total_paired for v in outcomes)
+    attempts = max(1, round(total_paired / max(1, len(outcomes))))
+    neff = float(effective_sample_size(total_paired, attempts=attempts))
+    return n10, n01, total_paired, neff
+
+
+def _build_paired_outcomes(
+    per_query: Mapping[str, _PairedQueryOutcome],
+) -> PairedTrialOutcomes | None:
+    """Construct PairedTrialOutcomes from per-query discordant pair counts."""
+    if not per_query:
+        return None
+    n10, n01, total_paired, neff = _aggregate_paired_counts(tuple(per_query.values()))
+    if total_paired <= 0:
+        return None
     return PairedTrialOutcomes(
-        n10=n10, n01=n01, total_paired=len(common_keys), effective_paired=neff
+        n10=n10,
+        n01=n01,
+        total_paired=total_paired,
+        effective_paired=neff,
     )
 
 
-def _extract_bootstrap_quantiles(
-    knees: list[int],
+def _calculate_paired_outcomes(
+    baseline_results: Sequence[ProbeResult],
+    final_results: Sequence[ProbeResult],
+    queries_by_id: Mapping[str, Query],
+    target_skill: str | None = None,
+) -> PairedTrialOutcomes | None:
+    """Calculate discordant pair counts (n10, n01) between baseline and final scale runs."""
+    per_query = _extract_paired_query_outcomes(
+        baseline_results, final_results, queries_by_id, target_skill=target_skill
+    )
+    return _build_paired_outcomes(per_query)
+
+
+class _ReplicateRegime(NamedTuple):
+    """Classify a single bootstrap replicate curve's knee behavior."""
+
+    knee: int | None
+    is_gradual_drop: bool
+    is_cliff: bool
+
+
+class _BootstrapKneeSummary(NamedTuple):
+    """Summarize bootstrap knee distribution, censoring, and cliff/drop probabilities."""
+
+    interval: tuple[int, int] | None = None
+    pmf: dict[int, float] | None = None
+    upper_censored: bool = False
+    cliff_probability: float | None = None
+    drop_probability: float | None = None
+
+
+_INITIAL_CLIFF_DROP_SHARE: float = 0.60
+
+
+def _classify_kneedle_replicate(
+    scales: Sequence[int],
+    values: Sequence[float],
+    noise_floor: float,
+    weights: Sequence[float] | None,
+) -> _ReplicateRegime:
+    """Classify a resampled curve into flat, gradual drop, or detected knee/cliff."""
+    k = find_kneedle_knee(
+        scales,
+        values,
+        noise_floor=noise_floor,
+        weights=weights,
+        auto_smooth=True,
+    )
+    smoothed = _isotonic_regression_pava(values, weights=weights)
+    total_drop = smoothed[0] - smoothed[-1] if smoothed else 0.0
+    if k is not None:
+        first_step_drop = (smoothed[0] - smoothed[1]) if len(smoothed) > 1 else 0.0
+        is_first_step_cliff = k == scales[0] or (
+            len(scales) > 1
+            and k == scales[1]
+            and total_drop > 0.0
+            and first_step_drop >= _INITIAL_CLIFF_DROP_SHARE * total_drop
+        )
+        return _ReplicateRegime(
+            knee=k,
+            is_gradual_drop=False,
+            is_cliff=is_first_step_cliff,
+        )
+    return _ReplicateRegime(
+        knee=None,
+        is_gradual_drop=(total_drop > noise_floor),
+        is_cliff=False,
+    )
+
+
+def _summarize_bootstrap_knees(
+    regimes: Sequence[_ReplicateRegime],
+    scales: Sequence[int],
     iterations: int,
     q_low: float,
     q_high: float,
-) -> tuple[int, int] | None:
-    """Extract bootstrap empirical quantiles when knee detection meets the majority threshold."""
+) -> _BootstrapKneeSummary:
+    """Summarize bootstrap knee replicates with right-censoring and PMF over scales."""
+    if not regimes or iterations <= 0 or not scales:
+        return _BootstrapKneeSummary()
+
+    detected = sorted(r.knee for r in regimes if r.knee is not None)
+    gradual_count = sum(1 for r in regimes if r.is_gradual_drop)
+    cliff_count = sum(1 for r in regimes if r.is_cliff)
+    b_drop = len(detected) + gradual_count
+    no_drop_count = max(0, len(regimes) - b_drop)
+
+    counts = Counter(detected)
+    pmf = {s: round(counts[s] / iterations, 4) for s in scales if counts[s] > 0}
+    cliff_prob = round(cliff_count / iterations, 4)
+    drop_prob = round(b_drop / iterations, 4)
+
     min_detections = max(1, int(iterations * 0.50))
-    if len(knees) >= min_detections:
-        knees.sort()
-        low_idx = int(len(knees) * q_low)
-        high_idx = min(int(len(knees) * q_high), len(knees) - 1)
-        return (knees[low_idx], knees[high_idx])
-    return None
+    n_censor_pool = len(detected) + no_drop_count
+    raw_low_idx = int(n_censor_pool * q_low)
+    if len(detected) < min_detections or raw_low_idx >= len(detected):
+        return _BootstrapKneeSummary(
+            interval=None,
+            pmf=pmf or None,
+            upper_censored=False,
+            cliff_probability=cliff_prob,
+            drop_probability=drop_prob,
+        )
+
+    low_idx = max(0, raw_low_idx)
+    high_idx = min(int(n_censor_pool * q_high), n_censor_pool - 1)
+    low_val = detected[low_idx]
+    if high_idx >= len(detected):
+        return _BootstrapKneeSummary(
+            interval=(low_val, scales[-1]),
+            pmf=pmf or None,
+            upper_censored=True,
+            cliff_probability=cliff_prob,
+            drop_probability=drop_prob,
+        )
+    return _BootstrapKneeSummary(
+        interval=(low_val, detected[high_idx]),
+        pmf=pmf or None,
+        upper_censored=False,
+        cliff_probability=cliff_prob,
+        drop_probability=drop_prob,
+    )
 
 
 def _resample_cluster_curve(
     scales: Sequence[int],
-    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome | tuple[int, ...]]],
+    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome]],
     sample_qids: Sequence[str],
     *,
     is_corpus: bool,
@@ -1458,50 +1765,69 @@ def _resample_cluster_curve(
     for s in scales:
         scale_sums = scale_query_sums[s]
         if is_corpus:
-            tp = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME)[0] for q in sample_qids)
-            fp = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME)[1] for q in sample_qids)
-            fn = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME)[2] for q in sample_qids)
+            tp = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME).tp for q in sample_qids)
+            fp = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME).fp for q in sample_qids)
+            fn = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME).fn for q in sample_qids)
             denom = 2 * tp + fp + fn
             val = (2.0 * tp / denom) if denom > 0 else 0.0
         else:
-            total_hits = 0
-            total_count = 0
-            for q in sample_qids:
-                entry = scale_sums.get(q)
-                if entry is None:
-                    continue
-                if isinstance(entry, _QueryOutcome):
-                    total_hits += entry.hits
-                    total_count += entry.total
-                elif len(entry) >= _QUERY_OUTCOME_TUPLE_LEN:
-                    total_hits += entry[3]
-                    total_count += entry[4]
-                else:
-                    tp, _fp, fn = entry[:3]
-                    total_hits += tp
-                    total_count += tp + fn
+            total_hits = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME).hits for q in sample_qids)
+            total_count = sum(scale_sums.get(q, _EMPTY_QUERY_OUTCOME).total for q in sample_qids)
             val = (total_hits / total_count) if total_count > 0 else 0.0
         resampled_curve.append(val)
     return resampled_curve
 
 
-def _bootstrap_knee_interval(
+def _resample_paired_noise_floor(
+    raw_noise_floor: float | None,
+    fallback_noise_floor: float,
+    points: Sequence[ScalingPoint],
+    sample_qids: Sequence[str],
+    paired_query_outcomes: Mapping[str, _PairedQueryOutcome] | None,
+) -> float:
+    """Compute replicate-specific dynamic noise floor when raw_noise_floor is unset."""
+    if raw_noise_floor is not None:
+        return raw_noise_floor
+    if not paired_query_outcomes:
+        return fallback_noise_floor
+    sampled = [paired_query_outcomes.get(q, _PairedQueryOutcome()) for q in sample_qids]
+    rep_n10, rep_n01, rep_total, rep_neff = _aggregate_paired_counts(sampled)
+    if rep_total <= 0:
+        return fallback_noise_floor
+    if len(points) >= _MIN_DIFF_POINTS:
+        return round(_compute_mcnemar_noise_floor(rep_n10, rep_n01, rep_total, rep_neff), 4)
+    return 0.05
+
+
+def _bootstrap_knee_summary(
     scales: Sequence[int],
     points: Sequence[ScalingPoint],
     noise_floor: float,
     iterations: int = 200,
     seed: int = 42,
-    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome | tuple[int, ...]]] | None = None,
+    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome]] | None = None,
     confidence: float = DEFAULT_CONFIDENCE,
     *,
     is_corpus: bool = True,
-) -> tuple[int, int] | None:
-    """Calculate bootstrap confidence interval for knee scale k* using weighted PAVA."""
-    if len(points) < _MIN_DIFF_POINTS or iterations <= 0:
-        return None
+    queries_by_id: Mapping[str, Query] | None = None,
+    paired_query_outcomes: Mapping[str, _PairedQueryOutcome] | None = None,
+    raw_noise_floor: float | None = None,
+) -> _BootstrapKneeSummary:
+    """Calculate stratified bootstrap knee summary, PMF, right-censoring, and cliff probability."""
+    if (
+        len(points) < _MIN_DIFF_POINTS
+        or iterations <= 0
+        or not scale_query_sums
+        or not all(s in scale_query_sums for s in scales)
+    ):
+        return _BootstrapKneeSummary()
+
+    common_qids = list(scale_query_sums[scales[0]].keys())
+    if not common_qids:
+        return _BootstrapKneeSummary()
 
     rng = random.Random(seed)  # noqa: S311
-    knees: list[int] = []
+    regimes: list[_ReplicateRegime] = []
 
     ci_span = ci_span_sigmas(confidence)
     q_low, q_high = bootstrap_quantiles(confidence)
@@ -1510,52 +1836,114 @@ def _bootstrap_knee_interval(
         [p.f1_interval for p in points] if is_corpus else [p.pass_rate_interval for p in points]
     )
     weights = _compute_pava_weights(active_intervals, ci_span)
+    strata = _build_query_strata(common_qids, queries_by_id=queries_by_id)
 
-    # Non-parametric cluster bootstrap when scale query outcomes are available
-    if scale_query_sums and all(s in scale_query_sums for s in scales):
-        common_qids = list(scale_query_sums[scales[0]].keys())
-        if common_qids:
-            for _ in range(iterations):
-                sample_qids = [rng.choice(common_qids) for _ in range(len(common_qids))]
-                resampled_curve = _resample_cluster_curve(
-                    scales, scale_query_sums, sample_qids, is_corpus=is_corpus
-                )
-                k = find_kneedle_knee(
-                    scales,
-                    resampled_curve,
-                    noise_floor=noise_floor,
-                    weights=weights,
-                    auto_smooth=True,
-                )
-                if k is not None:
-                    knees.append(k)
-
-            return _extract_bootstrap_quantiles(knees, iterations, q_low, q_high)
-
-    # Parametric perturbation fallback
     for _ in range(iterations):
-        perturbed_rates: list[float] = []
-        sampled_weights: list[float] = []
-        for p in points:
-            interval = p.f1_interval if is_corpus else p.pass_rate_interval
-            mean_val = p.f1_score if is_corpus else p.pass_rate
-            ci_width = max(0.001, interval[1] - interval[0])
-            se = max(0.005, ci_width / ci_span)
-            sampled_val = max(0.0, min(1.0, rng.gauss(mean_val, se)))
-            perturbed_rates.append(sampled_val)
-            sampled_weights.append(1.0 / (se * se))
-
-        k = find_kneedle_knee(
-            scales,
-            perturbed_rates,
-            noise_floor=noise_floor,
-            weights=sampled_weights,
-            auto_smooth=True,
+        sample_qids = _draw_stratified_qids(strata, rng)
+        resampled_curve = _resample_cluster_curve(
+            scales, scale_query_sums, sample_qids, is_corpus=is_corpus
         )
-        if k is not None:
-            knees.append(k)
+        rep_floor = _resample_paired_noise_floor(
+            raw_noise_floor=raw_noise_floor,
+            fallback_noise_floor=noise_floor,
+            points=points,
+            sample_qids=sample_qids,
+            paired_query_outcomes=paired_query_outcomes,
+        )
+        regimes.append(_classify_kneedle_replicate(scales, resampled_curve, rep_floor, weights))
 
-    return _extract_bootstrap_quantiles(knees, iterations, q_low, q_high)
+    return _summarize_bootstrap_knees(regimes, scales, iterations, q_low, q_high)
+
+
+_MIN_REPLICATES_FOR_COLLISION: int = 2
+
+
+def _resolve_collision_suspects(
+    qid: str,
+    expected_skill: str | None,
+    failed_reps: Sequence[int],
+    passed_reps: Sequence[int],
+    replicates: Sequence[_ScaleReplicateRecord],
+) -> tuple[str, ...]:
+    """Identify suspect distractors present in failed replicates only."""
+    valid_failed = [rep_idx for rep_idx in failed_reps if 0 <= rep_idx < len(replicates)]
+    if not valid_failed:
+        return ()
+
+    passed_skills: set[str] = {
+        sk
+        for rep_idx in passed_reps
+        if 0 <= rep_idx < len(replicates)
+        for sk in replicates[rep_idx].catalog.skills
+    }
+    invoked_suspects: set[str] = set()
+    for rep_idx in valid_failed:
+        for r in replicates[rep_idx].results:
+            if r.query_id != qid or r.error:
+                continue
+            invoked_seq = (
+                tuple(r.invoked_skills)
+                if r.invoked_skills
+                else ((r.invoked_skill,) if r.invoked_skill is not None else ())
+            )
+            invoked_suspects.update(
+                sk for sk in invoked_seq if sk != expected_skill and sk not in passed_skills
+            )
+
+    if not invoked_suspects:
+        failed_common = set(replicates[valid_failed[0]].catalog.skills)
+        for rep_idx in valid_failed[1:]:
+            failed_common &= set(replicates[rep_idx].catalog.skills)
+        excluded = passed_skills | ({expected_skill} if expected_skill else set())
+        invoked_suspects = failed_common - excluded
+
+    return tuple(sorted(invoked_suspects))
+
+
+def _detect_replicate_collisions(
+    scales: Sequence[int],
+    replicates_by_scale: Mapping[int, Sequence[_ScaleReplicateRecord]],
+    queries_by_id: Mapping[str, Query],
+) -> tuple[ReplicateCollisionDiagnostic, ...]:
+    """Identify queries whose pass/fail outcome flips across catalog replicates at scale K."""
+    diagnostics: list[ReplicateCollisionDiagnostic] = []
+    for scale in scales:
+        replicates = replicates_by_scale.get(scale, ())
+        if len(replicates) < _MIN_REPLICATES_FOR_COLLISION:
+            continue
+
+        all_qids = sorted({qid for rep in replicates for qid in rep.outcomes})
+        for qid in all_qids:
+            passed_reps: list[int] = []
+            failed_reps: list[int] = []
+            for rep_idx, rep in enumerate(replicates):
+                entry = rep.outcomes.get(qid)
+                if entry is None or entry.total == 0:
+                    continue
+                if entry.hits * 2 >= entry.total:
+                    passed_reps.append(rep_idx)
+                else:
+                    failed_reps.append(rep_idx)
+
+            if not failed_reps or not passed_reps:
+                continue
+
+            q_obj = queries_by_id.get(qid)
+            expected_skill = q_obj.expected_skill if q_obj is not None else None
+            suspects = _resolve_collision_suspects(
+                qid, expected_skill, failed_reps, passed_reps, replicates
+            )
+            diagnostics.append(
+                ReplicateCollisionDiagnostic(
+                    query_id=qid,
+                    expected_skill=expected_skill,
+                    scale=scale,
+                    failed_replicates=tuple(failed_reps),
+                    passed_replicates=tuple(passed_reps),
+                    suspect_distractors=suspects,
+                )
+            )
+    return tuple(diagnostics)
 
 
 def _assemble_scaling_study(
@@ -1571,7 +1959,10 @@ def _assemble_scaling_study(
     anchor_skills: Sequence[str] | None,
     paired_outcomes: PairedTrialOutcomes | None = None,
     study_config: StudySettings | None = None,
-    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome | tuple[int, ...]]] | None = None,
+    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome]] | None = None,
+    queries_by_id: Mapping[str, Query] | None = None,
+    paired_query_outcomes: Mapping[str, _PairedQueryOutcome] | None = None,
+    replicate_collisions: Sequence[ReplicateCollisionDiagnostic] = (),
 ) -> ScalingStudy:
     """Compute effective noise floor and knee and construct a ScalingStudy."""
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
@@ -1599,7 +1990,7 @@ def _assemble_scaling_study(
     bootstrap_iterations = study_config.bootstrap_iterations if study_config is not None else 200
     bootstrap_seed = study_config.bootstrap_seed if study_config is not None else 42
     effective_seed = bootstrap_seed if bootstrap_seed is not None else 42
-    knee_int = _bootstrap_knee_interval(
+    boot_summary = _bootstrap_knee_summary(
         evaluated_scales,
         points,
         effective_noise_floor,
@@ -1607,10 +1998,20 @@ def _assemble_scaling_study(
         seed=effective_seed,
         scale_query_sums=scale_query_sums,
         is_corpus=is_corpus,
+        queries_by_id=queries_by_id,
+        paired_query_outcomes=paired_query_outcomes,
+        raw_noise_floor=noise_floor,
     )
+    baseline_outcomes = (
+        scale_query_sums.get(evaluated_scales[0]) if scale_query_sums and evaluated_scales else None
+    )
+    skill_icc = _estimate_baseline_skill_icc(baseline_outcomes, queries_by_id)
+    catalog_replicates = study_config.catalog_replicates if study_config is not None else 1
+
     return _build_study_result(
         target=target,
         is_corpus=is_corpus,
+        catalog_replicates=catalog_replicates,
         evaluated_scales=evaluated_scales,
         points=points,
         knee=knee,
@@ -1619,9 +2020,15 @@ def _assemble_scaling_study(
         decomp=decomp,
         anchor_skills=anchor_skills,
         paired_outcomes=paired_outcomes,
-        knee_interval=knee_int,
+        knee_interval=boot_summary.interval,
+        knee_scale_pmf=boot_summary.pmf,
+        knee_upper_censored=boot_summary.upper_censored,
+        cliff_probability=boot_summary.cliff_probability,
+        drop_probability=boot_summary.drop_probability,
         steepest_drop_scales=steepest_scales,
         steepest_drop_delta=steepest_delta,
+        skill_icc=skill_icc,
+        replicate_collisions=replicate_collisions,
     )
 
 
@@ -1687,6 +2094,127 @@ def _resolve_sweep_work_dir(
     return Path(temp_dir_obj.name), temp_dir_obj
 
 
+def _execute_scale_replicates(
+    *,
+    step_idx: int,
+    scale_workers: int,
+    replicate_setups: Sequence[_ReplicateSetup],
+    ctx: _SweepContext,
+    resolved_runtime: AgentRuntime,
+    allow_truncation: bool,
+    shared_outcome_cache: dict[Any, Any],
+    target: str | None,
+) -> tuple[tuple[ProbeResult, ...], set[str], QuerySet, tuple[_ScaleReplicateRecord, ...]]:
+    """Execute all catalog replicates for a single scale step and pool their probe outcomes."""
+    pooled_results: list[ProbeResult] = []
+    installed_union: set[str] = set()
+    primary_query_set = ctx.resolved_query_set
+    attempts_per_rep = ctx.effective_config.plan.attempts
+    records: list[_ScaleReplicateRecord] = []
+
+    for rep_idx, setup in enumerate(replicate_setups):
+        rep_catalog = setup.catalogs[step_idx - 1]
+        if rep_idx > 0:
+            rep_catalog = rep_catalog.model_copy(update={"id": f"{rep_catalog.id}-r{rep_idx}"})
+        rep_ctx = _SweepContext(
+            effective_config=ctx.effective_config,
+            work_dir=ctx.work_dir,
+            corpus_plan=setup.corpus_plan,
+            raw_query_set=ctx.raw_query_set,
+            resolved_query_set=setup.query_set,
+            resolved_skills=ctx.resolved_skills,
+            raw_query_map=ctx.raw_query_map,
+            is_corpus=ctx.is_corpus,
+        )
+        scale_config, scale_query_set, composed = _prepare_scale_iteration(rep_ctx, rep_catalog)
+        if rep_idx == 0:
+            primary_query_set = scale_query_set
+
+        outcome = conduct(
+            config=scale_config,
+            runtime=resolved_runtime,
+            composed=composed,
+            allow_truncation=allow_truncation,
+            append_across_arms=True,
+            workers=scale_workers,
+            outcome_cache=shared_outcome_cache,
+        )
+        rep_results = (
+            tuple(
+                r.model_copy(update={"attempt": rep_idx * attempts_per_rep + r.attempt})
+                for r in outcome.results
+            )
+            if rep_idx > 0
+            else outcome.results
+        )
+        pooled_results.extend(rep_results)
+        installed_union.update(rep_catalog.skills)
+
+        rep_qmap = {q.id: q for q in scale_query_set.queries}
+        rep_truth = {q.id: q.expected_skill for q in scale_query_set.queries}
+        rep_q_outcomes = _extract_query_outcomes(
+            outcome.results,
+            rep_truth,
+            set(rep_catalog.skills),
+            target_skill=target if not ctx.is_corpus else None,
+            queries_by_id=rep_qmap,
+        )
+        records.append(
+            _ScaleReplicateRecord(
+                catalog=rep_catalog,
+                results=outcome.results,
+                outcomes=rep_q_outcomes,
+            )
+        )
+
+    return tuple(pooled_results), installed_union, primary_query_set, tuple(records)
+
+
+def _snapshot_scaling_study(
+    *,
+    target: str | None,
+    is_corpus: bool,
+    actual_scales: Sequence[int],
+    points: Sequence[ScalingPoint],
+    noise_floor: float | None,
+    baseline_results: Sequence[ProbeResult],
+    latest_results: Sequence[ProbeResult],
+    total_skills: int,
+    decomp: DecompositionResult | None,
+    anchor_skills: Sequence[str] | None,
+    study_config: StudySettings,
+    scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome]],
+    queries_by_id: Mapping[str, Query],
+    replicates_by_scale: Mapping[int, Sequence[_ScaleReplicateRecord]],
+    scoped_target: str | None,
+) -> ScalingStudy:
+    """Build a partial or final ScalingStudy from accumulated sweep state."""
+    paired_by_q = _extract_paired_query_outcomes(
+        baseline_results, latest_results, queries_by_id, target_skill=scoped_target
+    )
+    return _assemble_scaling_study(
+        target=target,
+        is_corpus=is_corpus,
+        actual_scales=actual_scales,
+        points=points,
+        noise_floor=noise_floor,
+        baseline_count=len(baseline_results),
+        total_skills=total_skills,
+        decomp=decomp,
+        anchor_skills=anchor_skills,
+        paired_outcomes=_build_paired_outcomes(paired_by_q),
+        study_config=study_config,
+        scale_query_sums=scale_query_sums,
+        queries_by_id=queries_by_id,
+        paired_query_outcomes=paired_by_q,
+        replicate_collisions=_detect_replicate_collisions(
+            actual_scales[: len(points)],
+            replicates_by_scale,
+            queries_by_id,
+        ),
+    )
+
+
 def run_scaling_sweep(
     config: RunConfig | None = None,
     target_skill: str | None = None,
@@ -1700,8 +2228,10 @@ def run_scaling_sweep(
     query_set: QuerySet | None = None,
     attempts: int | None = None,
     allow_truncation: bool = True,
+    *,
     bootstrap_iterations: int | None = None,
     seed: int | None = None,
+    catalog_replicates: int | None = None,
     on_scale_complete: Callable[[int, int, ScalingPoint, ScalingStudy], None] | None = None,
 ) -> ScalingStudy:
     """Execute multi-scale catalog evaluation sweep and return scaling analysis."""
@@ -1710,6 +2240,7 @@ def run_scaling_sweep(
         attempts=attempts,
         bootstrap_iterations=bootstrap_iterations,
         seed=seed,
+        catalog_replicates=catalog_replicates,
     )
     resolved_skills = (
         list(skills) if skills is not None else load_skills(effective_config.require_skills())
@@ -1726,26 +2257,37 @@ def run_scaling_sweep(
     requested_scales = scales if scales is not None else effective_config.study.scales
     actual_scales = resolve_sweep_scales(len(resolved_skills), requested_scales)
 
-    target, catalogs, resolved_query_set, corpus_plan, resolved_anchors = _setup_sweep_execution(
-        is_corpus=is_corpus,
-        target_skill=target_skill,
-        anchor=anchor,
-        resolved_skills=resolved_skills,
-        actual_scales=actual_scales,
-        raw_query_set=raw_query_set,
-        effective_config=effective_config,
-        rivals_share=rivals_share,
-    )
+    replicate_setups = [
+        _setup_sweep_execution(
+            is_corpus=is_corpus,
+            target_skill=target_skill,
+            anchor=anchor,
+            resolved_skills=resolved_skills,
+            actual_scales=actual_scales,
+            raw_query_set=raw_query_set,
+            effective_config=effective_config,
+            rivals_share=rivals_share,
+            seed_override=(
+                effective_config.catalog.seed
+                if rep_idx == 0
+                else (effective_config.catalog.seed or effective_config.study.bootstrap_seed or 42)
+                + rep_idx
+            ),
+        )
+        for rep_idx in range(effective_config.study.catalog_replicates)
+    ]
+    primary_setup = replicate_setups[0]
 
     resolved_runtime = runtime or build_runtime(effective_config.runtime)
     if not allow_truncation and resolved_runtime.rations_catalog:
-        for cat in catalogs:
-            validate_catalog_fit(
-                resolved_runtime,
-                cat,
-                resolved_skills,
-                allow_truncation=False,
-            )
+        for setup in replicate_setups:
+            for cat in setup.catalogs:
+                validate_catalog_fit(
+                    resolved_runtime,
+                    cat,
+                    resolved_skills,
+                    allow_truncation=False,
+                )
     baseline_results: tuple[ProbeResult, ...] = ()
     latest_results: tuple[ProbeResult, ...] = ()
     points: list[ScalingPoint] = []
@@ -1753,15 +2295,14 @@ def run_scaling_sweep(
 
     work_dir, temp_dir_obj = _resolve_sweep_work_dir(effective_config.study.workdir)
 
-    raw_query_map = {q.id: q for q in raw_query_set.queries}
     ctx = _SweepContext(
         effective_config=effective_config,
         work_dir=work_dir,
-        corpus_plan=corpus_plan,
+        corpus_plan=primary_setup.corpus_plan,
         raw_query_set=raw_query_set,
-        resolved_query_set=resolved_query_set,
+        resolved_query_set=primary_setup.query_set,
         resolved_skills=resolved_skills,
-        raw_query_map=raw_query_map,
+        raw_query_map={q.id: q for q in raw_query_set.queries},
         is_corpus=is_corpus,
     )
 
@@ -1769,92 +2310,93 @@ def run_scaling_sweep(
     total_scales = len(actual_scales)
     shared_outcome_cache: dict[Any, Any] = {}
     scale_query_sums: dict[int, dict[str, _QueryOutcome]] = {}
-    for step_idx, (scale, catalog) in enumerate(zip(actual_scales, catalogs, strict=True), start=1):
-        scale_config, scale_query_set, composed = _prepare_scale_iteration(ctx, catalog)
+    replicates_by_scale: dict[int, tuple[_ScaleReplicateRecord, ...]] = {}
+    scoped_target = primary_setup.target if not is_corpus else None
 
+    for step_idx, scale in enumerate(actual_scales, start=1):
         scale_workers = _scale_adaptive_workers(workers, scale, reference_scale=reference_scale)
-        outcome = conduct(
-            config=scale_config,
-            runtime=resolved_runtime,
-            composed=composed,
+        (
+            combined_results,
+            installed_union,
+            primary_query_set,
+            scale_replicates,
+        ) = _execute_scale_replicates(
+            step_idx=step_idx,
+            scale_workers=scale_workers,
+            replicate_setups=replicate_setups,
+            ctx=ctx,
+            resolved_runtime=resolved_runtime,
             allow_truncation=allow_truncation,
-            append_across_arms=True,
-            workers=scale_workers,
-            outcome_cache=shared_outcome_cache,
+            shared_outcome_cache=shared_outcome_cache,
+            target=primary_setup.target,
         )
-
+        replicates_by_scale[scale] = scale_replicates
         point, decomp = _build_scaling_point(
             scale=scale,
-            catalog_id=catalog.id,
-            results=outcome.results,
-            resolved_query_set=scale_query_set,
+            catalog_id=primary_setup.catalogs[step_idx - 1].id,
+            results=combined_results,
+            resolved_query_set=primary_query_set,
             baseline_results=baseline_results,
-            installed_skills=set(catalog.skills),
-            target_skill=target if not is_corpus else None,
+            installed_skills=installed_union,
+            target_skill=scoped_target,
             seed=effective_config.catalog.seed,
         )
         points.append(point)
-        latest_results = outcome.results
-        scale_query_map = {q.id: q for q in scale_query_set.queries}
-        truth_expected = {q.id: q.expected_skill for q in scale_query_set.queries}
+        latest_results = combined_results
+        scale_query_map = {q.id: q for q in primary_query_set.queries}
+        truth_expected = {q.id: q.expected_skill for q in primary_query_set.queries}
         scale_query_sums[scale] = _extract_query_outcomes(
-            outcome.results,
+            combined_results,
             truth_expected,
-            set(catalog.skills),
-            target_skill=target if not is_corpus else None,
+            installed_union,
+            target_skill=scoped_target,
             queries_by_id=scale_query_map,
         )
 
         if scale == actual_scales[0]:
-            baseline_results = outcome.results
+            baseline_results = combined_results
         elif decomp is not None:
             final_decomp = decomp
 
         if on_scale_complete is not None:
-            partial_paired = _calculate_paired_outcomes(
-                baseline_results,
-                latest_results,
-                ctx.raw_query_map,
-                target_skill=target if not is_corpus else None,
-            )
-            partial_study = _assemble_scaling_study(
-                target=target,
+            partial_study = _snapshot_scaling_study(
+                target=primary_setup.target,
                 is_corpus=is_corpus,
                 actual_scales=actual_scales,
                 points=points,
                 noise_floor=noise_floor,
-                baseline_count=len(baseline_results),
+                baseline_results=baseline_results,
+                latest_results=latest_results,
                 total_skills=len(resolved_skills),
                 decomp=final_decomp,
-                anchor_skills=resolved_anchors,
-                paired_outcomes=partial_paired,
+                anchor_skills=primary_setup.resolved_anchors,
                 study_config=effective_config.study,
                 scale_query_sums=scale_query_sums,
+                queries_by_id=ctx.raw_query_map,
+                replicates_by_scale=replicates_by_scale,
+                scoped_target=scoped_target,
             )
             on_scale_complete(step_idx, total_scales, point, partial_study)
 
         if step_idx == 1 and point.all_probes_errored:
             break
 
-    final_paired = _calculate_paired_outcomes(
-        baseline_results,
-        latest_results,
-        ctx.raw_query_map,
-        target_skill=target if not is_corpus else None,
-    )
-    result = _assemble_scaling_study(
-        target=target,
+    result = _snapshot_scaling_study(
+        target=primary_setup.target,
         is_corpus=is_corpus,
         actual_scales=actual_scales,
         points=points,
         noise_floor=noise_floor,
-        baseline_count=len(baseline_results),
+        baseline_results=baseline_results,
+        latest_results=latest_results,
         total_skills=len(resolved_skills),
         decomp=final_decomp,
-        anchor_skills=resolved_anchors,
-        paired_outcomes=final_paired,
+        anchor_skills=primary_setup.resolved_anchors,
         study_config=effective_config.study,
         scale_query_sums=scale_query_sums,
+        queries_by_id=ctx.raw_query_map,
+        replicates_by_scale=replicates_by_scale,
+        scoped_target=scoped_target,
     )
     if temp_dir_obj is not None:
         temp_dir_obj.cleanup()

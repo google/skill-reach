@@ -58,7 +58,12 @@ from reach.models import (
 )
 from reach.queries import QuerySet, query_set_digest
 from reach.runtime import CatalogFit
-from reach.uncertainty import Interval, cluster_wilson_interval, wilson_interval
+from reach.uncertainty import (
+    Interval,
+    cluster_wilson_interval,
+    estimate_skill_icc,
+    wilson_interval,
+)
 
 #: Numerical tolerance for rate vs count equality checks.
 RATE_TOLERANCE: float = 1e-9
@@ -295,6 +300,7 @@ class Spread(BaseModel):
     mean: float | None = None
     repeated_queries: int = Field(default=0, ge=0)
     standard_error: float | None = None
+    skill_icc: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
 
     @model_validator(mode="after")
     def _figures_match_what_was_observed(self) -> Self:
@@ -874,12 +880,17 @@ def _spread(
         for _, rows in sorted(by_attempt.items())
         if any(not row.error for row in rows)
     )
+    outcomes_by_skill: dict[str, list[float]] = {}
+    for record in records:
+        if record.probes > 0 and record.expected != NO_SKILL:
+            outcomes_by_skill.setdefault(record.expected, []).append(record.hits / record.probes)
     return Spread(
         replicates=len(scores),
         top1_by_attempt=scores,
         mean=statistics.fmean(scores) if scores else None,
         repeated_queries=sum(1 for record in records if record.probes > 1),
         standard_error=_standard_error(records),
+        skill_icc=estimate_skill_icc(outcomes_by_skill),
     )
 
 

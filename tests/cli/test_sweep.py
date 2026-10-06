@@ -112,8 +112,8 @@ def _make_stub_study(
         precision=0.0 if probes_errored else 1.0,
         f1_score=0.0 if probes_errored else 1.0,
         delta_vs_baseline=0.0,
-        delta_context=0.0,
-        delta_shadowing=0.0,
+        delta_abstention=0.0,
+        delta_collision=0.0,
         probes_executed=max(1, probes_errored),
         probes_errored=probes_errored,
     )
@@ -125,8 +125,8 @@ def _make_stub_study(
         baseline_pass_rate=point.pass_rate,
         final_pass_rate=point.pass_rate,
         total_delta=0.0,
-        total_context_loss=0.0,
-        total_shadowing_loss=0.0,
+        total_abstention_loss=0.0,
+        total_collision_loss=0.0,
         noise_floor=0.05,
         total_corpus_skills=max(scales) if scales else 2,
     )
