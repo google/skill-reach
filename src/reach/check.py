@@ -659,7 +659,11 @@ def run_check(  # noqa: PLR0913
         msg = "Probe budget must be at least 1"
         raise ValueError(msg)
 
-    lint_cfg = LintSettings.from_settings(overrides=rule_overrides)
+    lint_cfg = (
+        config.lint.with_rule_overrides(rule_overrides)
+        if config is not None
+        else LintSettings.from_settings(overrides=rule_overrides)
+    )
     resolved_paths, lint_report = _resolve_candidate_skills(
         skills_paths,
         lint_config=lint_cfg,

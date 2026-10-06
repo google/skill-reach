@@ -527,6 +527,19 @@ class LintSettings(BaseModel):
     mutual_handoff_lexical_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.35
     rules: dict[str, RuleSeverity] = Field(default_factory=dict)
 
+    def with_rule_overrides(
+        self,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> LintSettings:
+        """Return a validated copy of LintSettings with rule severity overrides applied."""
+        if not overrides:
+            return self
+        merged_rules = {**self.rules, **overrides}
+        validated_rules = (
+            type(self).model_validate({**self.model_dump(), "rules": merged_rules}).rules
+        )
+        return self.model_copy(update={"rules": validated_rules})
+
     @classmethod
     def from_settings(
         cls,
@@ -539,24 +552,24 @@ class LintSettings(BaseModel):
 
         lint_section = settings.get("lint", {}) if isinstance(settings, Mapping) else {}
         retrieval_section = settings.get("retrieval", {}) if isinstance(settings, Mapping) else {}
+        catalog_section = settings.get("catalog", {}) if isinstance(settings, Mapping) else {}
 
-        payload: dict[str, Any] = {}
-        if isinstance(lint_section, Mapping):
-            payload.update(lint_section)
-        if (
-            isinstance(retrieval_section, Mapping)
-            and "similarity_threshold" in retrieval_section
-            and "similarity_threshold" not in payload
-        ):
-            payload["similarity_threshold"] = retrieval_section["similarity_threshold"]
-
+        payload: dict[str, Any] = dict(lint_section) if isinstance(lint_section, Mapping) else {}
         raw_rules = payload.get("rules")
         rules: dict[str, Any] = dict(raw_rules) if isinstance(raw_rules, Mapping) else {}
         if overrides:
             rules.update(overrides)
-        payload["rules"] = rules
+        if rules or "rules" in payload:
+            payload["rules"] = rules
 
-        return cls.model_validate(payload)
+        lint_base = cls.model_validate(payload)
+        catalog_cfg = CatalogSettings.model_validate(
+            catalog_section if isinstance(catalog_section, Mapping) else {}
+        )
+        retrieval_cfg = RetrievalSettings.model_validate(
+            retrieval_section if isinstance(retrieval_section, Mapping) else {}
+        )
+        return _apply_lint_inheritance(lint_base, catalog_cfg, retrieval_cfg)
 
 
 class CheckSettings(BaseModel):
@@ -588,6 +601,30 @@ class RetrievalSettings(BaseModel):
     similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     bm25_k1: float = Field(default=1.5, gt=0.0)
     bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
+
+
+def _apply_lint_inheritance(
+    lint: LintSettings,
+    catalog: CatalogSettings,
+    retrieval: RetrievalSettings,
+) -> LintSettings:
+    """Propagate retrieval similarity threshold and scoped catalog mode into LintSettings."""
+    original_fields_set = set(lint.model_fields_set)
+    updates: dict[str, Any] = {}
+    if (
+        "similarity_threshold" not in original_fields_set
+        and "similarity_threshold" in retrieval.model_fields_set
+    ):
+        updates["similarity_threshold"] = retrieval.similarity_threshold
+    if (
+        "catalog_budget_chars" not in original_fields_set
+        and "mode" in catalog.model_fields_set
+        and catalog.mode in {CatalogMode.NEIGHBORHOOD, CatalogMode.SINGLETON}
+    ):
+        updates["catalog_budget_chars"] = None
+    if not updates:
+        return lint
+    return lint.model_copy(update=updates)
 
 
 class OverlapSettings(BaseModel):
@@ -851,6 +888,14 @@ class RunConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _inherit_lint_settings(self) -> Self:
+        """Inherit retrieval threshold and scoped catalog mode into lint settings."""
+        inherited = _apply_lint_inheritance(self.lint, self.catalog, self.retrieval)
+        if inherited is not self.lint:
+            object.__setattr__(self, "lint", inherited)
+        return self
+
     def require_queries(self, hint: str = "") -> Path:
         """Forward queries path requirement to study settings."""
         return self.study.require_queries(hint)
@@ -1031,6 +1076,18 @@ class RunConfig(BaseModel):
                     sec_dump.pop("agent", None)
                 if section_name == "optimize" and "workers" not in section_model.model_fields_set:
                     sec_dump.pop("workers", None)
+                if section_name == "lint":
+                    if (
+                        self.catalog.mode in {CatalogMode.NEIGHBORHOOD, CatalogMode.SINGLETON}
+                        and section_model.catalog_budget_chars is None
+                    ):
+                        sec_dump.pop("catalog_budget_chars", None)
+                    if (
+                        "similarity_threshold" in self.retrieval.model_fields_set
+                        and section_model.similarity_threshold
+                        == self.retrieval.similarity_threshold
+                    ):
+                        sec_dump.pop("similarity_threshold", None)
                 payload[section_name] = sec_dump
             else:
                 payload[section_name] = section_model

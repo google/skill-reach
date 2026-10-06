@@ -55,6 +55,8 @@ from .discovery import (
     _no_skills,
     _run_dir_study,
     find_existing_queries_path,
+    load_discovered_study,
+    resolve_queries_and_skills_paths,
 )
 from .drafting import _draft_query_set
 from .flags import (
@@ -156,21 +158,24 @@ def _resolve_draft_study_flags(
     study: StudyFlags | None,
     run_dir: Path | None,
     config: Path | None,
-    dry_run: bool,
     out: Path | None = None,
 ) -> StudyFlags:
-    """Resolve study flags with appropriate working directory and preview query defaults."""
+    """Resolve study flags with appropriate working directory and query defaults."""
     resolved = study or StudyFlags()
     if out is not None:
         resolved = resolved.model_copy(update={"queries": out})
     if run_dir is not None:
         resolved = _run_dir_study(run_dir, resolved)
-    if config is None and resolved.workdir is None:
+    config_study = load_discovered_study(config, skills=resolved.skills)
+    has_config_workdir = config_study is not None and config_study.workdir is not None
+    has_config_queries = config_study is not None and config_study.queries is not None
+    if not has_config_workdir and resolved.workdir is None:
         resolved = resolved.model_copy(update={"workdir": Path.cwd()})
-    if dry_run and resolved.queries is None and config is None:
-        resolved = resolved.model_copy(update={"queries": Path("queries/draft-preview.json")})
-    elif resolved.queries is None and config is None:
-        found_q = find_existing_queries_path(resolved.skills)
+    if resolved.queries is None and not has_config_queries:
+        effective_skills = resolved.skills or (
+            config_study.skills if config_study is not None else None
+        )
+        found_q = find_existing_queries_path(effective_skills)
         resolved = resolved.model_copy(update={"queries": found_q or DEFAULT_QUERIES_PATH})
     return resolved
 
@@ -313,6 +318,7 @@ def _resolve_query_source_file(
     target: str | Path | None,
     study: StudyFlags | None,
     *,
+    config: Path | None = None,
     show_leaks: bool,
     show_citations: bool,
     out: Path | None,
@@ -336,6 +342,14 @@ def _resolve_query_source_file(
         )
     ):
         return study.queries
+    if (show_leaks or show_citations) and target is None:
+        resolved_q, _ = resolve_queries_and_skills_paths(
+            queries=study.queries if study else None,
+            skills=study.skills if study else None,
+            config=config,
+            require_existing=True,
+        )
+        return resolved_q
     return None
 
 
@@ -382,6 +396,7 @@ def _handle_existing_query_source(
     console: Console,
     source_file: Path,
     *,
+    config: Path | None = None,
     out: Path | None,
     format_opt: str | None,
     study: StudyFlags | None,
@@ -413,7 +428,11 @@ def _handle_existing_query_source(
             )
             print(rendered, end="")
             return 0
-        effective_skills = study.skills if study and study.skills else None
+        _, effective_skills = resolve_queries_and_skills_paths(
+            queries=source_file,
+            skills=study.skills if study and study.skills else None,
+            config=config,
+        )
         effective_agent = runtime.agent if runtime and runtime.agent else None
         return _render_query_view(
             console,
@@ -486,6 +505,8 @@ def _resolve_sync_targets(
     existing_query_set: QuerySet,
     effective_generate: GenerateFlags,
     generate: GenerateFlags | None,
+    *,
+    dry_run: bool = False,
 ) -> tuple[GenerateFlags | None, int | None]:
     """Filter generation targets to missing or stale skills when running in --sync mode."""
     from reach.queries import Origin, format_sync_counts
@@ -503,7 +524,8 @@ def _resolve_sync_targets(
     sync_targets = tuple(dict.fromkeys(missing_list + stale_list))
     if not sync_targets:
         if (
-            existing_query_set.provenance is not None
+            not dry_run
+            and existing_query_set.provenance is not None
             and existing_query_set.provenance.origin == Origin.GENERATED
         ):
             candidate_covered = frozenset(
@@ -576,7 +598,7 @@ def _handle_draft_query_generation(
         if out is None and format_opt in ("jsonl", "csv")
         else out
     )
-    resolved_study = _resolve_draft_study_flags(study, run_dir, config, dry_run, out=effective_out)
+    resolved_study = _resolve_draft_study_flags(study, run_dir, config, out=effective_out)
     settings = _build_draft_settings(config, catalog, runtime, resolved_study, registry=registry)
 
     destination = settings.require_queries()
@@ -584,7 +606,7 @@ def _handle_draft_query_generation(
     if destination.exists():
         if sync:
             existing_query_set = load_query_set(destination)
-        elif not force:
+        elif not force and not dry_run:
             sync_hint = _format_existing_destination_sync_hint(destination, settings)
             msg = (
                 f"Query set already exists at {destination}{sync_hint}. Move it aside, "
@@ -602,6 +624,7 @@ def _handle_draft_query_generation(
             existing_query_set,
             effective_generate,
             generate,
+            dry_run=dry_run,
         )
         if exit_code is not None:
             return exit_code
@@ -724,6 +747,7 @@ def _query(
     source_file = _resolve_query_source_file(
         target,
         study,
+        config=config,
         show_leaks=show_leaks,
         show_citations=show_citations,
         out=out,
@@ -734,6 +758,7 @@ def _query(
         return _handle_existing_query_source(
             console,
             source_file,
+            config=config,
             out=out,
             format_opt=format,
             study=study,
@@ -857,12 +882,21 @@ def _query_draft(
 
 @query_app.command(name="view", group=QUERY_OPERATIONS)
 def _query_view(
-    queries: Annotated[Path, Parameter(help="Query set to render (JSON)")],
+    queries: Annotated[
+        Path | None,
+        Parameter(
+            help=(
+                "Query set to render (JSON, JSONL, or CSV); "
+                "auto-discovered from reach.toml or .reach/ if omitted"
+            ),
+        ),
+    ] = None,
     *,
+    config: ConfigFlag = None,
     skills: Annotated[
         Path | None,
         Parameter(
-            help="Skill corpus to rank against; discovered from the runtime if omitted",
+            help="Skill corpus to rank against; discovered from reach.toml or runtime if omitted",
         ),
     ] = None,
     agent: Annotated[
@@ -892,12 +926,18 @@ def _query_view(
     ] = False,
 ) -> int:
     """Render query sets as a table with lexical difficulty ranks and leak detection."""
-    query_set = load_query_set(queries)
+    resolved_queries, effective_skills = resolve_queries_and_skills_paths(
+        queries=queries,
+        skills=skills,
+        config=config,
+        require_existing=True,
+    )
+    query_set = load_query_set(resolved_queries)
     return _render_query_view(
         build_console(),
         query_set,
-        queries,
-        skills=skills,
+        resolved_queries,
+        skills=effective_skills,
         agent=agent,
         global_scope=global_,
         show_leaks=show_leaks,

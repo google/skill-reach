@@ -942,3 +942,30 @@ def test_query_draft_sync_sad_paths_and_backfill(
     assert rc_view == 0
     assert "query set is out of sync with corpus" in buf_view.getvalue()
     assert "1 updated (skill-a)" in buf_view.getvalue()
+
+
+def test_resolve_draft_study_flags_discovers_queries_via_reach_toml_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _resolve_draft_study_flags uses study.skills from reach.toml for query discovery."""
+    from reach.cli.query import _resolve_draft_study_flags
+
+    ws_dir = tmp_path / "workspace"
+    ws_dir.mkdir()
+    corpus_root = tmp_path / "external_corpus"
+    corpus_skills = corpus_root / "skills"
+    corpus_skills.mkdir(parents=True)
+    corpus_queries = corpus_root / ".reach" / "queries.json"
+    save_query_set(
+        QuerySet(queries=(Query(id="q1", text="t1", expected_skill="skill-a"),)),
+        corpus_queries,
+    )
+    (ws_dir / "reach.toml").write_text(
+        f'[study]\nskills = "{corpus_skills.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(ws_dir)
+
+    resolved = _resolve_draft_study_flags(None, None, None)
+    assert resolved.queries == corpus_queries.resolve()

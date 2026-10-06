@@ -2258,3 +2258,118 @@ def test_cli_diff_and_view_with_slicing_flags(
     view_json = capsys.readouterr().out
     assert '"q-retention"' in view_json
     assert '"q-lifecycle"' not in view_json
+
+
+def test_query_draft_sync_dry_run_respects_auto_discovered_reach_toml(
+    skill_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify query draft --sync --dry-run uses reach.toml queries path rather than preview path."""
+    monkeypatch.chdir(tmp_path)
+    queries_path = tmp_path / ".reach" / "queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="all",
+            queries=(
+                Query(id="q-1", text="Lifecycle rules.", expected_skill="gcs-lifecycle-rules"),
+                Query(id="q-2", text="Retention lock.", expected_skill="gcs-retention-policy"),
+            ),
+            provenance=QuerySetProvenance(origin=Origin.GENERATED),
+        ),
+        queries_path,
+    )
+    (tmp_path / "reach.toml").write_text(
+        f'[study]\nskills = "{skill_repo.as_posix()}"\nqueries = ".reach/queries.json"\n',
+        encoding="utf-8",
+    )
+
+    assert main(["query", "draft", "--sync", "--dry-run", "--agent", "fake"]) == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "Syncing 1 skill(s) (1 missing)" in combined
+    assert "drafting 3 queries for 1 targets" in combined
+    assert "draft-preview.json" not in combined
+
+
+def test_query_draft_dry_run_allows_preview_when_destination_exists(
+    skill_repo: Path,
+    viewable_set: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify query draft --dry-run previews without failing when destination already exists."""
+    before = viewable_set.read_text(encoding="utf-8")
+    assert (
+        main(
+            [
+                "query",
+                "draft",
+                "--skills",
+                str(skill_repo),
+                "--queries",
+                str(viewable_set),
+                "--agent",
+                "fake",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    err = capsys.readouterr().err
+    assert "drafting 9 queries for 3 targets" in err
+    assert viewable_set.read_text(encoding="utf-8") == before
+
+
+def test_query_view_auto_discovers_queries_and_handles_missing_set(
+    skill_repo: Path,
+    viewable_set: Path,
+    tmp_path: Path,
+    wide: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify reach query view, --leaks, and --citations auto-discover or fail fast when absent."""
+    from reach.generate import Citation, CitationTrail, citations_path, write_citations
+
+    empty_dir = tmp_path / "empty_ws"
+    empty_dir.mkdir()
+    monkeypatch.chdir(empty_dir)
+
+    # Sad path: no query set exists -> view, --leaks, and --citations all fail fast with exit code 2
+    for flag_args in (["query", "view"], ["query", "--leaks"], ["query", "--citations"]):
+        assert main(flag_args) == 2
+        assert "No query set found" in capsys.readouterr().err
+
+    # Happy path: auto-discovers from reach.toml
+    (empty_dir / "reach.toml").write_text(
+        f'[study]\nskills = "{skill_repo.as_posix()}"\nqueries = "{viewable_set.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    write_citations(
+        CitationTrail(
+            (
+                Citation(
+                    skill="gcs-lifecycle-rules",
+                    text="Tier old objects to Coldline after 30 days.",
+                    citation="Move objects after 90 days.",
+                ),
+            )
+        ),
+        citations_path(viewable_set),
+    )
+    assert main(["query", "view"]) == 0
+    shown = capsys.readouterr().err
+    assert "v-1" in shown
+    assert "gcs-lifecycle-rules" in shown
+
+    # Happy path: reach query --leaks and --citations auto-discover without explicit --queries
+    assert main(["query", "--leaks"]) == 0
+    leaks_shown = capsys.readouterr().err
+    assert "leak" in leaks_shown
+    assert "v-1" in leaks_shown
+
+    assert main(["query", "--citations"]) == 0
+    citations_shown = capsys.readouterr().err
+    assert "citation" in citations_shown
+    assert "Move objects after 90 days." in citations_shown
