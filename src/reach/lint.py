@@ -1368,7 +1368,7 @@ def _check_catalog_budget_overflow(
     paths_by_name: Mapping[str, Sequence[Path]],
     cfg: LintSettings,
 ) -> list[LintIssue]:
-    """Identify when resident catalog exceeds listing budget and truncates descriptions."""
+    """Check whether resident catalog exceeds listing budget and truncates descriptions."""
     if (
         _resolve_severity("catalog-budget-overflow", cfg) is None
         or not skills
@@ -1387,7 +1387,7 @@ def _check_catalog_budget_overflow(
     if len(truncated) > _OVERFLOW_SAMPLE_LIMIT:
         preview = f"{preview}, +{len(truncated) - _OVERFLOW_SAMPLE_LIMIT} more"
 
-    first_path: Path = Path()
+    first_path: Path = paths_by_name.get(skills[0].name, [Path()])[0] if skills else Path()
     for skill_name in truncated:
         if paths := paths_by_name.get(skill_name):
             first_path = paths[0]

@@ -182,7 +182,7 @@ def load_discovered_study(
     skills: Path | None = None,
 ) -> StudySettings | None:
     """Load StudySettings from an explicit or auto-discovered reach.toml once."""
-    from reach.config import _discover_config_path
+    from reach.config import RunConfig, _discover_config_path
 
     discovered_config, is_explicit = _discover_config_path(config)
     if discovered_config is None or (not is_explicit and skills is not None):

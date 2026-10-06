@@ -534,12 +534,11 @@ class LintSettings(BaseModel):
         """Return a validated copy of LintSettings with rule severity overrides applied."""
         if not overrides:
             return self
-        original_fields_set = set(self.model_fields_set) | {"rules"}
-        validated = type(self).model_validate(
-            {**self.model_dump(), "rules": {**self.rules, **overrides}}
+        merged_rules = {**self.rules, **overrides}
+        validated_rules = (
+            type(self).model_validate({**self.model_dump(), "rules": merged_rules}).rules
         )
-        object.__setattr__(validated, "__pydantic_fields_set__", original_fields_set)
-        return validated
+        return self.model_copy(update={"rules": validated_rules})
 
     @classmethod
     def from_settings(
@@ -625,9 +624,7 @@ def _apply_lint_inheritance(
         updates["catalog_budget_chars"] = None
     if not updates:
         return lint
-    copied = lint.model_copy(update=updates)
-    object.__setattr__(copied, "__pydantic_fields_set__", original_fields_set)
-    return copied
+    return lint.model_copy(update=updates)
 
 
 class OverlapSettings(BaseModel):
@@ -1080,9 +1077,17 @@ class RunConfig(BaseModel):
                 if section_name == "optimize" and "workers" not in section_model.model_fields_set:
                     sec_dump.pop("workers", None)
                 if section_name == "lint":
-                    for inherited_key in ("catalog_budget_chars", "similarity_threshold"):
-                        if inherited_key not in section_model.model_fields_set:
-                            sec_dump.pop(inherited_key, None)
+                    if (
+                        self.catalog.mode in {CatalogMode.NEIGHBORHOOD, CatalogMode.SINGLETON}
+                        and section_model.catalog_budget_chars is None
+                    ):
+                        sec_dump.pop("catalog_budget_chars", None)
+                    if (
+                        "similarity_threshold" in self.retrieval.model_fields_set
+                        and section_model.similarity_threshold
+                        == self.retrieval.similarity_threshold
+                    ):
+                        sec_dump.pop("similarity_threshold", None)
                 payload[section_name] = sec_dump
             else:
                 payload[section_name] = section_model

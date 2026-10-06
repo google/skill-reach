@@ -1346,7 +1346,6 @@ def test_catalog_budget_overflow_skipped_for_scoped_catalog_modes(
     assert RunConfig().lint.catalog_budget_chars == 30_000
     rc = RunConfig(catalog=CatalogSettings(mode=CatalogMode(mode)))
     assert rc.lint.catalog_budget_chars is None
-    assert "catalog_budget_chars" not in rc.lint.model_fields_set
     # Overriding catalog.mode back to ALL restores default budget because lint was not explicit
     rc_all = rc.with_overrides(catalog={"mode": CatalogMode.ALL})
     assert rc_all.lint.catalog_budget_chars == 30_000
