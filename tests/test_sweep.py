@@ -3335,6 +3335,34 @@ def test_scaling_study_load_and_save(
     assert loaded.drop_probability == 0.8
 
 
+def test_scaling_study_load_raises_for_missing_or_invalid_file(tmp_path: Path) -> None:
+    """Verify ScalingStudy.load raises appropriate errors for invalid or missing files."""
+    missing = tmp_path / "does_not_exist.json"
+    with pytest.raises(FileNotFoundError, match="Scaling study file not found"):
+        ScalingStudy.load(missing)
+
+    directory = tmp_path / "somedir"
+    directory.mkdir()
+    with pytest.raises(ValueError, match="Scaling study path is not a regular file"):
+        ScalingStudy.load(directory)
+
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("not json content", encoding="utf-8")
+    with pytest.raises(ValueError, match="Failed to load scaling study"):
+        ScalingStudy.load(corrupt)
+
+
+def test_select_curve_levels_deduplicates_overlapping_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _select_curve_levels deduplicates if high threshold overlaps with standard ticks."""
+    import reach.views.sweep as sweep_views
+
+    monkeypatch.setattr(sweep_views, "_ZOOM_HIGH_THRESHOLD", 0.80)
+    levels = sweep_views._select_curve_levels([0.85, 0.90])
+    assert levels == (1.0, 0.95, 0.90, 0.85, 0.80)
+
+
 def test_select_curve_levels_high_accuracy_includes_75_percent(
     make_scaling_point: Callable[..., ScalingPoint],
 ) -> None:

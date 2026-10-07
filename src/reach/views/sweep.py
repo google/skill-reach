@@ -468,7 +468,10 @@ def _select_curve_levels(values: Sequence[float]) -> tuple[float, ...]:
     min_v = min(values)
     max_v = max(values)
     if min_v >= _ZOOM_HIGH_THRESHOLD and max_v > min_v:
-        return (1.0, 0.95, 0.90, 0.85, 0.80, _ZOOM_HIGH_THRESHOLD)
+        ticks = [1.0, 0.95, 0.90, 0.85, 0.80]
+        if _ZOOM_HIGH_THRESHOLD not in ticks:
+            ticks.append(_ZOOM_HIGH_THRESHOLD)
+        return tuple(sorted(ticks, reverse=True))
     if min_v >= _ZOOM_MID_THRESHOLD and max_v > min_v:
         return (1.0, 0.90, 0.80, 0.70, 0.60)
     return (1.0, 0.75, 0.5, 0.25, 0.0)

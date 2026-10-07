@@ -1844,3 +1844,12 @@ def test_run_config_resolve_and_with_overrides_isolation(
     )
     assert rt_opt.agent == expected_agent
     assert rt_opt.options == expected_options
+
+
+def test_runtime_settings_with_overrides_invalid_options_type_raises() -> None:
+    """Verify with_overrides propagates non-mapping options override for Pydantic validation."""
+    from pydantic import ValidationError
+
+    base = RuntimeSettings(agent="claude-code")
+    with pytest.raises(ValidationError):
+        base.with_overrides(options="invalid-not-a-dict")

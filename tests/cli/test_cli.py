@@ -2373,3 +2373,25 @@ def test_query_view_auto_discovers_queries_and_handles_missing_set(
     citations_shown = capsys.readouterr().err
     assert "citation" in citations_shown
     assert "Move objects after 90 days." in citations_shown
+
+
+def test_opt_error_reason_nested_and_part_matching() -> None:
+    """Verify _opt_error_reason properly formats option errors across path depths."""
+    from pydantic import BaseModel, ValidationError
+
+    from reach.cli.flags import RuntimeFlags, _opt_error_reason
+    from reach.config import RunConfig, RuntimeSettings
+
+    class SubModel(BaseModel):
+        timeout: int
+
+    cfg = RunConfig(runtime=RuntimeSettings(agent="claude-code"))
+    flags = RuntimeFlags(opt=["timeout=not-an-int"])
+
+    try:
+        SubModel.model_validate({"timeout": "not-an-int"})
+    except ValidationError as err:
+        reason = _opt_error_reason(err, cfg, flags)
+        assert reason is not None
+        assert "-O 'timeout=not-an-int'" in reason
+        assert "invalid option for agent 'claude-code'" in reason

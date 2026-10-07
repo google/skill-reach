@@ -254,12 +254,27 @@ class ScalingStudy(BaseModel):
 
     @classmethod
     def load(cls, path: Path | str) -> Self:
-        """Deserialize a ScalingStudy from a JSON file."""
+        """Load and deserialize a ScalingStudy from a JSON file.
+
+        Raises:
+            FileNotFoundError: If the target file does not exist.
+            ValueError: If the target path is not a regular file or contains invalid study data.
+        """
         p = Path(path).expanduser().resolve()
-        return cls.model_validate_json(p.read_text(encoding="utf-8"))
+        if not p.exists():
+            msg = f"Scaling study file not found: {p}"
+            raise FileNotFoundError(msg)
+        if not p.is_file():
+            msg = f"Scaling study path is not a regular file: {p}"
+            raise ValueError(msg)
+        try:
+            return cls.model_validate_json(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as err:
+            msg = f"Failed to load scaling study from {p}: {err}"
+            raise ValueError(msg) from err
 
     def save(self, path: Path | str) -> Path:
-        """Serialize ScalingStudy to a formatted JSON file."""
+        """Serialize the scaling study to a formatted JSON file."""
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")

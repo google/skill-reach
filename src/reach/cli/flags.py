@@ -809,8 +809,7 @@ def _opt_error_reason(
     failures = [
         f
         for f in error.errors()
-        if f["loc"]
-        and (f["loc"][0] == "runtime" or str(f["loc"][-1]) in typed or str(f["loc"][0]) in typed)
+        if f["loc"] and (f["loc"][0] == "runtime" or any(str(part) in typed for part in f["loc"]))
     ]
     if not failures:
         return None
@@ -820,8 +819,8 @@ def _opt_error_reason(
     lines = [
         (
             f"-O {typed[field]!r}: {failure['msg']}"
-            if (field := str(failure["loc"][-1])) in typed
-            else f"{field}: {failure['msg']}"
+            if (field := next((str(p) for p in reversed(failure["loc"]) if str(p) in typed), None))
+            else f"{failure['loc'][-1]}: {failure['msg']}"
         )
         for failure in failures
     ]
