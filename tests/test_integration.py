@@ -205,7 +205,7 @@ def test_escaping_symlink_blocks_evaluation(
                 "provenance": {"origin": "authored"},
                 "queries": [
                     {
-                        "id": "q-evil",
+                        "query_id": "q-evil",
                         "text": "run evil exploit",
                         "expected_skill": "evil-skill",
                     }

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -60,10 +61,10 @@ def test_interval_strict_model_and_factories() -> None:
         Interval.model_validate([-0.5, 0.5])
 
     with pytest.raises(TypeError):
-        len(iv)  # type: ignore[arg-type]
+        len(cast(Any, iv))
 
     with pytest.raises(TypeError):
-        _ = iv[0]  # type: ignore[index]
+        _ = cast(Any, iv)[0]
 
 
 def test_query_clean_break_schema() -> None:
@@ -139,11 +140,13 @@ def test_scaling_point_semantic_tiering_and_intervals() -> None:
 
     # Extra legacy fields are rejected
     with pytest.raises(ValidationError, match="extra_forbidden"):
-        ScalingPoint(
-            scale=10,
-            catalog_id="cat-1",
-            delta_context=0.04,  # legacy alias rejected
-            probes_executed=10,
+        ScalingPoint.model_validate(
+            {
+                "scale": 10,
+                "catalog_id": "cat-1",
+                "delta_context": 0.04,  # legacy alias rejected
+                "probes_executed": 10,
+            }
         )
 
     # Probe accounting validation

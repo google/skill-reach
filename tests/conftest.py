@@ -620,7 +620,7 @@ def write_queries(tmp_path: Path) -> Callable[..., Path]:
             normalized_queries = [
                 (
                     {"query_id": q["id"], **{k: v for k, v in q.items() if k != "id"}}
-                    if "id" in q and "query_id" not in q
+                    if isinstance(q, dict) and "id" in q and "query_id" not in q
                     else q
                 )
                 for q in queries

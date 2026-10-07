@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from statistics import NormalDist
-from typing import Annotated, Self
+from typing import Annotated, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -105,8 +105,8 @@ class Interval(BaseModel):
     ) -> Self:
         """Construct an Interval from an existing Interval or a 2-element sequence."""
         if isinstance(bounds, Interval):
-            if bounds.confidence == confidence:
-                return bounds
+            if bounds.confidence == confidence and type(bounds) is cls:
+                return cast(Self, bounds)
             return cls(low=bounds.low, high=bounds.high, confidence=confidence)
         if len(bounds) != _INTERVAL_BOUNDS_LEN:
             msg = f"expected 2 elements for interval bounds, got {len(bounds)}"
