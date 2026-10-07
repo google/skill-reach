@@ -62,8 +62,6 @@ from pydantic import BaseModel, Field
 from reach.config import (
     DEFAULT_GEMINI_MODEL,
     RuntimeSettings,
-    resolve_registry_location,
-    resolve_registry_project,
 )
 from reach.runtime import (
     AntigravityOptions,
@@ -86,7 +84,6 @@ from reach.runtime._fs import (
 )
 from reach.runtime._subprocess import check_tool_leak
 from reach.runtime.generator import BaseTextGenerator
-from reach.runtime.profiles import model_profile
 
 #: Selection tool set configured for single-turn probe evaluations.
 SELECTION_TOOLS: tuple[Any, ...] = (
@@ -473,9 +470,6 @@ class AntigravitySdkOptions(AntigravityOptions):
     )
     app_data_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "app_data_dir"
-    vertex: bool | None = None
-    project: str | None = None
-    location: str | None = None
     api_max_retries: int | None = Field(
         default=None,
         ge=0,
@@ -488,81 +482,7 @@ class AntigravitySdkOptions(AntigravityOptions):
         description="Jitter fraction applied to exponential backoff retries in the SDK client.",
     )
 
-
-class _AntigravitySdkConfigMixin:
-    """Consolidate shared Vertex AI and ADC resolution for SDK runtime and generator."""
-
-    options: AntigravitySdkOptions
-
-    @property
-    def effective_vertex(self) -> bool:
-        """Determine whether Vertex AI backend is active."""
-        if self.options.vertex is not None:
-            return self.options.vertex
-        if getattr(self.options, "provider", None) == "vertex":
-            return True
-        if os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE", "").lower() in (
-            "true",
-            "1",
-        ) or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1"):
-            return True
-        has_api_key = bool(
-            self.options.api_key
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-        )
-        return not has_api_key and bool(
-            self.options.project or resolve_registry_project(self.options.project)
-        )
-
-    @property
-    def effective_project(self) -> str | None:
-        """Resolve GCP project ID for Vertex AI execution."""
-        if not self.effective_vertex:
-            return None
-        if self.options.api_key:
-            return self.options.project
-        return resolve_registry_project(self.options.project)
-
-    @property
-    def effective_location(self) -> str | None:
-        """Resolve GCP region/location for Vertex AI execution."""
-        if not self.effective_vertex:
-            return None
-        if self.options.api_key:
-            return self.options.location
-        return resolve_registry_location(self.options.location)
-
-    @property
-    def effective_api_key(self) -> str | None:
-        """Return configured API key or fallback to environment variables."""
-        if self.options.api_key:
-            return self.options.api_key
-        if self.effective_vertex:
-            return None
-        return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-
-    def _sync_sdk_env(self, env: dict[str, str]) -> dict[str, str]:
-        """Apply API key synchronization and Vertex credential preservation to environment."""
-        if (api_key := self.effective_api_key) is not None:
-            env["GEMINI_API_KEY"] = api_key
-            env["GOOGLE_API_KEY"] = api_key
-        elif self.effective_vertex and not self.options.api_key:
-            env.pop("GEMINI_API_KEY", None)
-            env.pop("GOOGLE_API_KEY", None)
-
-        blocked = getattr(self, "blocked_env_vars", None) or ()
-        if (
-            self.effective_vertex
-            and "GOOGLE_APPLICATION_CREDENTIALS" not in blocked
-            and "GOOGLE_APPLICATION_CREDENTIALS" in os.environ
-            and "GOOGLE_APPLICATION_CREDENTIALS" not in env
-        ):
-            env["GOOGLE_APPLICATION_CREDENTIALS"] = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-
-        return sync_google_and_gemini_keys(env)
-
-    def _target_model_spec(self, model: str, effort: str | None) -> str | ag_types.ModelTarget:
+    def target_model_spec(self, model: str, effort: str | None) -> str | ag_types.ModelTarget:
         """Construct model target with reasoning effort and endpoint options when configured."""
         return _build_model_spec(
             model,
@@ -573,23 +493,23 @@ class _AntigravitySdkConfigMixin:
             api_key=self.effective_api_key,
         )
 
-    def _build_retry_config(self) -> ag_types.RetryConfig | None:
+    def build_retry_config(self) -> ag_types.RetryConfig | None:
         """Construct RetryConfig when api_max_retries or api_retry_jitter is configured."""
         if (
             ag_types is None
             or not hasattr(ag_types, "RetryConfig")
             or not hasattr(ag_types, "ModelAPIRetryConfig")
-            or (self.options.api_max_retries is None and self.options.api_retry_jitter is None)
+            or (self.api_max_retries is None and self.api_retry_jitter is None)
         ):
             return None
         api_kwargs: dict[str, Any] = {}
-        if self.options.api_max_retries is not None:
-            api_kwargs["max_retries"] = self.options.api_max_retries
-        if self.options.api_retry_jitter is not None:
-            api_kwargs["jitter_range"] = self.options.api_retry_jitter
+        if self.api_max_retries is not None:
+            api_kwargs["max_retries"] = self.api_max_retries
+        if self.api_retry_jitter is not None:
+            api_kwargs["jitter_range"] = self.api_retry_jitter
         return ag_types.RetryConfig(api_retry=ag_types.ModelAPIRetryConfig(**api_kwargs))
 
-    def _base_config_kwargs(
+    def base_config_kwargs(
         self,
         model: str | ag_types.ModelTarget,
         env: dict[str, str],
@@ -603,32 +523,37 @@ class _AntigravitySdkConfigMixin:
             "location": self.effective_location,
             "env": env,
         }
-        if (retry_cfg := self._build_retry_config()) is not None:
+        if (retry_cfg := self.build_retry_config()) is not None:
             kwargs["retry_config"] = retry_cfg
         return kwargs
 
-    def _resolve_schema_dict(
-        self,
-        schema: str | Mapping[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        """Parse optional JSON schema argument or options fallback into a dictionary."""
-        if isinstance(schema, Mapping):
-            return dict(schema)
-        raw_schema = schema if isinstance(schema, str) else self.options.json_schema
-        if not raw_schema:
-            return None
-        try:
-            parsed = json.loads(raw_schema)
-        except json.JSONDecodeError as exc:
-            msg = f"Invalid JSON schema: {exc}"
-            raise ValueError(msg) from exc
-        if not isinstance(parsed, dict):
-            msg = f"Expected JSON schema object, got {type(parsed).__name__}"
-            raise ValueError(msg)
-        return parsed
+
+def _apply_agy_sdk_env(
+    env: dict[str, str],
+    options: AntigravitySdkOptions,
+    blocked_env_vars: Iterable[str] | None = None,
+) -> dict[str, str]:
+    """Apply API key synchronization and Vertex credential preservation to environment."""
+    if (api_key := options.effective_api_key) is not None:
+        env["GEMINI_API_KEY"] = api_key
+        env["GOOGLE_API_KEY"] = api_key
+    elif options.effective_vertex and not options.api_key:
+        env.pop("GEMINI_API_KEY", None)
+        env.pop("GOOGLE_API_KEY", None)
+
+    blocked = set(blocked_env_vars or ())
+    if (
+        options.effective_vertex
+        and "GOOGLE_APPLICATION_CREDENTIALS" not in blocked
+        and "GOOGLE_APPLICATION_CREDENTIALS" in os.environ
+        and "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    ):
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+
+    return sync_google_and_gemini_keys(env)
 
 
-class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
+class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
     """Execute evaluation queries using the Google Antigravity Python SDK."""
 
     name = "antigravity-sdk"
@@ -653,12 +578,11 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
     @override
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
         """Assemble environment variables with API key synchronization."""
-        env = super().build_env(workdir)
-        return self._sync_sdk_env(env)
+        return _apply_agy_sdk_env(super().build_env(workdir), self.options, self.blocked_env_vars)
 
     def _model_spec(self) -> str | ag_types.ModelTarget:
         """Construct model target with reasoning effort endpoint options when configured."""
-        return self._target_model_spec(self.options.model, self.effective_effort)
+        return self.options.target_model_spec(self.options.model, self.effective_effort)
 
     @property
     def _default_selection_tools(self) -> tuple[Any, ...]:
@@ -707,7 +631,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
             }
             skills_paths.extend(p for p in sorted(resolved_targets) if p not in skills_paths)
 
-        kwargs = self._base_config_kwargs(self._model_spec(), self.build_env(workdir))
+        kwargs = self.options.base_config_kwargs(self._model_spec(), self.build_env(workdir))
         kwargs.update(
             {
                 "workspaces": [str(workdir)],
@@ -721,7 +645,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
                 "hooks": hooks,
             }
         )
-        if (schema_dict := self._resolve_schema_dict()) is not None:
+        if (schema_dict := self.options.resolve_schema_dict()) is not None:
             kwargs["response_schema"] = schema_dict
         return LocalAgentConfig(**kwargs)
 
@@ -935,7 +859,7 @@ class AntigravitySdkRuntime(_AntigravitySdkConfigMixin, AntigravityRuntime):
             self.post_probe(workdir)
 
 
-class AntigravitySdkGenerator(_AntigravitySdkConfigMixin, BaseTextGenerator[AntigravitySdkOptions]):
+class AntigravitySdkGenerator(BaseTextGenerator[AntigravitySdkOptions]):
     """Generate text completions using the Antigravity SDK."""
 
     name: str = "antigravity-sdk"
@@ -973,30 +897,26 @@ class AntigravitySdkGenerator(_AntigravitySdkConfigMixin, BaseTextGenerator[Anti
     @override
     def build_env(self) -> dict[str, str]:
         """Assemble environment variables with API key synchronization."""
-        env = super().build_env()
-        return self._sync_sdk_env(env)
+        return _apply_agy_sdk_env(super().build_env(), self.options, self.blocked_env_vars)
 
     @property
+    @override
     def effective_effort(self) -> str | None:
         """Return configured reasoning effort or default from model profile."""
-        if self.options.effort:
-            effort = self.options.effort
-            return None if effort.lower() in ("none", "off") else effort
-        if not _model_supports_thinking(self.model):
+        if not self.options.effort and not _model_supports_thinking(self.model):
             return None
-        try:
-            return model_profile(self.model).effort
-        except (KeyError, ValueError):
-            return None
+        return super().effective_effort
 
     def _model_spec(self) -> str | ag_types.ModelTarget:
         """Construct model target with reasoning effort endpoint options when configured."""
-        return self._target_model_spec(self.options.model or self.model, self.effective_effort)
+        return self.options.target_model_spec(
+            self.options.model or self.model, self.effective_effort
+        )
 
     @override
     def complete(self, prompt: str, *, schema: str | Mapping[str, Any] | None = None) -> str:
         """Execute text completion using the Antigravity SDK."""
-        schema_dict = self._resolve_schema_dict(schema)
+        schema_dict = self.options.resolve_schema_dict(schema)
         caps = (
             ag_types.CapabilitiesConfig(enabled_tools=[], enable_subagents=False)
             if ag_types is not None and hasattr(ag_types, "CapabilitiesConfig")
@@ -1004,7 +924,7 @@ class AntigravitySdkGenerator(_AntigravitySdkConfigMixin, BaseTextGenerator[Anti
         )
 
         async def _complete_async() -> str:
-            kwargs = self._base_config_kwargs(self._model_spec(), self.build_env())
+            kwargs = self.options.base_config_kwargs(self._model_spec(), self.build_env())
             if schema_dict is not None:
                 kwargs["response_schema"] = schema_dict
             if caps is not None:

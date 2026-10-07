@@ -224,8 +224,7 @@ def test_registry_flag_without_project_fails_fast(
     """Verify --registry without a configured or discoverable project fails with a clear error."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
-    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
-    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_QUOTA_PROJECT", raising=False)
 
     with patch("reach.config.resolve_registry_project", return_value=None):
         rc = main(["overlap", "--registry"])

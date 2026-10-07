@@ -414,12 +414,12 @@ Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciproc
 
 ### `[runtime]`
 
-| Key                | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| :----------------- | :--------------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeout_s`        | Integer          | `200`   | Process execution timeout in seconds before aborting an unresponsive probe.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `max_turns`        | Integer          | `3`     | Maximum conversation turns to execute and evaluate per probe.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden or Google Enterprise mode is active; runner configuration variables such as `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). Set to `[]` to allow all ambient variables. |
+| Key                | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| :----------------- | :--------------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout_s`        | Integer          | `200`   | Process execution timeout in seconds before aborting an unresponsive probe.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `max_turns`        | Integer          | `3`     | Maximum conversation turns to execute and evaluate per probe.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden, Agent Platform, or Antigravity ADC mode is active; runner configuration variables such as `AGY_ADC_AUTH`, `GOOGLE_GENAI_USE_ENTERPRISE`, `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). |
 
 Agent-specific driver options (such as Claude Code's `disable_bundled_skills`, `skill_overrides`, and `enabled_plugins`) are configured under `[runtime.options]`. See [Driver Options](#driver-options) and the [Sandboxing Guide](guides/sandboxing.md) for full driver configuration details.
 
@@ -463,6 +463,9 @@ When `agent = "claude-code"`, the following options configure Claude Code's exec
 | :------------------------------ | :----------------------- | :----------------------- | :--------------------------------------------------------------------------------------------------------------------- |
 | `executable`                    | String                   | `"claude"`               | Path or command name for the Claude Code CLI binary.                                                                   |
 | `model`                         | String                   | `"claude-sonnet-5"`      | Model identifier to evaluate.                                                                                          |
+| `vertex`                        | Boolean                  | `None`                   | Explicitly enable (`true`) or disable (`false`) Google Cloud Model Garden / Vertex AI mode (`CLAUDE_CODE_USE_VERTEX`). |
+| `project`                       | String                   | `None`                   | Google Cloud project ID injected as `ANTHROPIC_VERTEX_PROJECT_ID`.                                                     |
+| `location`                      | String                   | `None`                   | Google Cloud region injected as `CLOUD_ML_REGION`.                                                                     |
 | `disable_bundled_skills`        | Boolean                  | `true`                   | When true, disables default runtime-bundled skills, built-in plugin mods, and ambient instruction files (`CLAUDE.md`). |
 | `skill_overrides`               | Mapping[String, String]  | Built-in skills disabled | Explicit skill activation overrides passed to Claude Code to suppress bundled skills.                                  |
 | `enabled_plugins`               | Mapping[String, Boolean] | Built-in mods disabled   | Explicit plugin activation states to suppress default runtime mods.                                                    |
@@ -496,11 +499,13 @@ When `agent = "pi"`, the following options configure the Pi agent harness CLI:
 
 When `agent = "antigravity-cli"` or `agent = "antigravity-sdk"`, the following options configure Antigravity execution:
 
-| Key          | Type   | Default              | Description                                                                  |
-| :----------- | :----- | :------------------- | :--------------------------------------------------------------------------- |
-| `executable` | String | `"agy"`              | Path or command name for the Antigravity CLI binary (for `antigravity-cli`). |
-| `model`      | String | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                |
-| `project`    | String | Inferred             | Google Cloud project ID hosting the target endpoints or Agent Registry.      |
+| Key          | Type    | Default              | Description                                                                                                                  |
+| :----------- | :------ | :------------------- | :--------------------------------------------------------------------------------------------------------------------------- |
+| `executable` | String  | `"agy"`              | Path or command name for the Antigravity CLI binary (for `antigravity-cli`).                                                 |
+| `model`      | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                                |
+| `vertex`     | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`AGY_ADC_AUTH` / `vertexai`). |
+| `project`    | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                                       |
+| `location`   | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                             |
 
 ### Keyword (`keyword`)
 
@@ -522,27 +527,30 @@ Configuration values in `reach.toml` can also interpolate environment variables 
 
 ## Environment Variables
 
-| Variable              | Description                                                                                       |
-| :-------------------- | :------------------------------------------------------------------------------------------------ |
-| `REACH_NO_BROWSER`    | Set to `"1"` or `"true"` to bypass interactive browser review for drafted queries.                |
-| `REACH_YES`           | Set to `"1"` or `"true"` to bypass interactive safety confirmation prompts in CI/CD and scripts.  |
-| `REACH_FORCE`         | Set to `"1"` or `"true"` as an alias to bypass interactive safety confirmation prompts.           |
-| `GITHUB_STEP_SUMMARY` | When set (in GitHub Actions), `reach check` automatically writes markdown summaries to this file. |
-| `NO_MKDOCS_2_WARNING` | Set to `"1"` to suppress upstream MkDocs 2.0 console notices during documentation builds.         |
+| Variable                      | Description                                                                                              |
+| :---------------------------- | :------------------------------------------------------------------------------------------------------- |
+| `REACH_NO_BROWSER`            | Set to `"1"` or `"true"` to bypass interactive browser review for drafted queries.                       |
+| `REACH_YES`                   | Set to `"1"` or `"true"` to bypass interactive safety confirmation prompts in CI/CD and scripts.         |
+| `AGY_ADC_AUTH`                | Set to `"true"` or `"1"` to enable Google Cloud ADC / Vertex AI authentication for `antigravity-cli`.    |
+| `GOOGLE_GENAI_USE_ENTERPRISE` | Set to `"true"` or `"1"` to enable Google Cloud Agent Platform ADC authentication for `antigravity-sdk`. |
+| `GOOGLE_CLOUD_PROJECT`        | Default Google Cloud project ID for Agent Platform, Vertex AI, and Agent Registry operations.            |
+| `GOOGLE_CLOUD_LOCATION`       | Default Google Cloud location (e.g. `"global"`) for Agent Platform and Vertex AI requests.               |
+| `GITHUB_STEP_SUMMARY`         | When set (in GitHub Actions), `reach check` automatically writes markdown summaries to this file.        |
+| `NO_MKDOCS_2_WARNING`         | Set to `"1"` to suppress upstream MkDocs 2.0 console notices during documentation builds.                |
 
 ---
 
 ## Provider API Keys & Authentication
 
-Reach automatically routes model API keys to the corresponding environment variables expected by each runtime agent:
+Reach automatically routes model API keys and ADC settings to the corresponding environment variables expected by each runtime agent:
 
-| Provider            | Credentials / Injected Environment Variables | Support Tier               |
-| :------------------ | :------------------------------------------- | :------------------------- |
-| `google` / `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`           | Tested (Primary reference) |
-| `google-cloud`      | Application Default Credentials (ADC)        | Tested (Agent Platform)    |
+| Provider            | Credentials / Injected Environment Variables                                                           | Support Tier               |
+| :------------------ | :----------------------------------------------------------------------------------------------------- | :------------------------- |
+| `google` / `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`                                                                     | Tested (Primary reference) |
+| `google-cloud`      | Application Default Credentials (ADC), `AGY_ADC_AUTH`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | Tested (Agent Platform)    |
 
 > [!NOTE]
-> **Provider Support Status**: Google Gemini (via Developer API keys) and Google Cloud Agent Platform / Model Garden (via Application Default Credentials) are the tested and benchmarked authentication paths for Reach. For Claude Code, configure Google Cloud Model Garden on Agent Platform (`CLAUDE_CODE_USE_VERTEX=1`).
+> **Provider Support Status**: Google Gemini (via Developer API keys) and Google Cloud Agent Platform / Model Garden (via Application Default Credentials) are the tested and benchmarked authentication paths for Reach. For `antigravity-cli` and `antigravity-sdk`, set `vertex = true` under `[runtime.options]` or export `AGY_ADC_AUTH=true` / `GOOGLE_GENAI_USE_ENTERPRISE=true`. For Claude Code, configure Google Cloud Model Garden on Agent Platform (`CLAUDE_CODE_USE_VERTEX=1` or `vertex = true`).
 
 If an unrecognized provider name is specified via options, Reach raises an error rather than mapping credentials to an unintended provider. For custom, local, or self-hosted model engines (such as Ollama, vLLM, or Mistral), set the provider's expected environment variables directly in your shell or CI workflow.
 

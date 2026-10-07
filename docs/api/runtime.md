@@ -37,3 +37,4 @@ Agent execution runtime interfaces, CLI subprocess template drivers, Antigravity
         - ToolCallInfo
         - TrajectoryTracker
         - TwoStageRetrieverRuntime
+        - VertexOptions

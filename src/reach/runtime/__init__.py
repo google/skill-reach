@@ -22,7 +22,7 @@ import json
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
@@ -32,12 +32,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from reach.config import (
     KEYWORD_AGENT,
     RuntimeSettings,
+    StrippedStr,
     agent_default_model,
     agent_profiles,
     resolve_path,
+    resolve_registry_location,
+    resolve_registry_project,
 )
 from reach.runtime._env import (
     detect_model_provider,
+    has_agy_vertex_env,
     raise_missing_agent_dependency,
     resolve_blocked_env_vars,
     sanitize_subprocess_env,
@@ -81,6 +85,7 @@ __all__ = [
     "ToolCallInfo",
     "TrajectoryTracker",
     "TwoStageRetrieverRuntime",
+    "VertexOptions",
     "agent_default_model",
     "antigravity_agents",
     "build_runtime",
@@ -135,10 +140,87 @@ class AgentOptions(BaseModel):
         return self
 
 
-class AntigravityOptions(AgentOptions):
+class VertexOptions(AgentOptions):
+    """Configure Google Cloud Vertex AI and Application Default Credentials options."""
+
+    vertex: bool | None = None
+    project: StrippedStr | None = None
+    location: StrippedStr | None = None
+
+
+class AntigravityOptions(VertexOptions):
     """Configure common options for Antigravity-ecosystem agent runtimes."""
 
     use_symlinks: bool = False
+
+    @property
+    def effective_vertex(self) -> bool:
+        """Return True if Vertex AI / Enterprise ADC mode is active."""
+        if self.vertex is not None:
+            return self.vertex
+        if has_agy_vertex_env(os.environ):
+            return True
+        has_api_key = bool(
+            self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        )
+        return not has_api_key and bool(self.project or resolve_registry_project(self.project))
+
+    @property
+    def effective_project(self) -> str | None:
+        """Return resolved Google Cloud project ID when Vertex/ADC is active."""
+        if not self.effective_vertex:
+            return None
+        if self.api_key:
+            return self.project
+        return resolve_registry_project(self.project)
+
+    @property
+    def effective_location(self) -> str | None:
+        """Return resolved Google Cloud location when Vertex/ADC is active."""
+        if not self.effective_vertex:
+            return None
+        if self.api_key:
+            return self.location
+        return resolve_registry_location(self.location)
+
+    @property
+    def effective_api_key(self) -> str | None:
+        """Return configured API key or fallback to environment variables."""
+        if self.api_key:
+            return self.api_key
+        if self.effective_vertex:
+            return None
+        return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+    def resolve_model_provider(self, model: str = "") -> str | None:
+        """Resolve model provider unless Vertex/ADC mode is active without explicit provider."""
+        if self.effective_vertex and not self.provider:
+            return None
+        return detect_model_provider(
+            model or self.model,
+            self.provider,
+            api_key=self.api_key,
+        )
+
+    def resolve_schema_dict(
+        self,
+        schema: str | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Parse and validate explicit or configured JSON schema into a dictionary."""
+        if isinstance(schema, Mapping):
+            return dict(schema)
+        raw_schema = schema if isinstance(schema, str) else self.json_schema
+        if not raw_schema:
+            return None
+        try:
+            parsed = json.loads(raw_schema)
+        except json.JSONDecodeError as exc:
+            msg = f"Invalid JSON schema: {exc}"
+            raise ValueError(msg) from exc
+        if not isinstance(parsed, dict):
+            msg = f"Expected JSON schema object, got {type(parsed).__name__}"
+            raise ValueError(msg)
+        return parsed
 
 
 class CliOptions(AgentOptions):
@@ -199,16 +281,11 @@ class ToolCallInfo(BaseModel):
         return data
 
     @property
-    def target_path(self) -> str | None:
+    def path(self) -> str | None:
         """Extract first non-empty filesystem path from recognized tool parameters."""
         from reach.runtime._fs import extract_tool_path
 
         return extract_tool_path(self.parameters)
-
-    @property
-    def path(self) -> str | None:
-        """Return target path from parameters."""
-        return self.target_path
 
 
 class SessionStatus(StrEnum):
@@ -632,7 +709,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
     @property
     def provider(self) -> str | None:
         """Return the model provider identifier being evaluated."""
-        return self.options.provider or getattr(self.options, "model_provider", None)
+        return self.options.provider
 
     @property
     def max_turns(self) -> int:
@@ -818,6 +895,12 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
     ) -> None:
         """Initialize CLI agent runtime settings and options."""
         super().__init__(settings=settings, options=options)
+        agent_name = getattr(self, "name", "agent")
+        if self.settings is None and options_model(agent_name) is not None:
+            self.settings = RuntimeSettings(
+                agent=agent_name,
+                options=self.options.model_dump(mode="json") if options is not None else {},
+            )
         self.completion_cost_usd = 0.0
         self.completions = 0
 
@@ -877,13 +960,13 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
 
     isolation_dir_name: ClassVar[str | None] = None
 
-    def effective_isolation_dir(self, workdir: Path) -> Path | None:
+    def effective_isolation_dir(self, workdir: Path | None = None) -> Path | None:
         """Return the effective isolated configuration directory for the given workspace."""
         if not self.options.isolate_config_dir:
             return None
         if self.custom_isolation_dir:
             return self.custom_isolation_dir
-        if self.isolation_dir_name:
+        if workdir is not None and self.isolation_dir_name:
             return Path(workdir) / self.isolation_dir_name
         return None
 
@@ -979,7 +1062,9 @@ class SkillSelectionBase(BaseModel):
     )
 
 
-class AntigravityRuntime(AgentRuntime):
+class AntigravityRuntime[AntigravityOptionsT: AntigravityOptions](
+    AgentRuntime[AntigravityOptionsT], ABC
+):
     """Shared base runtime for Antigravity-ecosystem drivers (CLI and SDK)."""
 
     ANTIGRAVITY_SELECTION_TOOLS: frozenset[str] = frozenset(
@@ -1007,24 +1092,6 @@ class AntigravityRuntime(AgentRuntime):
     def selection_tools(self) -> frozenset[str]:
         """Return standard inspection tool identifiers permitted during skill selection."""
         return self.ANTIGRAVITY_SELECTION_TOOLS
-
-    @property
-    def effective_api_key(self) -> str | None:
-        """Return configured API key or fallback to environment variables."""
-        return (
-            self.options.api_key
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-        )
-
-    @property
-    def effective_model_provider(self) -> str | None:
-        """Return configured model_provider or auto-detect 'gemini' when API keys are present."""
-        return detect_model_provider(
-            self.model,
-            getattr(self.options, "model_provider", None),
-            api_key=self.options.api_key,
-        )
 
     @classmethod
     def selection_schema(cls, resident: Sequence[str]) -> type[SkillSelectionBase]:

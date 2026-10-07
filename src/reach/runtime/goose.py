@@ -30,7 +30,7 @@ from pydantic import (
     ValidationError,
 )
 
-from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
+from reach.config import DEFAULT_GEMINI_MODEL
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
@@ -296,6 +296,29 @@ def parse_goose_output(
     )
 
 
+def _apply_goose_env(
+    env: dict[str, str],
+    options: GooseOptions,
+    isolation_dir: Path | None = None,
+) -> dict[str, str]:
+    """Apply Goose telemetry suppression, API keys, and XDG isolation to environment."""
+    env["OTEL_SDK_DISABLED"] = "true"
+    apply_provider_api_key(
+        env,
+        provider=options.provider,
+        api_key=options.api_key,
+        default_provider="openai",
+    )
+    sync_google_and_gemini_keys(env)
+    if isolation_dir is not None:
+        isolated_dir = ensure_private_directory(isolation_dir)
+        env["HOME"] = str(isolated_dir)
+        env["XDG_CONFIG_HOME"] = str(isolated_dir / ".config")
+        env["XDG_DATA_HOME"] = str(isolated_dir / ".local" / "share")
+        env["XDG_STATE_HOME"] = str(isolated_dir / ".local" / "state")
+    return env
+
+
 class GooseRuntime(CliAgentRuntime[GooseOptions]):
     """Drive the Goose agent CLI as an evaluation runtime."""
 
@@ -304,20 +327,6 @@ class GooseRuntime(CliAgentRuntime[GooseOptions]):
     api_key_env_var: str | None = None
     _skills_subpath: str = ".agents/skills"
     isolation_dir_name: ClassVar[str | None] = ".reach_goose"
-
-    def __init__(
-        self,
-        settings: RuntimeSettings | None = None,
-        options: GooseOptions | None = None,
-    ) -> None:
-        """Initialize the GooseRuntime with settings or defaults."""
-        if options is None:
-            effective_settings = settings or RuntimeSettings(agent=self.name)
-            options = GooseOptions.model_validate(dict(effective_settings.options or {}))
-        else:
-            opts_dict = options.model_dump(mode="json")
-            effective_settings = settings or RuntimeSettings(agent=self.name, options=opts_dict)
-        super().__init__(settings=effective_settings, options=options)
 
     def build_command(self, query_text: str) -> list[str]:
         """Assemble command-line arguments for running a Goose evaluation probe."""
@@ -391,25 +400,11 @@ class GooseRuntime(CliAgentRuntime[GooseOptions]):
     @override
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with isolation, telemetry suppression, and API keys."""
-        env = super().build_env(workdir)
-        env["OTEL_SDK_DISABLED"] = "true"
-
-        apply_provider_api_key(
-            env,
-            provider=self.options.provider,
-            api_key=self.options.api_key,
-            default_provider="openai",
+        return _apply_goose_env(
+            super().build_env(workdir),
+            self.options,
+            self.effective_isolation_dir(workdir),
         )
-        sync_google_and_gemini_keys(env)
-
-        if workdir is not None and (iso_dir := self.effective_isolation_dir(workdir)) is not None:
-            isolated_dir = ensure_private_directory(iso_dir)
-            env["HOME"] = str(isolated_dir)
-            env["XDG_CONFIG_HOME"] = str(isolated_dir / ".config")
-            env["XDG_DATA_HOME"] = str(isolated_dir / ".local" / "share")
-            env["XDG_STATE_HOME"] = str(isolated_dir / ".local" / "state")
-
-        return env
 
 
 class GooseGenerator(BaseTextGenerator[GooseOptions]):
@@ -457,13 +452,9 @@ class GooseGenerator(BaseTextGenerator[GooseOptions]):
 
     @override
     def build_env(self) -> dict[str, str]:
-        """Assemble process environment with API keys and telemetry suppression."""
-        env = super().build_env()
-        env["OTEL_SDK_DISABLED"] = "true"
-        apply_provider_api_key(
-            env,
-            provider=self.options.provider,
-            api_key=self.options.api_key,
-            default_provider="openai",
+        """Assemble process environment with API keys, isolation, and telemetry suppression."""
+        return _apply_goose_env(
+            super().build_env(),
+            self.options,
+            self.options.custom_isolation_dir,
         )
-        return sync_google_and_gemini_keys(env)

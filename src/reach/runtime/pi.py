@@ -20,7 +20,7 @@ import contextlib
 import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 from pydantic import (
     BaseModel,
@@ -32,7 +32,7 @@ from pydantic import (
     field_validator,
 )
 
-from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings, resolve_path
+from reach.config import DEFAULT_GEMINI_MODEL, resolve_path
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
@@ -59,7 +59,6 @@ from reach.runtime._subprocess import (
     run_subprocess_probe,
 )
 from reach.runtime.generator import BaseTextGenerator
-from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -92,10 +91,6 @@ class PiOptions(CliOptions):
         description="The model identifier to evaluate.",
     )
     provider: str | None = "google"
-    thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"] | None = Field(
-        default=None,
-        description="Reasoning effort level for Pi: off, minimal, low, medium, high, xhigh, max.",
-    )
     tools: str = "read"
     no_themes: bool = True
     no_extensions: bool = True
@@ -122,7 +117,7 @@ class PiOptions(CliOptions):
         Raises:
             ValueError: If candidate effort is unrecognized.
         """
-        candidate = self.thinking or self.effort or profile_effort
+        candidate = self.effort or profile_effort
         if candidate is None:
             return None
         candidate_lower = candidate.lower()
@@ -296,6 +291,27 @@ def parse_session_entries(
     )
 
 
+def _apply_pi_env(
+    env: dict[str, str],
+    options: PiOptions,
+    isolation_dir: Path | None = None,
+) -> dict[str, str]:
+    """Apply Pi telemetry suppression, API keys, and agent directory isolation to environment."""
+    env["PI_TELEMETRY"] = "0"
+    env["PI_SKIP_VERSION_CHECK"] = "1"
+    apply_provider_api_key(
+        env,
+        provider=options.provider,
+        api_key=options.api_key,
+        default_provider="google",
+    )
+    sync_google_and_gemini_keys(env)
+    if isolation_dir is not None:
+        agent_dir = ensure_private_directory(isolation_dir)
+        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+    return env
+
+
 class PiRuntime(CliAgentRuntime[PiOptions]):
     """Drive the Pi agent harness CLI as an evaluation runtime."""
 
@@ -304,13 +320,6 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
     api_key_env_var: str | None = None
     _skills_subpath: str = ".pi/skills"
     isolation_dir_name: ClassVar[str | None] = ".reach_pi_agent"
-
-    def __init__(self, settings: RuntimeSettings | None = None) -> None:
-        """Initialize the PiRuntime with settings or defaults."""
-        effective = settings or RuntimeSettings(agent="pi")
-        self.settings = effective
-        self.options = PiOptions.model_validate(dict(effective.options or {}))
-        self._resident: tuple[str, ...] = ()
 
     @override
     def parse_stream(
@@ -360,23 +369,11 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
     @override
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with telemetry suppression, isolation, and API keys."""
-        env = super().build_env(workdir)
-        env["PI_TELEMETRY"] = "0"
-        env["PI_SKIP_VERSION_CHECK"] = "1"
-
-        apply_provider_api_key(
-            env,
-            provider=self.options.provider,
-            api_key=self.options.api_key,
-            default_provider="google",
+        return _apply_pi_env(
+            super().build_env(workdir),
+            self.options,
+            self.effective_isolation_dir(workdir),
         )
-        sync_google_and_gemini_keys(env)
-
-        if workdir is not None and (iso_dir := self.effective_isolation_dir(workdir)) is not None:
-            agent_dir = ensure_private_directory(iso_dir)
-            env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-
-        return env
 
     @override
     def post_probe(self, workdir: Path) -> None:
@@ -486,12 +483,10 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
         super().__init__(model=opts.model or model, timeout_s=timeout_s, options=opts)
 
     @property
+    @override
     def effective_effort(self) -> str | None:
         """Return configured reasoning effort or default from model profile."""
-        profile_effort = None
-        with contextlib.suppress(KeyError, ValueError):
-            profile_effort = model_profile(self.model).effort
-        return self.options.resolve_thinking(profile_effort)
+        return self.options.resolve_thinking(super().effective_effort)
 
     @override
     def build_completion_command(self, prompt: str = "") -> list[str]:
@@ -513,14 +508,9 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
 
     @override
     def build_env(self) -> dict[str, str]:
-        """Assemble process environment with API keys and telemetry suppression."""
-        env = super().build_env()
-        env["PI_TELEMETRY"] = "0"
-        env["PI_SKIP_VERSION_CHECK"] = "1"
-        apply_provider_api_key(
-            env,
-            provider=self.options.provider,
-            api_key=self.options.api_key,
-            default_provider="google",
+        """Assemble process environment with API keys, isolation, and telemetry suppression."""
+        return _apply_pi_env(
+            super().build_env(),
+            self.options,
+            self.options.custom_isolation_dir,
         )
-        return sync_google_and_gemini_keys(env)

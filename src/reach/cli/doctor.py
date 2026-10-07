@@ -31,6 +31,7 @@ from cyclopts import Parameter
 from reach.catalog import load_skills
 from reach.config import RunConfig
 from reach.registry import find_adc_path
+from reach.runtime._env import is_truthy_env
 from reach.views import build_console, render_doctor_table
 
 from .app import SETUP, app
@@ -140,13 +141,15 @@ def _check_env_var(var_name: str, purpose: str) -> CheckResult:
 
 def _check_google_adc() -> CheckResult:
     """Check whether Google Cloud Application Default Credentials exist."""
+    agy_adc = is_truthy_env(os.environ, "AGY_ADC_AUTH")
+    agy_suffix = " (AGY_ADC_AUTH enabled)" if agy_adc else ""
     custom = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if custom and Path(custom).is_file():
         return CheckResult(
             category="Credentials & Environment",
             name="Google Cloud ADC",
             status="ok",
-            detail=f"configured via GOOGLE_APPLICATION_CREDENTIALS ({custom})",
+            detail=f"configured via GOOGLE_APPLICATION_CREDENTIALS ({custom}){agy_suffix}",
         )
     adc_standard = find_adc_path()
     if adc_standard is not None and adc_standard.is_file():
@@ -154,16 +157,16 @@ def _check_google_adc() -> CheckResult:
             category="Credentials & Environment",
             name="Google Cloud ADC",
             status="ok",
-            detail=f"found at standard location ({adc_standard})",
+            detail=f"found at standard location ({adc_standard}){agy_suffix}",
         )
     return CheckResult(
         category="Credentials & Environment",
         name="Google Cloud ADC",
         status="warn",
-        detail="not found",
+        detail=f"not found{agy_suffix}",
         remedy=(
-            "Run 'gcloud auth application-default login' if using Google Cloud "
-            "Model Garden on Agent Platform"
+            "Run 'gcloud auth application-default login --project <PROJECT_ID>' if using "
+            "Google Cloud Model Garden on Agent Platform"
         ),
     )
 

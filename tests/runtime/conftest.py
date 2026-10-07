@@ -103,9 +103,17 @@ def home_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def clean_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear ambient model provider API keys from test environment."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    """Clear ambient model provider API keys and GCP flags from test environment."""
+    for var in (
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+        "AGY_ADC_AUTH",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 def read_isolated_settings(home_dir: Path) -> dict[str, Any]:

@@ -27,12 +27,12 @@ from pydantic import ValidationError
 from reach.catalog import build_catalogs, load_skills
 from reach.config import DEFAULT_GEMINI_MODEL
 from reach.models import CatalogMode
+from reach.runtime import ToolCallInfo
 from reach.runtime.antigravity_cli import (
     DENIED_PERMISSION_ACTIONS,
     AntigravityCliGenerator,
     AntigravityCliOptions,
     AntigravityCliRuntime,
-    ToolAttempt,
     _AgyResultEvent,
     _conversation_state_paths,
     _ensure_isolated_settings,
@@ -48,6 +48,14 @@ from .conftest import (
     install_one,
     read_isolated_settings,
 )
+
+
+def _tool_call(name: str, path: str | None = None) -> ToolCallInfo:
+    """Build a ToolCallInfo instance with an optional target path parameter."""
+    return ToolCallInfo(
+        name=name,
+        parameters={"AbsolutePath": path} if path is not None else {},
+    )
 
 
 @pytest.fixture
@@ -255,16 +263,16 @@ def test_a_view_file_call_records_its_target_path() -> None:
     summary = parse_stream(
         agy_stream(tools=[("view_file", "/work/.agents/skills/a/SKILL.md")]),
     )
-    assert summary.tool_attempts == (
-        ToolAttempt(name="view_file", path="/work/.agents/skills/a/SKILL.md"),
-    )
+    assert summary.tool_calls == (_tool_call("view_file", "/work/.agents/skills/a/SKILL.md"),)
+    assert summary.tool_calls[0].path == "/work/.agents/skills/a/SKILL.md"
     assert summary.observed_tools == ("view_file",)
 
 
 def test_a_non_view_file_tool_carries_no_path() -> None:
-    """Verify non-file tools record None for path in tool attempt objects."""
+    """Verify non-file tools record None for path in tool call objects."""
     summary = parse_stream(agy_stream(tools=[("search_web", None)]))
-    assert summary.tool_attempts == (ToolAttempt(name="search_web", path=None),)
+    assert summary.tool_calls == (_tool_call("search_web", None),)
+    assert summary.tool_calls[0].path is None
 
 
 def test_repeated_identical_attempts_are_recorded_once() -> None:
@@ -272,7 +280,7 @@ def test_repeated_identical_attempts_are_recorded_once() -> None:
     summary = parse_stream(
         agy_stream(tools=[("view_file", "/a/SKILL.md"), ("view_file", "/a/SKILL.md")]),
     )
-    assert summary.tool_attempts == (ToolAttempt(name="view_file", path="/a/SKILL.md"),)
+    assert summary.tool_calls == (_tool_call("view_file", "/a/SKILL.md"),)
 
 
 @pytest.mark.parametrize(
@@ -396,7 +404,7 @@ def test_a_view_file_through_a_symlinked_workdir_survives(tmp_path) -> None:
     linked = tmp_path / "linked"
     linked.symlink_to(real)
     resident = frozenset({str((real / "SKILL.md").resolve())})
-    attempts = [ToolAttempt(name="view_file", path=str(linked / "SKILL.md"))]
+    attempts = [_tool_call("view_file", str(linked / "SKILL.md"))]
     assert _leaked_tools(attempts, resident, allowed_tools=("view_file",)) == ()
 
 
@@ -419,9 +427,9 @@ _STANDARD_ALLOWED_TOOLS = (
     [
         (
             [
-                ToolAttempt(name="search_web", path=None),
-                ToolAttempt(name="run_command", path=None),
-                ToolAttempt(name="unapproved_custom_tool", path=None),
+                _tool_call("search_web", None),
+                _tool_call("run_command", None),
+                _tool_call("unapproved_custom_tool", None),
             ],
             frozenset(),
             None,
@@ -430,20 +438,17 @@ _STANDARD_ALLOWED_TOOLS = (
         ),
         (
             [
-                ToolAttempt(name="finish", path=None),
-                ToolAttempt(name="view_file", path="/work/.agents/skills/a/SKILL.md"),
-                ToolAttempt(
-                    name="view_file",
-                    path="/work/.agents/skills/a/references/guide.md",
-                ),
-                ToolAttempt(name="list_dir", path="/work/.agents/skills"),
-                ToolAttempt(name="find_by_name", path="/work"),
-                ToolAttempt(name="grep_search", path="/work/.agents/skills/a"),
-                ToolAttempt(name="read_url_content", path="https://docs.cloud.google.com/foo"),
-                ToolAttempt(name="read_url", path="https://cloud.google.com/bar"),
-                ToolAttempt(name="run_command", path=None),
-                ToolAttempt(name="write_to_file", path=None),
-                ToolAttempt(name="search_web", path=None),
+                _tool_call("finish", None),
+                _tool_call("view_file", "/work/.agents/skills/a/SKILL.md"),
+                _tool_call("view_file", "/work/.agents/skills/a/references/guide.md"),
+                _tool_call("list_dir", "/work/.agents/skills"),
+                _tool_call("find_by_name", "/work"),
+                _tool_call("grep_search", "/work/.agents/skills/a"),
+                _tool_call("read_url_content", "https://docs.cloud.google.com/foo"),
+                _tool_call("read_url", "https://cloud.google.com/bar"),
+                _tool_call("run_command", None),
+                _tool_call("write_to_file", None),
+                _tool_call("search_web", None),
             ],
             frozenset({"/work/.agents/skills/a/SKILL.md"}),
             "/work",
@@ -451,14 +456,14 @@ _STANDARD_ALLOWED_TOOLS = (
             (),
         ),
         (
-            [ToolAttempt(name="view_file", path="/etc/passwd")],
+            [_tool_call("view_file", "/etc/passwd")],
             frozenset({"/work/.agents/skills/a/SKILL.md"}),
             None,
             ("view_file",),
             ("view_file",),
         ),
         (
-            [ToolAttempt(name="unapproved_custom_tool", path=None)],
+            [_tool_call("unapproved_custom_tool", None)],
             frozenset(),
             None,
             ("finish",),
@@ -466,8 +471,8 @@ _STANDARD_ALLOWED_TOOLS = (
         ),
         (
             [
-                ToolAttempt(name="list_dir", path="/etc"),
-                ToolAttempt(name="grep_search", path="/var/other"),
+                _tool_call("list_dir", "/etc"),
+                _tool_call("grep_search", "/var/other"),
             ],
             frozenset(),
             "/work",
@@ -475,14 +480,14 @@ _STANDARD_ALLOWED_TOOLS = (
             ("grep_search", "list_dir"),
         ),
         (
-            [ToolAttempt(name="list_dir", path="/work/.agents/skills")],
+            [_tool_call("list_dir", "/work/.agents/skills")],
             frozenset(),
             None,
             ("list_dir",),
             ("list_dir",),
         ),
         (
-            [ToolAttempt(name="search_web", path=None)],
+            [_tool_call("search_web", None)],
             frozenset(),
             None,
             ("finish", "view_file"),
@@ -491,7 +496,7 @@ _STANDARD_ALLOWED_TOOLS = (
     ],
 )
 def test_leaked_tools_sandbox_policy(
-    attempts: list[ToolAttempt],
+    attempts: list[ToolCallInfo],
     resident: frozenset[str],
     workdir: str | None,
     allowed_tools: tuple[str, ...] | None,
@@ -515,7 +520,10 @@ def test_constructing_the_agent_writes_the_closed_permission_policy(
     """Verify agent initialization creates isolated settings with default deny permissions."""
     AntigravityCliRuntime(options=AntigravityCliOptions(model="m", home_dir=home_dir))
     settings = read_isolated_settings(home_dir)
-    assert settings["permissions"]["deny"] == list(DENIED_PERMISSION_ACTIONS)
+    assert settings["permissions"]["deny"] == [
+        *DENIED_PERMISSION_ACTIONS,
+        f"read_file({home_dir.resolve() / '.config'})",
+    ]
     assert "experimental" not in settings
 
 
@@ -525,7 +533,7 @@ def test_configuring_model_provider_writes_it_at_construction(home_dir: Path) ->
         options=AntigravityCliOptions(
             model=DEFAULT_GEMINI_MODEL,
             home_dir=home_dir,
-            model_provider="gemini",
+            provider="gemini",
         ),
     )
     settings = read_isolated_settings(home_dir)
@@ -553,7 +561,10 @@ def test_isolated_settings_preserve_unrelated_keys(home_dir: Path) -> None:
     _ensure_isolated_settings(home_dir)
     settings = read_isolated_settings(home_dir)
     assert settings["security"] == {"auth": {"selectedType": "vertex-ai"}}
-    assert settings["permissions"]["deny"] == list(DENIED_PERMISSION_ACTIONS)
+    assert settings["permissions"]["deny"] == [
+        *DENIED_PERMISSION_ACTIONS,
+        f"read_file({home_dir.resolve() / '.config'})",
+    ]
 
 
 def test_a_stray_allow_rule_is_replaced_not_merged(home_dir: Path) -> None:
@@ -635,7 +646,7 @@ def test_install_does_not_clear_a_configured_model_provider(
         options=AntigravityCliOptions(
             model=DEFAULT_GEMINI_MODEL,
             home_dir=home_dir,
-            model_provider="gemini",
+            provider="gemini",
         ),
     )
     skills = load_skills(skill_repo)
@@ -1140,24 +1151,6 @@ def test_complete_extracts_structured_error_from_stdout_when_stderr_empty(
         generator.complete("draft me a query")
 
 
-@pytest.mark.parametrize(
-    ("input_model", "expected_model"),
-    [
-        ("gemini-flash-3.7-medium", "gemini-3.7-flash-medium"),
-        ("gemini-flash-3.7-low", "gemini-3.7-flash-low"),
-        ("gemini-flash-3.7-high", "gemini-3.7-flash-high"),
-        ("gemini-flash-3.7", "gemini-3.7-flash"),
-        ("gemini-3.7-flash-medium", "gemini-3.7-flash-medium"),
-        ("gemini-3.7-flash", "gemini-3.7-flash"),
-    ],
-)
-def test_normalize_agy_model(input_model: str, expected_model: str) -> None:
-    """Verify normalize_agy_model standardizes flash version ordering for agy CLI."""
-    from reach.runtime.antigravity_cli import normalize_agy_model
-
-    assert normalize_agy_model(input_model) == expected_model
-
-
 def test_build_command_defaults_to_profile_effort(home_dir: Path) -> None:
     """Verify build_command falls back to profile effort for gemini-3.8-flash."""
     runtime = AntigravityCliRuntime(
@@ -1395,7 +1388,10 @@ def test_antigravity_cli_generator_configures_isolated_settings(home_dir: Path) 
     AntigravityCliGenerator(options=AntigravityCliOptions(home_dir=home_dir))
     settings = read_isolated_settings(home_dir)
     assert "permissions" in settings
-    assert set(settings["permissions"]["deny"]) == set(DENIED_PERMISSION_ACTIONS)
+    assert settings["permissions"]["deny"] == [
+        *DENIED_PERMISSION_ACTIONS,
+        f"read_file({home_dir.resolve() / '.config'})",
+    ]
 
 
 def test_antigravity_cli_generator_build_env_syncs_keys_and_procs(home_dir: Path) -> None:
@@ -1438,15 +1434,6 @@ def test_antigravity_cli_registers_atexit_for_temp_home(
         instance.cleanup()
 
 
-def test_antigravity_cli_generator_normalized_model_delegates_to_normalize_agy_model() -> None:
-    """Verify AntigravityCliGenerator.normalized_model does not hardcode gemini-3.8-flash (5.D)."""
-    gen = AntigravityCliGenerator(model="gemini-2.5-flash")
-    try:
-        assert gen.normalized_model == "gemini-2.5-flash"
-    finally:
-        gen.cleanup()
-
-
 def test_antigravity_cli_runtime_clone_isolated_creates_distinct_home_dir(home_dir: Path) -> None:
     """Verify clone_isolated allocates a separate temporary home directory for worker isolation."""
     rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir))
@@ -1458,3 +1445,352 @@ def test_antigravity_cli_runtime_clone_isolated_creates_distinct_home_dir(home_d
         clone.cleanup()
         assert not clone.home_dir.exists()
         assert rt.home_dir.is_dir()
+
+
+def test_antigravity_cli_options_adc_vertex_and_constraints() -> None:
+    """Verify AntigravityCliOptions supports Vertex/ADC fields, strips strings, and round-trips."""
+    opts = AntigravityCliOptions(
+        vertex=True,
+        project="  my-gcp-project  ",
+        location="  us-central1  ",
+        go_max_procs=2,
+    )
+    assert opts.vertex is True
+    assert opts.project == "my-gcp-project"
+    assert opts.location == "us-central1"
+    assert opts.go_max_procs == 2
+
+    # Round-trip model_dump -> model_validate under extra="forbid"
+    round_tripped = AntigravityCliOptions.model_validate(opts.model_dump())
+    assert round_tripped == opts
+
+    with pytest.raises(ValidationError):
+        AntigravityCliOptions(go_max_procs=0)
+
+
+@pytest.mark.parametrize(
+    ("opt_kwargs", "env_vars", "expected_vertex", "expected_proj", "expected_loc"),
+    [
+        pytest.param(
+            {"vertex": True, "project": "p-vtx", "location": "eu"},
+            {},
+            True,
+            "p-vtx",
+            "eu",
+            id="explicit-vertex",
+        ),
+        pytest.param(
+            {"vertex": False},
+            {"AGY_ADC_AUTH": "true", "GOOGLE_CLOUD_PROJECT": "p-ambient"},
+            False,
+            None,
+            None,
+            id="explicit-vertex-false-overrides-env",
+        ),
+        pytest.param(
+            {},
+            {"AGY_ADC_AUTH": "true", "GOOGLE_CLOUD_QUOTA_PROJECT": "p-quota"},
+            True,
+            "p-quota",
+            "global",
+            id="env-agy-adc-auth-and-quota-project",
+        ),
+        pytest.param(
+            {},
+            {"GOOGLE_CLOUD_PROJECT": "p-ambient"},
+            True,
+            "p-ambient",
+            "global",
+            id="ambient-gcp-project-without-api-key",
+        ),
+    ],
+)
+def test_antigravity_cli_effective_adc_and_vertex_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    home_dir: Path,
+    opt_kwargs: dict[str, Any],
+    env_vars: dict[str, str],
+    expected_vertex: bool,
+    expected_proj: str | None,
+    expected_loc: str | None,
+) -> None:
+    """Verify AntigravityOptions resolves Vertex/ADC, project, and location across triggers."""
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, v)
+
+    rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir, **opt_kwargs))
+    assert rt.options.effective_vertex is expected_vertex
+    assert rt.options.effective_project == expected_proj
+    assert rt.options.effective_location == expected_loc
+    assert rt.options.effective_api_key is None
+
+
+def test_antigravity_cli_vertex_false_strips_ambient_adc_env_in_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    tmp_path: Path,
+    home_dir: Path,
+) -> None:
+    """Verify vertex=False strips AGY_ADC_AUTH and GOOGLE_APPLICATION_CREDENTIALS from build_env."""
+    host_adc = tmp_path / "host_adc.json"
+    host_adc.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("AGY_ADC_AUTH", "true")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(host_adc))
+
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, vertex=False, api_key="direct-key"),
+    )
+    env = rt.build_env()
+    assert "AGY_ADC_AUTH" not in env
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert env["GEMINI_API_KEY"] == "direct-key"
+    isolated_adc = home_dir / ".config" / "gcloud" / "application_default_credentials.json"
+    assert not isolated_adc.exists()
+
+
+def test_antigravity_cli_adc_omits_model_provider_when_ambient_gemini_key_present(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    home_dir: Path,
+) -> None:
+    """Verify ADC mode omits modelProvider: gemini in settings.json despite ambient API key."""
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-ai-studio-key")
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(
+            model=DEFAULT_GEMINI_MODEL,
+            home_dir=home_dir,
+            vertex=True,
+        ),
+    )
+    assert rt.options.resolve_model_provider(rt.model) is None
+    settings = read_isolated_settings(home_dir)
+    assert "modelProvider" not in settings
+
+
+@pytest.mark.parametrize("target_cls", [AntigravityCliRuntime, AntigravityCliGenerator])
+def test_antigravity_cli_adc_lazy_provisioning_env_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    tmp_path: Path,
+    home_dir: Path,
+    target_cls: type[AntigravityCliRuntime | AntigravityCliGenerator],
+) -> None:
+    """Verify ADC file is lazily provisioned with 0600 mode, syncs quota_project, and unlinks."""
+    host_adc = tmp_path / "host_adc.json"
+    host_payload = {
+        "type": "authorized_user",
+        "client_id": "test-client",
+        "quota_project_id": "stale-host-project",
+    }
+    host_adc.write_text(json.dumps(host_payload), encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(host_adc))
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-key-to-purge")
+    monkeypatch.setenv("GOOGLE_API_KEY", "ambient-google-key-to-purge")
+
+    opts = AntigravityCliOptions(
+        model=DEFAULT_GEMINI_MODEL,
+        home_dir=home_dir,
+        vertex=True,
+        project="override-project",
+        location="us",
+    )
+    instance = target_cls(options=opts)
+    isolated_adc = home_dir / ".config" / "gcloud" / "application_default_credentials.json"
+
+    # Must NOT be provisioned during __init__
+    assert not isolated_adc.exists()
+
+    env = instance.build_env()
+    assert isolated_adc.is_file()
+    assert (isolated_adc.stat().st_mode & 0o777) == 0o600
+    assert (isolated_adc.parent.stat().st_mode & 0o777) == 0o700
+
+    # Isolated copy updates quota_project_id while host file remains untouched
+    isolated_data = json.loads(isolated_adc.read_text(encoding="utf-8"))
+    assert isolated_data["quota_project_id"] == "override-project"
+    assert (
+        json.loads(host_adc.read_text(encoding="utf-8"))["quota_project_id"] == "stale-host-project"
+    )
+
+    assert env["AGY_ADC_AUTH"] == "true"
+    assert env["GOOGLE_CLOUD_PROJECT"] == "override-project"
+    assert env["GOOGLE_CLOUD_QUOTA_PROJECT"] == "override-project"
+    assert env["GOOGLE_CLOUD_LOCATION"] == "us"
+    assert env["GOOGLE_APPLICATION_CREDENTIALS"] == str(isolated_adc)
+    assert "GEMINI_API_KEY" not in env
+    assert "GOOGLE_API_KEY" not in env
+
+    # cleanup() unlinks isolated ADC even when home_dir was explicitly provided
+    instance.cleanup()
+    assert not isolated_adc.exists()
+    assert home_dir.is_dir()
+
+
+def test_antigravity_cli_adc_metadata_server_fallback_when_no_local_file(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    home_dir: Path,
+) -> None:
+    """Verify ADC mode succeeds without GOOGLE_APPLICATION_CREDENTIALS when no local file exists."""
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.setattr("reach.runtime.antigravity_cli.find_adc_path", lambda: None)
+
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, vertex=True, project="gce-proj"),
+    )
+    env = rt.build_env()
+    assert env["AGY_ADC_AUTH"] == "true"
+    assert env["GOOGLE_CLOUD_PROJECT"] == "gce-proj"
+    assert env["GOOGLE_CLOUD_QUOTA_PROJECT"] == "gce-proj"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+
+
+def test_antigravity_cli_adc_respects_blocked_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    tmp_path: Path,
+    home_dir: Path,
+) -> None:
+    """Verify blocked_env_vars prevents GOOGLE_APPLICATION_CREDENTIALS provisioning and export."""
+    from reach.config import RuntimeSettings
+
+    host_adc = tmp_path / "host_adc.json"
+    host_adc.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(host_adc))
+
+    rt = AntigravityCliRuntime(
+        settings=RuntimeSettings(
+            agent="antigravity-cli",
+            blocked_env_vars=("GOOGLE_APPLICATION_CREDENTIALS",),
+        ),
+        options=AntigravityCliOptions(home_dir=home_dir, vertex=True),
+    )
+    env = rt.build_env()
+    isolated_adc = home_dir / ".config" / "gcloud" / "application_default_credentials.json"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert not isolated_adc.exists()
+
+
+def test_antigravity_cli_post_install_rejects_home_dir_inside_skills_dir(
+    tmp_path: Path,
+) -> None:
+    """Verify _post_install raises ValueError if home_dir resides inside skills_dir(workdir)."""
+    workdir = tmp_path / "work"
+    bad_home = workdir / ".agents" / "skills" / "nested-home"
+    rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=bad_home))
+    with pytest.raises(ValueError, match="home_dir"):
+        rt._post_install(workdir)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "target_path"),
+    [
+        ("view_file", "/work/.agents/skills/a/.config/gcloud/application_default_credentials.json"),
+        ("view_file", "/work/.agents/skills/a/application_default_credentials.json"),
+        ("list_dir", "/work/.config/gcloud"),
+        ("grep_search", "/work/.gcloud"),
+        ("find_by_name", "/work/.config"),
+    ],
+)
+def test_leaked_tools_rejects_sensitive_credential_paths(
+    tool_name: str,
+    target_path: str,
+) -> None:
+    """Verify _leaked_tools flags any tool targeting .config, .gcloud, or ADC JSON files."""
+    attempts = [_tool_call(tool_name, target_path)]
+    resident = frozenset({"/work/.agents/skills/a/SKILL.md"})
+    assert _leaked_tools(
+        attempts,
+        resident,
+        workdir="/work",
+        allowed_tools=_STANDARD_ALLOWED_TOOLS,
+    ) == (tool_name,)
+
+
+@pytest.mark.parametrize(
+    ("raw_content", "project_override", "expected_text"),
+    [
+        pytest.param(
+            '{"type": "authorized_user", "quota_project_id": "orig"}',
+            None,
+            '{"type": "authorized_user", "quota_project_id": "orig"}',
+            id="no-project-override-copies-verbatim",
+        ),
+        pytest.param(
+            '["non-dict-json-array"]',
+            "new-proj",
+            '["non-dict-json-array"]',
+            id="non-dict-json-preserves-raw-bytes",
+        ),
+        pytest.param(
+            "{malformed-json",
+            "new-proj",
+            "{malformed-json",
+            id="malformed-json-preserves-raw-bytes",
+        ),
+    ],
+)
+def test_provision_isolated_adc_edge_cases_and_unlink_none(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    home_dir: Path,
+    raw_content: str,
+    project_override: str | None,
+    expected_text: str,
+) -> None:
+    """Verify _provision_isolated_adc handles non-dict/malformed JSON and None project."""
+    from reach.runtime.antigravity_cli import _provision_isolated_adc, _unlink_isolated_adc
+
+    host_adc = tmp_path / "host_adc.json"
+    host_adc.write_text(raw_content, encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(host_adc))
+
+    dst = _provision_isolated_adc(home_dir, project_override=project_override)
+    assert dst is not None
+    assert dst.read_text(encoding="utf-8") == expected_text
+    assert (dst.stat().st_mode & 0o777) == 0o600
+
+    # When src == dst and permissions are broad, preserve content and enforce 0600
+    dst.chmod(0o644)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(dst))
+    same_dst = _provision_isolated_adc(home_dir, project_override=None)
+    assert same_dst == dst
+    assert dst.read_text(encoding="utf-8") == expected_text
+    assert (dst.stat().st_mode & 0o777) == 0o600
+
+    # Verify _unlink_isolated_adc(None) is a safe no-op
+    _unlink_isolated_adc(None)
+    assert dst.is_file()
+    _unlink_isolated_adc(home_dir)
+    assert not dst.exists()
+
+
+def test_antigravity_cli_vertex_express_mode_with_explicit_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    home_dir: Path,
+) -> None:
+    """Verify vertex=True with explicit api_key preserves API key without ambient fallback."""
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "ambient-ignored-proj")
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(
+            home_dir=home_dir,
+            vertex=True,
+            api_key="express-key",
+        ),
+    )
+    assert rt.options.effective_vertex is True
+    assert rt.options.effective_api_key == "express-key"
+    assert rt.options.effective_project is None
+    assert rt.options.effective_location is None
+
+    env = rt.build_env()
+    assert env["AGY_ADC_AUTH"] == "true"
+    assert env["GEMINI_API_KEY"] == "express-key"
+    assert env["GOOGLE_API_KEY"] == "express-key"
+    assert "GOOGLE_CLOUD_QUOTA_PROJECT" not in env
+    assert "GOOGLE_CLOUD_LOCATION" not in env

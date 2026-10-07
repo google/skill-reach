@@ -152,14 +152,14 @@ def test_confirm_skill_execution_bypass_conditions(
     assert code == 0
 
 
-@pytest.mark.parametrize("env_var", ["REACH_YES", "REACH_FORCE"])
+@pytest.mark.parametrize("val", ["1", "true", "yes"])
 def test_confirm_bypass_via_environment_variables(
     test_console: Console,
     monkeypatch: pytest.MonkeyPatch,
-    env_var: str,
+    val: str,
 ) -> None:
-    """Verify REACH_YES=1 and REACH_FORCE=1 bypass confirmation prompts."""
-    monkeypatch.setenv(env_var, "1")
+    """Verify REACH_YES bypasses confirmation prompts across truthy values."""
+    monkeypatch.setenv("REACH_YES", val)
     code = confirm_skill_execution(
         test_console,
         runtime_name="pi",

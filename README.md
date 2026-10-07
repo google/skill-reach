@@ -72,25 +72,23 @@ export GEMINI_API_KEY="your-api-key"
 export GOOGLE_API_KEY="your-api-key"
 ```
 
-> [!NOTE]
-> `antigravity-cli` currently operates using Gemini Developer API keys (`GEMINI_API_KEY` or `GOOGLE_API_KEY`).
+### Google Cloud Agent Platform (Vertex AI / ADC)
 
-### Google Cloud Agent Platform
-
-When using Agent Platform enterprise infrastructure, authenticate with Application Default Credentials (ADC) and configure your project:
+When using Agent Platform enterprise infrastructure (`antigravity-cli` or `antigravity-sdk`), authenticate with Application Default Credentials (ADC) and configure your project:
 
 ```sh
-# 1. Authenticate with Google Cloud
-gcloud auth application-default login
+# 1. Authenticate with Google Cloud and bind quota project
+gcloud auth application-default login --project your-project-id
 
 # 2. Configure Agent Platform environment variables
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_CLOUD_LOCATION="global"
+export AGY_ADC_AUTH=true
 export GOOGLE_GENAI_USE_ENTERPRISE=true
 ```
 
 > [!NOTE]
-> `GOOGLE_GENAI_USE_ENTERPRISE=true` directs the Google Gen AI SDK to use enterprise Agent Platform endpoints (`aiplatform.googleapis.com`) with Cloud IAM rather than the Gemini Developer API. Setting `GOOGLE_CLOUD_LOCATION="global"` targets the global endpoint with automatic capacity routing.
+> Setting `AGY_ADC_AUTH=true` (for `antigravity-cli`), `GOOGLE_GENAI_USE_ENTERPRISE=true` (for `antigravity-sdk`), or `vertex = true` under `[runtime.options]` in `reach.toml` routes requests through enterprise Agent Platform / Vertex AI endpoints using Cloud IAM and ADC rather than Gemini Developer API keys. Setting `GOOGLE_CLOUD_LOCATION="global"` targets the global endpoint with automatic capacity routing.
 
 ### Anthropic Claude Code
 

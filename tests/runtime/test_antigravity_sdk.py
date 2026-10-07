@@ -930,17 +930,17 @@ def test_effective_vertex_and_project_location_resolution(monkeypatch: pytest.Mo
     rt = AntigravitySdkRuntime(
         options=AntigravitySdkOptions(vertex=True, project="p1", location="loc1"),
     )
-    assert rt.effective_vertex is True
-    assert rt.effective_project == "p1"
-    assert rt.effective_location == "loc1"
+    assert rt.options.effective_vertex is True
+    assert rt.options.effective_project == "p1"
+    assert rt.options.effective_location == "loc1"
 
     # Environment fallback
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "env-project")
     rt_env = AntigravitySdkRuntime(options=AntigravitySdkOptions())
-    assert rt_env.effective_vertex is True
-    assert rt_env.effective_project == "env-project"
-    assert rt_env.effective_location == "global"
+    assert rt_env.options.effective_vertex is True
+    assert rt_env.options.effective_project == "env-project"
+    assert rt_env.options.effective_location == "global"
 
 
 def test_express_vs_standard_mode_adc_key_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -951,17 +951,17 @@ def test_express_vs_standard_mode_adc_key_isolation(monkeypatch: pytest.MonkeyPa
 
     # Standard Mode (ADC): options.api_key is None
     rt = AntigravitySdkRuntime(options=AntigravitySdkOptions())
-    assert rt.effective_vertex is True
-    assert rt.effective_api_key is None
+    assert rt.options.effective_vertex is True
+    assert rt.options.effective_api_key is None
     env = rt.build_env()
     assert "GEMINI_API_KEY" not in env
     assert "GOOGLE_API_KEY" not in env
 
     # Express Mode: options.api_key is explicitly provided
     rt_express = AntigravitySdkRuntime(options=AntigravitySdkOptions(api_key="express-key"))
-    assert rt_express.effective_api_key == "express-key"
-    assert rt_express.effective_project is None
-    assert rt_express.effective_location is None
+    assert rt_express.options.effective_api_key == "express-key"
+    assert rt_express.options.effective_project is None
+    assert rt_express.options.effective_location is None
 
 
 def test_select_config_passes_vertex_and_project_location(tmp_path: Path) -> None:
@@ -1014,9 +1014,9 @@ def test_effective_project_and_location_none_when_vertex_is_false(
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-east1")
 
     rt = AntigravitySdkRuntime(options=AntigravitySdkOptions(vertex=False))
-    assert rt.effective_vertex is False
-    assert rt.effective_project is None
-    assert rt.effective_location is None
+    assert rt.options.effective_vertex is False
+    assert rt.options.effective_project is None
+    assert rt.options.effective_location is None
 
 
 def test_blocked_env_vars_strips_google_application_credentials_in_vertex(
@@ -1152,7 +1152,7 @@ def test_generator_effective_effort_guards_against_unsupported_models() -> None:
         options=AntigravitySdkOptions(model="gemini-2.5-flash", vertex=False),
     )
     assert gen25.effective_effort is None
-    assert gen25._target_model_spec("gemini-2.5-flash", "low") == "gemini-2.5-flash"
+    assert gen25.options.target_model_spec("gemini-2.5-flash", "low") == "gemini-2.5-flash"
 
     gen38 = AntigravitySdkGenerator(model="gemini-3.8-flash")
     assert gen38.effective_effort == "low"
@@ -1775,11 +1775,11 @@ def test_auto_enables_vertex_when_project_configured_and_no_api_key(
     resolved_rt = RunConfig.resolve(RuntimeSettings, cfg)
     driver = build_runtime(resolved_rt)
     assert isinstance(driver, AntigravitySdkRuntime)
-    assert driver.effective_vertex is True
-    assert driver.effective_project == "registry-fallback-proj"
-    assert driver.effective_location == "us-central1"
+    assert driver.options.effective_vertex is True
+    assert driver.options.effective_project == "registry-fallback-proj"
+    assert driver.options.effective_location == "us-central1"
 
     # When GEMINI_API_KEY is present and vertex is not explicitly set, Gemini API takes precedence
     monkeypatch.setenv("GEMINI_API_KEY", "test-dev-key")
-    assert driver.effective_vertex is False
-    assert driver.effective_api_key == "test-dev-key"
+    assert driver.options.effective_vertex is False
+    assert driver.options.effective_api_key == "test-dev-key"
