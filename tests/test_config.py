@@ -1853,3 +1853,6 @@ def test_runtime_settings_with_overrides_invalid_options_type_raises() -> None:
     base = RuntimeSettings(agent="claude-code")
     with pytest.raises(ValidationError):
         base.with_overrides(options="invalid-not-a-dict")
+
+    with pytest.raises(ValueError, match="Cannot set 'model' override when options is of type"):
+        base.with_overrides(model="claude-3-opus", options="invalid-not-a-dict")

@@ -35,6 +35,7 @@ from pydantic import (
     NonNegativeInt,
     PositiveInt,
     StringConstraints,
+    ValidationError,
     model_validator,
 )
 
@@ -258,19 +259,26 @@ class ScalingStudy(BaseModel):
 
         Raises:
             FileNotFoundError: If the target file does not exist.
-            ValueError: If the target path is not a regular file or contains invalid study data.
+            IsADirectoryError: If the target path is a directory.
+            ValueError: If the target path contains invalid study data.
         """
         p = Path(path).expanduser().resolve()
         if not p.exists():
             msg = f"Scaling study file not found: {p}"
             raise FileNotFoundError(msg)
-        if not p.is_file():
-            msg = f"Scaling study path is not a regular file: {p}"
-            raise ValueError(msg)
+        if p.is_dir():
+            msg = f"Scaling study path is a directory, not a file: {p}"
+            raise IsADirectoryError(msg)
         try:
-            return cls.model_validate_json(p.read_text(encoding="utf-8"))
-        except (ValueError, OSError) as err:
-            msg = f"Failed to load scaling study from {p}: {err}"
+            content = p.read_text(encoding="utf-8")
+        except OSError as err:
+            msg = f"Failed to read scaling study file at {p}: {err}"
+            raise OSError(msg) from err
+
+        try:
+            return cls.model_validate_json(content)
+        except (ValueError, ValidationError) as err:
+            msg = f"Failed to parse scaling study JSON from {p}: {err}"
             raise ValueError(msg) from err
 
     def save(self, path: Path | str) -> Path:

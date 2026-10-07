@@ -96,7 +96,7 @@ BUILTIN_AGENT_DEFAULT_MODELS: dict[str, str] = {
     "pi": DEFAULT_GEMINI_MODEL,
 }
 
-_ANTIGRAVITY_AGENTS: tuple[str, ...] = ("antigravity-cli", "antigravity-sdk")
+_ANTIGRAVITY_AGENTS: frozenset[str] = frozenset({"antigravity-cli", "antigravity-sdk"})
 
 
 def expand_path(value: object, base: Path | None = None) -> Path:
@@ -473,10 +473,10 @@ class RuntimeSettings(BaseModel):
         return resolved.model_dump(mode="json") if resolved is not None else {}
 
     def with_overrides(self, **overrides: object) -> RuntimeSettings:
-        """Return copy with overrides applied, discarding stale options when agent changes."""
+        """Return a copy with overrides applied, discarding stale options when the agent changes."""
         clean_overrides = {k: v for k, v in overrides.items() if v is not None}
         agent_specified = "agent" in clean_overrides
-        target_agent = str(clean_overrides.get("agent", self.agent))
+        target_agent = clean_overrides.get("agent", self.agent)
         same_agent = target_agent == self.agent
         model = clean_overrides.pop("model", None)
         base_opts: Any = dict(self.options) if same_agent else {}
@@ -485,7 +485,12 @@ class RuntimeSettings(BaseModel):
             base_opts.update(options_override)
         elif options_override is not None:
             base_opts = options_override
-        if model is not None and isinstance(base_opts, dict):
+
+        if model is not None and not isinstance(base_opts, dict):
+            opts_type = type(base_opts).__name__
+            msg = f"Cannot set 'model' override when options is of type {opts_type}"
+            raise ValueError(msg)
+        if model is not None:
             base_opts["model"] = model
 
         payload: dict[str, Any] = {

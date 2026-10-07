@@ -3343,12 +3343,12 @@ def test_scaling_study_load_raises_for_missing_or_invalid_file(tmp_path: Path) -
 
     directory = tmp_path / "somedir"
     directory.mkdir()
-    with pytest.raises(ValueError, match="Scaling study path is not a regular file"):
+    with pytest.raises(IsADirectoryError, match="Scaling study path is a directory"):
         ScalingStudy.load(directory)
 
     corrupt = tmp_path / "corrupt.json"
     corrupt.write_text("not json content", encoding="utf-8")
-    with pytest.raises(ValueError, match="Failed to load scaling study"):
+    with pytest.raises(ValueError, match="Failed to parse scaling study JSON"):
         ScalingStudy.load(corrupt)
 
 

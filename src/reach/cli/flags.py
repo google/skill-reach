@@ -809,7 +809,11 @@ def _opt_error_reason(
     failures = [
         f
         for f in error.errors()
-        if f["loc"] and (f["loc"][0] == "runtime" or any(str(part) in typed for part in f["loc"]))
+        if f.get("loc")
+        and (
+            f["loc"][0] == "runtime"
+            or any(isinstance(part, str) and part in typed for part in f["loc"])
+        )
     ]
     if not failures:
         return None
