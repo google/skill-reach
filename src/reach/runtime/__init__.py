@@ -155,7 +155,12 @@ class AntigravityOptions(VertexOptions):
 
     @property
     def effective_vertex(self) -> bool:
-        """Return True if Vertex AI / Enterprise ADC mode is active."""
+        """Return True if Vertex AI / Enterprise ADC mode is active.
+
+        When vertex is not explicitly set and no Vertex toggle env var is active,
+        ambient GEMINI_API_KEY / GOOGLE_API_KEY takes precedence over implicit
+        GOOGLE_CLOUD_PROJECT detection.
+        """
         if self.vertex is not None:
             return self.vertex
         if has_agy_vertex_env(os.environ):
@@ -167,7 +172,12 @@ class AntigravityOptions(VertexOptions):
 
     @property
     def effective_project(self) -> str | None:
-        """Return resolved Google Cloud project ID when Vertex/ADC is active."""
+        """Return resolved Google Cloud project ID when Vertex/ADC is active.
+
+        When api_key is explicitly set alongside Vertex (Express Mode), omit
+        ambient/registry project fallback because VertexEndpoint forbids combining
+        api_key with regional project/location parameters.
+        """
         if not self.effective_vertex:
             return None
         if self.api_key:
@@ -176,7 +186,12 @@ class AntigravityOptions(VertexOptions):
 
     @property
     def effective_location(self) -> str | None:
-        """Return resolved Google Cloud location when Vertex/ADC is active."""
+        """Return resolved Google Cloud location when Vertex/ADC is active.
+
+        When api_key is explicitly set alongside Vertex (Express Mode), omit
+        ambient/registry location fallback because VertexEndpoint forbids combining
+        api_key with regional project/location parameters.
+        """
         if not self.effective_vertex:
             return None
         if self.api_key:

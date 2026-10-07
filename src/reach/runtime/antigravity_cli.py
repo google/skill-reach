@@ -107,6 +107,8 @@ def _provision_isolated_adc(
         return None
     dst = _isolated_adc_path(home_dir)
     ensure_private_directory(dst.parent)
+    if dst.is_symlink():
+        dst.unlink()
     if resolve_path(src) != dst or project_override:
         raw_bytes = src.read_bytes()
         if project_override:
@@ -117,10 +119,14 @@ def _provision_isolated_adc(
                     raw_bytes = json.dumps(payload, indent=2).encode("utf-8")
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
-        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(dst, flags, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as handle:
             handle.write(raw_bytes)
-    dst.chmod(0o600)
+    if not dst.is_symlink():
+        dst.chmod(0o600)
     return dst
 
 
@@ -281,21 +287,36 @@ _SENSITIVE_CREDENTIAL_PATH_PARTS: frozenset[str] = frozenset(
 )
 
 
-def _is_sensitive_credential_path(path_str: str | None) -> bool:
+def _is_sensitive_credential_path(
+    path_str: str | None,
+    home_dir: Path | None = None,
+) -> bool:
     """Return True if a raw or resolved path references sensitive credential locations."""
     if not path_str:
         return False
-    raw_parts = set(Path(path_str).parts)
-    resolved_parts = set(resolve_path(path_str).parts)
+    raw_path = Path(path_str)
+    resolved = resolve_path(path_str)
+    if home_dir is not None:
+        cfg_root = resolve_path(home_dir) / ".config"
+        if resolved == cfg_root or resolved.is_relative_to(cfg_root):
+            return True
+    raw_parts = set(raw_path.parts)
+    resolved_parts = set(resolved.parts)
     return bool((raw_parts | resolved_parts) & _SENSITIVE_CREDENTIAL_PATH_PARTS)
 
 
-def _is_inspection_tool_allowed(attempt: ToolCallInfo, workdir: Path | None) -> bool:
+def _is_inspection_tool_allowed(
+    attempt: ToolCallInfo,
+    workdir: Path | None,
+    home_dir: Path | None = None,
+) -> bool:
     """Determine whether an inspection tool path complies with workspace sandbox."""
     if workdir is None:
         return False
     if attempt.path is None:
         return True
+    if _is_sensitive_credential_path(attempt.path, home_dir=home_dir):
+        return False
     resolved = resolve_path(attempt.path)
     return resolved == workdir or resolved.is_relative_to(workdir)
 
@@ -305,11 +326,12 @@ def _is_tool_allowed(
     resident_bases: Sequence[Path],
     workdir: Path | None,
     allowed_tools: frozenset[str],
+    home_dir: Path | None = None,
 ) -> bool:
     """Determine whether a single tool attempt complies with sandbox policies."""
     if attempt.name not in allowed_tools:
         return False
-    if _is_sensitive_credential_path(attempt.path):
+    if _is_sensitive_credential_path(attempt.path, home_dir=home_dir):
         return False
 
     if attempt.name == VIEW_TOOL:
@@ -319,7 +341,7 @@ def _is_tool_allowed(
         return any(resolved.is_relative_to(base) for base in resident_bases)
 
     if attempt.name in INSPECTION_TOOLS:
-        return _is_inspection_tool_allowed(attempt, workdir)
+        return _is_inspection_tool_allowed(attempt, workdir, home_dir=home_dir)
 
     return True
 
@@ -329,6 +351,7 @@ def _leaked_tools(
     resident_dirs: Iterable[Path | str],
     workdir: Path | str | None = None,
     allowed_tools: Iterable[str] | None = None,
+    home_dir: Path | None = None,
 ) -> tuple[str, ...]:
     """Identify tool calls that violate sandbox isolation boundaries."""
     if allowed_tools is None:
@@ -342,7 +365,13 @@ def _leaked_tools(
     leaked = {
         attempt.name
         for attempt in attempts
-        if not _is_tool_allowed(attempt, resolved_bases, resolved_workdir, allowed_set)
+        if not _is_tool_allowed(
+            attempt,
+            resolved_bases,
+            resolved_workdir,
+            allowed_set,
+            home_dir=home_dir,
+        )
     }
     return tuple(sorted(leaked))
 
@@ -693,6 +722,7 @@ class AntigravityCliRuntime(
             self.resident_skill_paths(workdir),
             workdir=resolve_path(workdir),
             allowed_tools=allowed,
+            home_dir=self.home_dir,
         )
         if leaked:
             return f"tool leak: {', '.join(leaked)}"

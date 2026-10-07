@@ -1794,3 +1794,48 @@ def test_antigravity_cli_vertex_express_mode_with_explicit_api_key(
     assert env["GOOGLE_API_KEY"] == "express-key"
     assert "GOOGLE_CLOUD_QUOTA_PROJECT" not in env
     assert "GOOGLE_CLOUD_LOCATION" not in env
+
+
+def test_provision_isolated_adc_replaces_symlink_without_overwriting_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    home_dir: Path,
+) -> None:
+    """Verify _provision_isolated_adc unlinks pre-existing symlinks without modifying targets."""
+    from reach.runtime.antigravity_cli import _isolated_adc_path, _provision_isolated_adc
+
+    host_adc = tmp_path / "host_adc.json"
+    host_adc.write_text('{"type": "authorized_user"}', encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(host_adc))
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do-not-overwrite", encoding="utf-8")
+
+    dst = _isolated_adc_path(home_dir)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.symlink_to(victim)
+
+    provisioned = _provision_isolated_adc(home_dir, project_override="safe-proj")
+    assert provisioned == dst
+    assert not dst.is_symlink()
+    assert victim.read_text(encoding="utf-8") == "do-not-overwrite"
+    assert json.loads(dst.read_text(encoding="utf-8"))["quota_project_id"] == "safe-proj"
+    assert (dst.stat().st_mode & 0o777) == 0o600
+
+
+def test_is_sensitive_credential_path_with_home_dir(tmp_path: Path, home_dir: Path) -> None:
+    """Verify _is_sensitive_credential_path detects paths inside home_dir/.config."""
+    from reach.runtime.antigravity_cli import _is_sensitive_credential_path
+
+    cfg_file = home_dir / ".config" / "custom" / "token.json"
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg_file.write_text("{}", encoding="utf-8")
+
+    safe_file = tmp_path / "workspace" / "SKILL.md"
+    safe_file.parent.mkdir(parents=True, exist_ok=True)
+    safe_file.write_text("# Skill", encoding="utf-8")
+
+    assert _is_sensitive_credential_path(str(cfg_file), home_dir=home_dir) is True
+    assert _is_sensitive_credential_path(str(home_dir / ".config"), home_dir=home_dir) is True
+    assert _is_sensitive_credential_path(str(safe_file), home_dir=home_dir) is False
+    assert _is_sensitive_credential_path(None, home_dir=home_dir) is False
