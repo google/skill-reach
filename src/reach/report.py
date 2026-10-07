@@ -208,7 +208,7 @@ def _query_row(record: QueryRecord) -> list[object]:
     return [
         record.query_id,
         record.kind or "",
-        record.expected,
+        record.expected_skill,
         record.hits,
         record.probes,
         "yes" if record.clean else "no",

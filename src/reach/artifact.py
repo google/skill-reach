@@ -32,7 +32,7 @@ from pydantic import (
     model_validator,
 )
 
-from reach._io import write_model
+from reach._io import read_model, write_model
 from reach.catalog import corpus_digest, resident_skills
 from reach.config import RunConfig, resolve_path
 from reach.difficulty import LexicalRank, lexical_ranks
@@ -129,6 +129,7 @@ class SkillScore(BaseModel):
 
     skill: str
     root: Path | None = None
+    attempts: Annotated[int, Field(ge=1)] = 1
     probes: int = Field(ge=0)
     reached: int = Field(ge=0)
     recall: float | None = None
@@ -136,45 +137,45 @@ class SkillScore(BaseModel):
     trajectory_recall: float | None = None
     absorbed: int = Field(default=0, ge=0)
     precision: float | None = None
-    attempts: Annotated[int, Field(ge=1)] = 1
 
     @model_validator(mode="after")
     def _rates_agree_with_their_counts(self) -> Self:
         """Tie each rate to the count it was taken over, in both directions."""
+        if self.trajectory_reached < self.reached:
+            msg = (
+                f"{self.skill}: trajectory_reached ({self.trajectory_reached}) cannot "
+                f"be less than reached ({self.reached})"
+            )
+            raise ValueError(msg)
+        if self.reached > self.probes:
+            msg = f"{self.skill}: reached ({self.reached}) cannot exceed probes ({self.probes})"
+            raise ValueError(msg)
+        if self.trajectory_reached > self.probes:
+            msg = (
+                f"{self.skill}: trajectory_reached ({self.trajectory_reached}) cannot "
+                f"exceed probes ({self.probes})"
+            )
+            raise ValueError(msg)
         if (self.probes > 0) != (self.recall is not None):
             msg = (
                 f"{self.skill}: recall is defined exactly when a query named the "
                 f"skill; got recall={self.recall} over {self.probes} probes"
             )
-            raise ValueError(
-                msg,
-            )
-        if self.trajectory_reached < self.reached:
-            object.__setattr__(self, "trajectory_reached", self.reached)
-        if self.probes > 0 and self.trajectory_recall is None:
-            object.__setattr__(
-                self,
-                "trajectory_recall",
-                self.trajectory_reached / self.probes,
-            )
+            raise ValueError(msg)
         if (self.probes > 0) != (self.trajectory_recall is not None):
             msg = (
                 f"{self.skill}: trajectory_recall is defined exactly when a query "
                 f"named the skill; got trajectory_recall={self.trajectory_recall} "
                 f"over {self.probes} probes"
             )
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
         if (self.reached + self.absorbed > 0) != (self.precision is not None):
             msg = (
                 f"{self.skill}: precision is defined exactly when the skill was "
                 f"selected; got precision={self.precision} over "
                 f"{self.reached + self.absorbed} selections"
             )
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
         return self
 
     @computed_field
@@ -210,14 +211,16 @@ class SkillScore(BaseModel):
     ) -> SkillScore:
         """Construct a SkillScore model from ClassMetrics and optional root path."""
         selected = metrics.true_positives + metrics.false_positives
+        traj_reached = max(metrics.trajectory_true_positives, metrics.true_positives)
+        traj_recall = (traj_reached / metrics.support) if metrics.support else None
         return cls(
             skill=metrics.label,
             root=root,
             probes=metrics.support,
             reached=metrics.true_positives,
             recall=metrics.recall if metrics.support else None,
-            trajectory_reached=metrics.trajectory_true_positives,
-            trajectory_recall=metrics.trajectory_recall if metrics.support else None,
+            trajectory_reached=traj_reached,
+            trajectory_recall=traj_recall,
             absorbed=metrics.false_positives,
             precision=metrics.precision if selected else None,
             attempts=attempts if attempts is not None else metrics.attempts,
@@ -268,10 +271,10 @@ class QueryRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    query_id: str
-    text: str
+    query_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
     kind: QueryKind | None = None
-    expected: str
+    expected_skill: str
     probes: int = Field(default=0, ge=0)
     hits: int = Field(default=0, ge=0)
     selections: tuple[str, ...] = ()
@@ -473,9 +476,15 @@ class RunProvenance(BaseModel):
 class Artifact(BaseModel):
     """Represent complete evaluation results, summary scores, and provenance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # 1. Schema & Metadata
     schema_version: str = SCHEMA_VERSION
+    catalog_id: str
+    catalog_mode: CatalogMode
+    catalog_size: int = Field(ge=0)
+    catalog_target: str | None = None
+    provenance: RunProvenance
     digests: Provenance = Field(
         description="Configuration fingerprint, corpus digest, and query set digest.",
     )
@@ -483,28 +492,31 @@ class Artifact(BaseModel):
         default=(),
         description="Provenance digests corroborated by individual probe results.",
     )
-    provenance: RunProvenance
-    catalog_id: str
-    catalog_mode: CatalogMode
-    catalog_size: int = Field(ge=0)
-    catalog_target: str | None = None
     resolved_roots: tuple[ResolvedRoot, ...] = ()
     contested_skills: tuple[ContestedSkill, ...] = Field(
         default=(),
         description="Skills provided by multiple roots and resolved by precedence.",
     )
-    skills: tuple[SkillScore, ...] = Field(
-        default=(),
-        description="Per-skill evaluation scores in catalog order.",
-    )
+
+    # 2. Executive scores
     scores: RunScores
     spread: Spread
-    confusion: tuple[ConfusionPair, ...] = ()
-    queries: tuple[QueryRecord, ...] = ()
+
+    # 3. Run accounting counters
     probes: int = Field(default=0, ge=0)
     errors: int = Field(default=0, ge=0)
     spend_usd: float = Field(default=0.0, ge=0.0)
     reused: int = Field(default=0, ge=0)
+
+    # 4. Diagnostics
+    confusion: tuple[ConfusionPair, ...] = ()
+
+    # 5. Leaf collections at the bottom
+    skills: tuple[SkillScore, ...] = Field(
+        default=(),
+        description="Per-skill evaluation scores in catalog order.",
+    )
+    queries: tuple[QueryRecord, ...] = ()
 
     @field_validator("schema_version")
     @classmethod
@@ -605,22 +617,22 @@ def _resolve_subset_queries(query_set: QuerySet, subset: QuerySet | None) -> lis
     """Validate and extract subset queries against the parent QuerySet."""
     if subset is None:
         return list(query_set.queries)
-    by_id = {q.id: q for q in query_set.queries}
-    missing = sorted(q.id for q in subset.queries if q.id not in by_id)
+    by_id = {q.query_id: q for q in query_set.queries}
+    missing = sorted(q.query_id for q in subset.queries if q.query_id not in by_id)
     if missing:
         msg = f"subset queries not present in query set: {missing}"
         raise ValueError(msg)
     for sq in subset.queries:
-        full_q = by_id[sq.id]
+        full_q = by_id[sq.query_id]
         if sq.truth_label != full_q.truth_label or frozenset(sq.acceptable_skills) != frozenset(
             full_q.acceptable_skills
         ):
             msg = (
-                f"ground truth mismatch for query {sq.id!r}: query set expected "
+                f"ground truth mismatch for query {sq.query_id!r}: query set expected "
                 f"{full_q.truth_label!r}, subset expected {sq.truth_label!r}"
             )
             raise ValueError(msg)
-    return [by_id[sq.id] for sq in subset.queries]
+    return [by_id[sq.query_id] for sq in subset.queries]
 
 
 def filter_query_set(
@@ -644,11 +656,11 @@ def filter_query_set(
         queries = [q for q in queries if any(_query_matches_skill(q, pat) for pat in filter_skill)]
 
     for pat in filter_id:
-        if not any(fnmatchcase(q.id, pat) for q in queries):
+        if not any(fnmatchcase(q.query_id, pat) for q in queries):
             msg = f"query slice matched 0 queries for filter_id pattern {pat!r}"
             raise ValueError(msg)
     if filter_id:
-        queries = [q for q in queries if any(fnmatchcase(q.id, pat) for pat in filter_id)]
+        queries = [q for q in queries if any(fnmatchcase(q.query_id, pat) for pat in filter_id)]
     if not queries:
         msg = "query slice matched 0 queries"
         raise ValueError(msg)
@@ -685,9 +697,9 @@ def _is_artifact(path: Path) -> bool:
     return True
 
 
-def read_artifact(path: Path) -> Artifact:
-    """Read and validate a Artifact from a JSON file."""
-    return Artifact.model_validate_json(Path(path).read_text(encoding="utf-8"))
+def read_artifact(path: Path | str) -> Artifact:
+    """Read and validate an Artifact from a JSON file."""
+    return read_model(Artifact, path)
 
 
 def _named_root(corpus: Path | None) -> tuple[Path, ...]:
@@ -812,8 +824,8 @@ def _confusion_pairs(
     limit: int,
 ) -> tuple[ConfusionPair, ...]:
     """Compute confusion pairs and attach sample queries."""
-    texts = {query.id: query.text for query in queries}
-    truth = {query.id: query for query in queries}
+    texts = {query.query_id: query.text for query in queries}
+    truth = {query.query_id: query for query in queries}
     counts = confusion(results, queries)
     collided = collisions(results, queries)
 
@@ -882,8 +894,10 @@ def _spread(
     )
     outcomes_by_skill: dict[str, list[float]] = {}
     for record in records:
-        if record.probes > 0 and record.expected != NO_SKILL:
-            outcomes_by_skill.setdefault(record.expected, []).append(record.hits / record.probes)
+        if record.probes > 0 and record.expected_skill != NO_SKILL:
+            outcomes_by_skill.setdefault(record.expected_skill, []).append(
+                record.hits / record.probes
+            )
     return Spread(
         replicates=len(scores),
         top1_by_attempt=scores,
@@ -907,21 +921,21 @@ def _query_records(
             grouped.setdefault(row.query_id, []).append(row)
 
     records = []
-    for query in sorted(queries, key=lambda q: q.id):
-        usable = grouped.get(query.id, [])
+    for query in sorted(queries, key=lambda q: q.query_id):
+        usable = grouped.get(query.query_id, [])
         records.append(
             QueryRecord(
-                query_id=query.id,
+                query_id=query.query_id,
                 text=query.text,
                 kind=query.kind,
-                expected=query.truth_label,
+                expected_skill=query.truth_label,
                 probes=len(usable),
                 hits=sum(
                     1 for row in usable if query.matches_skill(query.effective_invoked_skill(row))
                 ),
                 selections=tuple(sorted({row.predicted_label for row in usable})),
-                difficulty_rank=(rank.position if (rank := ranks.get(query.id)) else None),
-                leak=flags.get(query.id),
+                difficulty_rank=(rank.position if (rank := ranks.get(query.query_id)) else None),
+                leak=flags.get(query.query_id),
             ),
         )
     return tuple(records)

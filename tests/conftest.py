@@ -66,6 +66,7 @@ from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
 from reach.retrieval import K1, B, skill_text, tokenize
 from reach.run import Composition, append_result, compose, write_sidecar
 from reach.runtime.fake import FakeGenerator, FakeRuntime, register_fake_agent
+from reach.uncertainty import Interval
 from reach.views import build_console
 
 # ==============================================================================
@@ -517,13 +518,13 @@ def synthetic_skills_repo(tmp_path: Path) -> Path:
 
 _DEFAULT_QUERIES: tuple[Query, ...] = (
     Query(
-        id="q-lifecycle",
+        query_id="q-lifecycle",
         text="Tier old objects to Coldline after 30 days.",
         kind=QueryKind.IMPLICIT,
         expected_skill="gcs-lifecycle-rules",
     ),
     Query(
-        id="q-retention",
+        query_id="q-retention",
         text="Keep audit logs for seven years for compliance.",
         kind=QueryKind.NEIGHBOR_NEGATIVE,
         expected_skill="gcs-retention-policy",
@@ -554,7 +555,7 @@ def query_file(
 
 _DEFAULT_EXCHANGE_QUERIES: tuple[Query, ...] = (
     Query(
-        id="x-lifecycle",
+        query_id="x-lifecycle",
         text="Tier old objects to Coldline after 30 days.",
         kind=QueryKind.IMPLICIT,
         expected_skill="gcs-lifecycle-rules",
@@ -562,17 +563,17 @@ _DEFAULT_EXCHANGE_QUERIES: tuple[Query, ...] = (
         notes="A neutral router may run before the target skill.",
     ),
     Query(
-        id="x-unlabeled",
+        query_id="x-unlabeled",
         text="Our cluster keeps evicting pods.",
         expected_skill="gke-basics",
     ),
     Query(
-        id="x-abstain",
+        query_id="x-abstain",
         text="What is the capital of France?",
         kind=QueryKind.OUT_OF_SCOPE,
     ),
     Query(
-        id="x-punctuated",
+        query_id="x-punctuated",
         text='Delete "cold" objects, then archive\nwhatever is left.',
         kind=QueryKind.CONTEXTUAL,
         expected_skill="gcs-lifecycle-rules",
@@ -616,10 +617,18 @@ def write_queries(tmp_path: Path) -> Callable[..., Path]:
         path = q_dir / filename
 
         if queries is not None and queries and isinstance(queries[0], dict):
+            normalized_queries = [
+                (
+                    {"query_id": q["id"], **{k: v for k, v in q.items() if k != "id"}}
+                    if isinstance(q, dict) and "id" in q and "query_id" not in q
+                    else q
+                )
+                for q in queries
+            ]
             payload = json.dumps(
                 {
                     "catalog_id": catalog_id,
-                    "queries": queries,
+                    "queries": normalized_queries,
                     "provenance": {"origin": "authored"},
                 },
             )
@@ -630,7 +639,7 @@ def write_queries(tmp_path: Path) -> Callable[..., Path]:
                 if queries is not None
                 else tuple(
                     Query(
-                        id=f"q-{i}",
+                        query_id=f"q-{i}",
                         text=f"Sample query {i} for {target}",
                         expected_skill=target,
                     )
@@ -658,12 +667,12 @@ def synthetic_query_file(tmp_path: Path, write_queries: Callable[..., Path]) -> 
     """Write a synthetic query set targeting skills in synthetic_skills_repo."""
     queries = (
         Query(
-            id="q-run-1",
+            query_id="q-run-1",
             text="How do I deploy a containerized service to Cloud Run?",
             expected_skill="cloud-run-basics",
         ),
         Query(
-            id="q-run-2",
+            query_id="q-run-2",
             text="Can I set concurrency limits on my Cloud Run service?",
             expected_skill="cloud-run-basics",
         ),
@@ -836,12 +845,12 @@ def mock_subprocess(
 
 
 @pytest.fixture
-def make_result() -> Callable[..., ProbeResult]:
+def make_result(make_probe_result: Callable[..., ProbeResult]) -> Callable[..., ProbeResult]:
     """Return factory function creating ProbeResult models with default catalog parameters."""
 
     def _make(
-        query_id: str,
-        invoked: str | None,
+        query_id: str = "q1",
+        invoked: str | None = None,
         attempt: int = 1,
         error: str | None = None,
         fingerprint: str = "",
@@ -849,21 +858,27 @@ def make_result() -> Callable[..., ProbeResult]:
         queries: str = "",
         reasoning: tuple[str, ...] = (),
         runtime: str = "fake",
+        **kwargs: Any,
     ) -> ProbeResult:
-        return ProbeResult(
+        catalog_id = kwargs.pop("catalog_id", "fixture")
+        catalog_mode = kwargs.pop("catalog_mode", CatalogMode.ALL)
+        catalog_size = kwargs.pop("catalog_size", 4)
+        model = kwargs.pop("model", "sonnet")
+        return make_probe_result(
             query_id=query_id,
-            catalog_id="fixture",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=4,
-            model="sonnet",
+            catalog_id=catalog_id,
+            catalog_mode=catalog_mode,
+            catalog_size=catalog_size,
+            model=model,
             runtime=runtime,
             attempt=attempt,
-            invoked_skills=(invoked,) if invoked is not None else (),
+            invoked=invoked,
             error=error,
             config_fingerprint=fingerprint,
             condition_digest=condition,
             queries_digest=queries,
             reasoning=reasoning,
+            **kwargs,
         )
 
     return _make
@@ -931,7 +946,7 @@ def make_paired_results() -> Callable[
                 qid = f"q-{prefix}-{i}"
                 queries.append(
                     Query(
-                        id=qid,
+                        query_id=qid,
                         text=f"{label} {i}",
                         kind=QueryKind.IMPLICIT,
                         expected_skill="skill-a",
@@ -1036,7 +1051,7 @@ def out_of_scope_artifact(
 ) -> Artifact:
     """Return an assembled Artifact containing exclusively out-of-scope queries."""
     oos_query = Query(
-        id="q-oos",
+        query_id="q-oos",
         text="Out of scope query",
         kind=QueryKind.OUT_OF_SCOPE,
         expected_skill=None,
@@ -1061,30 +1076,30 @@ def out_of_scope_artifact(
 #: Ground truth query specifications for standard metric verification tests.
 WORKED_QUERIES = (
     Query(
-        id="wq-cost",
+        query_id="wq-cost",
         text="Where is our spend going?",
         kind=QueryKind.IMPLICIT,
         expected_skill="waf-cost",
     ),
     Query(
-        id="wq-sec",
+        query_id="wq-sec",
         text="Harden our perimeter.",
         kind=QueryKind.NEIGHBOR_NEGATIVE,
         expected_skill="waf-security",
     ),
     Query(
-        id="wq-rel",
+        query_id="wq-rel",
         text="Survive a zonal outage.",
         kind=QueryKind.IMPLICIT,
         expected_skill="waf-reliability",
     ),
     Query(
-        id="wq-oos",
+        query_id="wq-oos",
         text="What is the capital of France?",
         kind=QueryKind.OUT_OF_SCOPE,
     ),
     Query(
-        id="wq-sus",
+        query_id="wq-sus",
         text="Cut the carbon footprint of these workloads.",
         kind=QueryKind.IMPLICIT,
         expected_skill="waf-sustainability",
@@ -1160,7 +1175,7 @@ def matches_sklearn() -> Callable[..., None]:
     """Provide a helper verifying Reach metrics against scikit-learn implementations."""
 
     def _assert(results: Any, queries: Any, labels: Any = None) -> None:
-        truth = {q.id: q for q in queries}
+        truth = {q.query_id: q for q in queries}
         pairs = [(truth[r.query_id], r) for r in results if not r.error]
         y_true = [q.truth_label for q, _ in pairs]
         y_pred = [q.effective_predicted_label(r) for q, r in pairs]
@@ -1409,12 +1424,12 @@ def integration_workspace(tmp_path: Path) -> IntegrationWorkspace:
         ),
         queries=(
             Query(
-                id="q-copy",
+                query_id="q-copy",
                 text="Please use file-copier to duplicate this directory",
                 expected_skill="file-copier",
             ),
             Query(
-                id="q-compress",
+                query_id="q-compress",
                 text="Use file compressor to archive these documents",
                 expected_skill="file-compressor",
             ),
@@ -1689,7 +1704,7 @@ def make_scaling_point() -> Callable[..., Any]:
             "scale": 10,
             "catalog_id": "test-cat",
             "pass_rate": 1.0,
-            "pass_rate_interval": (0.8, 1.0),
+            "pass_rate_interval": Interval(low=0.8, high=1.0),
             "delta_vs_baseline": 0.0,
             "delta_abstention": 0.0,
             "delta_collision": 0.0,
@@ -1698,6 +1713,14 @@ def make_scaling_point() -> Callable[..., Any]:
             "probes_errored": errored,
         }
         defaults.update(kwargs)
+        for interval_field in (
+            "pass_rate_interval",
+            "recall_interval",
+            "precision_interval",
+            "f1_interval",
+        ):
+            if interval_field in defaults and isinstance(defaults[interval_field], (tuple, list)):
+                defaults[interval_field] = Interval.from_tuple(defaults[interval_field])
         return ScalingPoint(**defaults)
 
     return _factory
@@ -1711,26 +1734,26 @@ def sample_two_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any]
             scale=10,
             catalog_id="c1",
             pass_rate=1.0,
-            pass_rate_interval=(0.7, 1.0),
+            pass_rate_interval=Interval(low=0.7, high=1.0),
             recall=1.0,
-            recall_interval=(0.7, 1.0),
+            recall_interval=Interval(low=0.7, high=1.0),
             precision=1.0,
-            precision_interval=(0.7, 1.0),
+            precision_interval=Interval(low=0.7, high=1.0),
             f1_score=1.0,
-            f1_interval=(1.0, 1.0),
+            f1_interval=Interval(low=1.0, high=1.0),
             in_scope_probes=10,
         ),
         make_scaling_point(
             scale=25,
             catalog_id="c2",
             pass_rate=0.5,
-            pass_rate_interval=(0.2, 0.8),
+            pass_rate_interval=Interval(low=0.2, high=0.8),
             recall=0.5,
-            recall_interval=(0.2, 0.8),
+            recall_interval=Interval(low=0.2, high=0.8),
             precision=0.55,
-            precision_interval=(0.2, 0.8),
+            precision_interval=Interval(low=0.2, high=0.8),
             f1_score=0.52,
-            f1_interval=(0.2, 0.8),
+            f1_interval=Interval(low=0.2, high=0.8),
             in_scope_probes=10,
             delta_vs_baseline=0.5,
             delta_abstention=0.1,
@@ -1760,9 +1783,9 @@ def make_scaling_study(sample_two_scale_points: list[Any]) -> Callable[..., Any]
             "knee_scale": None,
             "baseline_pass_rate": baseline_rate,
             "final_pass_rate": final_rate,
-            "total_delta": round(baseline_rate - final_rate, 4),
-            "total_abstention_loss": 0.0,
-            "total_collision_loss": 0.0,
+            "delta_total": round(baseline_rate - final_rate, 4),
+            "delta_abstention": 0.0,
+            "delta_collision": 0.0,
             "total_corpus_skills": max(scales_tuple) if scales_tuple else 50,
         }
         defaults.update(kwargs)
@@ -1775,7 +1798,7 @@ def make_scaling_study(sample_two_scale_points: list[Any]) -> Callable[..., Any]
 def sample_scaling_study(make_scaling_study: Callable[..., Any]) -> Any:
     """Provide a sample ScalingStudy fixture with 2 scales."""
     return make_scaling_study(
-        total_abstention_loss=0.1,
-        total_collision_loss=0.4,
+        delta_abstention=0.1,
+        delta_collision=0.4,
         total_corpus_skills=50,
     )

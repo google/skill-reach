@@ -901,7 +901,7 @@ def test_a_neighborhood_generates_for_its_target_alone(target: Skill, rival: Ski
         runtime=drafting("q"),
     )
     assert [q.expected_skill for q in query_set.queries] == ["target-skill"]
-    assert query_set.queries[0].id == "target-skill-1"
+    assert query_set.queries[0].query_id == "target-skill-1"
 
 
 def test_a_targetless_catalog_generates_for_every_resident(target: Skill, rival: Skill) -> None:
@@ -1212,13 +1212,13 @@ def borrowed_set() -> QuerySet:
         catalog_id="test:Fake",
         queries=(
             Query(
-                id="rival-skill-1",
+                query_id="rival-skill-1",
                 text="reconcile last month's invoices",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
                 expected_skill="rival-skill",
             ),
             Query(
-                id="target-skill-1",
+                query_id="target-skill-1",
                 text="tighten up our IAM roles",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
                 expected_skill="target-skill",
@@ -1239,13 +1239,13 @@ def test_a_non_resident_skills_query_becomes_out_of_scope() -> None:
 def test_a_resident_skills_query_is_not_borrowed() -> None:
     """Verify queries targeting resident skills are omitted from borrowed out-of-scope list."""
     borrowed = out_of_scope_from(borrowed_set(), neighborhood("target-skill"))
-    assert "target-skill-1" not in {q.id for q in borrowed}
+    assert "target-skill-1" not in {q.query_id for q in borrowed}
 
 
 def test_borrowed_ids_are_prefixed() -> None:
     """Verify borrowed out-of-scope query IDs are prefixed with 'oos-'."""
     (query,) = out_of_scope_from(borrowed_set(), neighborhood("target-skill"))
-    assert query.id == "oos-rival-skill-1"
+    assert query.query_id == "oos-rival-skill-1"
 
 
 def test_nothing_is_borrowed_when_the_catalog_carries_everything() -> None:
@@ -1263,7 +1263,7 @@ def test_ground_truth_is_attached_after_generation() -> None:
     drafts = (GeneratedQuery(text="q", citation="c", reason="target justification rationale"),)
     (query,) = to_queries(drafts, expected_skill="skill-a", prefix="gen-skill-a")
     assert query.expected_skill == "skill-a"
-    assert query.id == "gen-skill-a-1"
+    assert query.query_id == "gen-skill-a-1"
     assert query.kind is QueryKind.IMPLICIT
     assert query.notes == "target justification rationale"
 
@@ -1291,7 +1291,7 @@ def test_generated_ids_are_unique_within_a_skill() -> None:
     """Verify to_queries generates sequential distinct IDs for each query."""
     drafts = tuple(GeneratedQuery(text=f"q{i}", citation="c", reason="r") for i in range(3))
     queries = to_queries(drafts, expected_skill="s", prefix="gen-s")
-    assert len({q.id for q in queries}) == 3
+    assert len({q.query_id for q in queries}) == 3
 
 
 def test_a_generated_set_round_trips_through_the_loader(tmp_path) -> None:
@@ -1375,7 +1375,7 @@ def test_generate_adversarial_for_skill_neighbor_negative(target: Skill, rival: 
     q = queries[0]
     assert q.kind is QueryKind.NEIGHBOR_NEGATIVE
     assert q.expected_skill == "rival-skill"
-    assert q.id == "adv-target-skill-1"
+    assert q.query_id == "adv-target-skill-1"
     assert "billing export" in q.text
 
 
@@ -1407,7 +1407,7 @@ def test_generate_adversarial_for_skill_out_of_scope(target: Skill) -> None:
     q = queries[0]
     assert q.kind is QueryKind.OUT_OF_SCOPE
     assert q.expected_skill is None
-    assert q.id == "adv-target-skill-1"
+    assert q.query_id == "adv-target-skill-1"
 
 
 def test_generate_adversarial_drops_ungrounded_citations(target: Skill, rival: Skill) -> None:

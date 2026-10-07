@@ -261,10 +261,10 @@ def _execute_draft_generation(
         covered.append(target)
 
     def whole(partial: QuerySet) -> QuerySet:
-        existing_ids = {q.id for q in kept}
+        existing_ids = {q.query_id for q in kept}
         remapped: list[Query] = []
         for q in partial.queries:
-            new_id = q.id
+            new_id = q.query_id
             if new_id in existing_ids:
                 prefix, sep, num_str = new_id.rpartition("-")
                 if sep and num_str.isdigit():
@@ -277,7 +277,9 @@ def _execute_draft_generation(
                     num += 1
                     new_id = f"{base}-{num}"
             existing_ids.add(new_id)
-            remapped.append(q if new_id == q.id else q.model_copy(update={"id": new_id}))
+            remapped.append(
+                q if new_id == q.query_id else q.model_copy(update={"query_id": new_id})
+            )
         return partial.model_copy(update={"queries": kept + tuple(remapped)})
 
     def persist(partial: QuerySet) -> None:

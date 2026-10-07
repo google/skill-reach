@@ -218,5 +218,5 @@ def leaks(
             skills_by_name=skills_by_name,
         )
         if leak is not None:
-            results[query.id] = leak
+            results[query.query_id] = leak
     return results

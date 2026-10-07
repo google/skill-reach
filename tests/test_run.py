@@ -514,7 +514,7 @@ def test_resumed_run_deduplicates_errored_probes_in_outcome_and_disk(
     assert len(outcome.results) == 2
     assert len({(r.query_id, r.attempt) for r in outcome.results}) == 2
 
-    q1_result = next(r for r in outcome.results if r.query_id == queries[1].id)
+    q1_result = next(r for r in outcome.results if r.query_id == queries[1].query_id)
     assert q1_result.error is None
     assert q1_result.invoked_skill == queries[1].expected_skill
 
@@ -834,7 +834,7 @@ def test_probe_harness_probe_and_residency(catalog: Catalog, tmp_path: Path) -> 
     """Verify ProbeHarness executes a single probe and validates residency."""
     from reach.models import Query, QueryKind
 
-    q = Query(id="q1", text="run a task", kind=QueryKind.IMPLICIT, expected_skill="s1")
+    q = Query(query_id="q1", text="run a task", kind=QueryKind.IMPLICIT, expected_skill="s1")
     runtime = FakeRuntime({q.text: "s1"}, model="fake-model")
     harness = ProbeHarness(runtime)
     result = harness.probe(q, catalog, tmp_path)
@@ -846,7 +846,7 @@ def test_probe_harness_run_probes_and_retries(catalog, tmp_path: Path) -> None:
     """Verify ProbeHarness.run_probes executes batches with retries and worker pool."""
     from reach.models import Query, QueryKind
 
-    q = Query(id="q1", text="flaky query", kind=QueryKind.IMPLICIT, expected_skill="s1")
+    q = Query(query_id="q1", text="flaky query", kind=QueryKind.IMPLICIT, expected_skill="s1")
     attempts = 0
 
     def _flaky(text: str) -> SelectionOutcome:
@@ -914,7 +914,7 @@ def test_evaluate_with_auto_draft(
         catalog_id="fixture",
         queries=(
             Query(
-                id="auto-1",
+                query_id="auto-1",
                 text="How do I configure lifecycle?",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="gcs-lifecycle-rules",
@@ -955,7 +955,7 @@ def test_evaluate_with_auto_draft_neighborhood(
         catalog_id="fixture",
         queries=(
             Query(
-                id="auto-1",
+                query_id="auto-1",
                 text="How do I configure lifecycle?",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="gcs-lifecycle-rules",
@@ -1059,7 +1059,7 @@ def test_resume_filters_stale_corpus_digest_catalog_and_out_of_scope_queries(
     )
     stale_catalog_row = first_outcome.results[0].model_copy(
         update={
-            "query_id": queries[1].id,
+            "query_id": queries[1].query_id,
             "observed_catalog": ("some-other-skill",),
         },
     )
@@ -1087,7 +1087,10 @@ def test_resume_filters_stale_corpus_digest_catalog_and_out_of_scope_queries(
     # from other anchors/catalogs/arms are preserved on disk.
     assert resumed_outcome.reused == 1
     assert second_runtime.queries == [queries[1].text]
-    assert [r.query_id for r in resumed_outcome.results] == [queries[0].id, queries[1].id]
+    assert [r.query_id for r in resumed_outcome.results] == [
+        queries[0].query_id,
+        queries[1].query_id,
+    ]
     disk_rows = load_results(out)
     assert len(disk_rows) == 5
     assert {r.corpus_digest for r in disk_rows} == {valid_row.corpus_digest}

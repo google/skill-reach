@@ -27,7 +27,7 @@ from reach.retrieval import tokenize
 def make_query(text: str, expected: str | None = "bucket-lifecycle") -> Query:
     """Build a labeled query around the text under test."""
     return Query(
-        id="q",
+        query_id="q",
         text=text,
         kind=QueryKind.OUT_OF_SCOPE if expected is None else QueryKind.IMPLICIT,
         expected_skill=expected,
@@ -135,14 +135,14 @@ def test_leaks_skip_the_queries_with_nothing_to_check(skills: list[Skill]) -> No
     """Verify leaks batch function filters out queries with no target skill."""
     queries = [
         Query(
-            id="leaky",
+            query_id="leaky",
             text="Tier my cold objects.",
             kind=QueryKind.IMPLICIT,
             expected_skill="bucket-lifecycle",
         ),
-        Query(id="abstain", text="Book me a flight.", kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="abstain", text="Book me a flight.", kind=QueryKind.OUT_OF_SCOPE),
         Query(
-            id="stray",
+            query_id="stray",
             text="Something else.",
             kind=QueryKind.IMPLICIT,
             expected_skill="not-here",
@@ -159,7 +159,7 @@ def test_batched_leaks_match_the_one_at_a_time_computation(
     """Verify leaks batch result matches individual leak_check calls."""
     queries = [
         Query(
-            id=f"q{i}",
+            query_id=f"q{i}",
             text=text,
             kind=QueryKind.IMPLICIT,
             expected_skill="bucket-lifecycle",
@@ -173,7 +173,7 @@ def test_batched_leaks_match_the_one_at_a_time_computation(
             ],
         )
     ]
-    assert leaks(queries, skills) == {q.id: leak_check(q, skills) for q in queries}
+    assert leaks(queries, skills) == {q.query_id: leak_check(q, skills) for q in queries}
 
 
 def test_a_term_the_background_corpus_spends_freely_does_not_leak(

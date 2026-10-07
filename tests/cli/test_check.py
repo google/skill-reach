@@ -99,7 +99,7 @@ def test_check_empirical_regression_exits_2(
     # Queries targeting an unknown skill will cause recall to be 0%
     queries = [
         Query(
-            id="q-0",
+            query_id="q-0",
             text="Query without mentioning the target skill name",
             expected_skill="crypto-tool",
         ),

@@ -113,7 +113,7 @@ class SourceRow(BaseModel):
     def as_query(self, fallback_id: str) -> Query:
         """Construct a validated Query model from the row data."""
         return Query(
-            id=self.id.strip() or fallback_id,
+            query_id=self.id.strip() or fallback_id,
             text=self.text,
             kind=self.kind,
             expected_skill=self.expected_skill,
@@ -160,7 +160,7 @@ def export_query_set(
 def _as_row(query: Query, mapping: FieldMap, fmt: Exchange) -> dict[str, Any]:
     """Convert a Query model into a mapped dictionary row."""
     return {
-        mapping.id: query.id,
+        mapping.id: query.query_id,
         mapping.text: query.text,
         mapping.kind: query.kind.value if query.kind else "",
         mapping.expected_skill: query.expected_skill or "",

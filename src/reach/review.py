@@ -421,7 +421,7 @@ def _convert_saved_queries(
 
         updated_queries.append(
             Query(
-                id=f"curated-{i + 1}",
+                query_id=f"curated-{i + 1}",
                 text=text,
                 expected_skill=expected_skill,
                 kind=kind,

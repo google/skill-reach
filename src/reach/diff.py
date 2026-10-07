@@ -486,7 +486,7 @@ def load_arm(
         filter_id=filter_id,
     )
     sliced_digest = query_set_digest(sliced_qs)
-    kept_ids = {q.id for q in sliced_qs.queries}
+    kept_ids = {q.query_id for q in sliced_qs.queries}
     sliced_results = [
         row.model_copy(update={"queries_digest": sliced_digest})
         for row in raw_results

@@ -95,5 +95,5 @@ def lexical_ranks(
             continue
         rank = lexical_rank(q.text, q.expected_skill, skills, scorer=scorer, resident=resident)
         if rank is not None:
-            results[q.id] = rank
+            results[q.query_id] = rank
     return results

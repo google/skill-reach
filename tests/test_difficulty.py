@@ -82,14 +82,14 @@ def test_ranks_skip_queries_with_no_rank(skills: list[Skill]) -> None:
     """Verify lexical_ranks skips out-of-scope and unindexed skills."""
     queries = [
         Query(
-            id="scoreable",
+            query_id="scoreable",
             text="Tier my cold objects into cheaper storage classes.",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
             expected_skill="bucket-lifecycle",
         ),
-        Query(id="abstain", text="Book me a flight.", kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="abstain", text="Book me a flight.", kind=QueryKind.OUT_OF_SCOPE),
         Query(
-            id="stray",
+            query_id="stray",
             text="Something else entirely.",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
             expected_skill="not-here",
@@ -106,7 +106,7 @@ def test_batched_ranks_match_the_one_at_a_time_computation(
     """Verify lexical_ranks batch computation matches individual lexical_rank calls."""
     queries = [
         Query(
-            id=f"q{i}",
+            query_id=f"q{i}",
             text=text,
             kind=QueryKind.NEIGHBOR_NEGATIVE,
             expected_skill="bucket-lifecycle",
@@ -121,7 +121,9 @@ def test_batched_ranks_match_the_one_at_a_time_computation(
         )
     ]
     batched = lexical_ranks(queries, skills)
-    assert batched == {q.id: lexical_rank(q.text, "bucket-lifecycle", skills) for q in queries}
+    assert batched == {
+        q.query_id: lexical_rank(q.text, "bucket-lifecycle", skills) for q in queries
+    }
 
 
 def test_a_rank_carries_the_field_it_was_taken_in(

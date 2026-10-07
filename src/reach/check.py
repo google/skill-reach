@@ -86,12 +86,12 @@ class CheckAssertion(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    name: str
+    passed: bool
+    observed: float | None = None
+    threshold: float
     comparison: str
     message: str
-    name: str
-    observed: float | None = None
-    passed: bool
-    threshold: float
 
 
 class CheckOutcome(BaseModel):
@@ -99,16 +99,16 @@ class CheckOutcome(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    assertions: tuple[CheckAssertion, ...] = ()
+    exit_code: int = 0
+    stage_failed: CheckStage | None = None
     budget: int = 50
     budget_exhausted: bool = False
-    exit_code: int = 0
-    lint_report: LintReport
-    probes_executed: int = 0
-    queries_probed: int = 0
     skills_checked: int = 0
-    stage_failed: CheckStage | None = None
+    queries_probed: int = 0
+    probes_executed: int = 0
+    lint_report: LintReport
     classification: ClassificationReport | None = None
+    assertions: tuple[CheckAssertion, ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -280,7 +280,9 @@ def _filter_check_queries(
     if filter_id is not None:
         target_ids = [filter_id] if isinstance(filter_id, str) else list(filter_id)
         all_queries = [
-            q for q in all_queries if any(fnmatch.fnmatchcase(q.id, pat) for pat in target_ids)
+            q
+            for q in all_queries
+            if any(fnmatch.fnmatchcase(q.query_id, pat) for pat in target_ids)
         ]
     if changed:
         primary = [q for q in all_queries if q.expected_skill in modified]
@@ -325,7 +327,7 @@ class _CheckCacheKey(BaseModel):
             runtime_model=runtime_model,
             opts_key=opts_key,
             corpus_digest=corpus_digest,
-            query_id=query.id,
+            query_id=query.query_id,
             query_text=query.text,
             expected_skill=query.expected_skill,
             acceptable_skills=tuple(sorted(query.acceptable_skills)),
@@ -379,7 +381,7 @@ def _execute_empirical_probes(
             for q in queries_to_run:
                 key = _key_for(q)
                 if use_cache and key in _CHECK_PROBE_CACHE:
-                    cached_by_id[q.id] = _CHECK_PROBE_CACHE[key]
+                    cached_by_id[q.query_id] = _CHECK_PROBE_CACHE[key]
                 else:
                     missing_queries.append(q)
 
@@ -397,11 +399,11 @@ def _execute_empirical_probes(
                     )
                 )
                 for q, res in zip(missing_queries, fresh_results, strict=True):
-                    cached_by_id[q.id] = res
+                    cached_by_id[q.query_id] = res
                     if use_cache and not res.error:
                         _CHECK_PROBE_CACHE[_key_for(q)] = res
 
-            results = [cached_by_id[q.id] for q in queries_to_run]
+            results = [cached_by_id[q.query_id] for q in queries_to_run]
     finally:
         runtime.cleanup()
 

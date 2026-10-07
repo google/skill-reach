@@ -234,7 +234,7 @@ def test_a_set_without_catalog_id_or_provenance_uses_defaults(tmp_path: Path) ->
         {
             "queries": [
                 {
-                    "id": "q1",
+                    "query_id": "q1",
                     "text": "deploy container service",
                     "expected_skill": "container-deploy",
                 }
@@ -250,11 +250,15 @@ def test_a_set_without_catalog_id_or_provenance_uses_defaults(tmp_path: Path) ->
             {
                 "queries": [
                     {
-                        "id": "q1",
+                        "query_id": "q1",
                         "text": "deploy container service",
                         "expected_skill": "container-deploy",
                     },
-                    {"text": "create k8s cluster", "expected_skill": "k8s-basics"},
+                    {
+                        "query_id": "q2",
+                        "text": "create k8s cluster",
+                        "expected_skill": "k8s-basics",
+                    },
                 ]
             }
         ),
@@ -264,13 +268,13 @@ def test_a_set_without_catalog_id_or_provenance_uses_defaults(tmp_path: Path) ->
     assert loaded.catalog_id == "all"
     assert loaded.provenance.origin == Origin.AUTHORED
     assert len(loaded.queries) == 2
-    assert loaded.queries[0].id == "q1"
-    assert loaded.queries[1].id == "q-002"
+    assert loaded.queries[0].query_id == "q1"
+    assert loaded.queries[1].query_id == "q2"
 
     custom_yaml = tmp_path / "queries.yaml"
     custom_yaml.write_text(
         "queries:\n"
-        "  - id: q1\n"
+        "  - query_id: q1\n"
         "    text: deploy container service\n"
         "    expected_skill: container-deploy\n",
         encoding="utf-8",
@@ -279,39 +283,24 @@ def test_a_set_without_catalog_id_or_provenance_uses_defaults(tmp_path: Path) ->
     assert loaded_yaml.catalog_id == "all"
     assert loaded_yaml.provenance.origin == Origin.AUTHORED
     assert len(loaded_yaml.queries) == 1
+    assert loaded_yaml.queries[0].query_id == "q1"
 
 
-def test_query_accepts_query_alias_and_serializes_to_canonical_text(tmp_path: Path) -> None:
-    """Verify Query accepts 'query' as alias for 'text' and serializes back to 'text'."""
-    direct = Query.model_validate(
-        {"id": "q-alias", "query": "restart database service", "expected_skill": "db-admin"}
-    )
-    assert direct.text == "restart database service"
-    assert "query" not in direct.model_dump()
-    assert direct.model_dump()["text"] == "restart database service"
-
-    mixed_file = tmp_path / "mixed.json"
-    mixed_file.write_text(
-        json.dumps(
+def test_query_rejects_legacy_aliases_under_strict_schema() -> None:
+    """Verify legacy aliases 'id' and 'query' are rejected under clean-break schema."""
+    with pytest.raises(ValidationError):
+        Query.model_validate(
+            {"id": "q-alias", "query": "restart database service", "expected_skill": "db-admin"}
+        )
+    with pytest.raises(ValidationError):
+        Query.model_validate(
             {
-                "queries": [
-                    {"id": "q1", "text": "deploy container service", "expected_skill": "s1"},
-                    {"id": "q2", "query": "restart database service", "expected_skill": "s2"},
-                ]
+                "query_id": "q-alias",
+                "text": "restart database service",
+                "expected_skill": "db-admin",
+                "id": "q-alias",
             }
-        ),
-        encoding="utf-8",
-    )
-    loaded = load_query_set(mixed_file)
-    assert len(loaded.queries) == 2
-    assert loaded.queries[0].text == "deploy container service"
-    assert loaded.queries[1].text == "restart database service"
-
-    saved_path = save_query_set(loaded, tmp_path / "normalized.json")
-    saved_raw = json.loads(saved_path.read_text(encoding="utf-8"))
-    for item in saved_raw["queries"]:
-        assert "text" in item
-        assert "query" not in item
+        )
 
 
 @pytest.mark.parametrize("bad_alias", ["prompt", "question", "utterance"])
@@ -319,7 +308,7 @@ def test_query_rejects_unauthorized_aliases(bad_alias: str) -> None:
     """Verify unauthorized field aliases are strictly rejected by Query schema."""
     with pytest.raises(ValidationError, match=r"text|Field required"):
         Query.model_validate(
-            {"id": "q1", bad_alias: "deploy container service", "expected_skill": "s1"}
+            {"query_id": "q1", bad_alias: "deploy container service", "expected_skill": "s1"}
         )
 
 
@@ -349,7 +338,7 @@ def test_save_and_load_query_set_tabular(tmp_path: Path, filename: str) -> None:
         catalog_id="c",
         queries=(
             Query(
-                id="q1",
+                query_id="q1",
                 text="tier cold objects",
                 expected_skill="gcs-lifecycle-rules",
             ),
@@ -359,7 +348,7 @@ def test_save_and_load_query_set_tabular(tmp_path: Path, filename: str) -> None:
     saved = save_query_set(initial, tmp_path / filename)
     loaded = load_query_set(saved)
     assert len(loaded.queries) == 1
-    assert loaded.queries[0].id == "q1"
+    assert loaded.queries[0].query_id == "q1"
     assert loaded.queries[0].text == "tier cold objects"
     assert loaded.queries[0].expected_skill == "gcs-lifecycle-rules"
 
@@ -376,11 +365,11 @@ def test_save_and_load_query_set_tabular(tmp_path: Path, filename: str) -> None:
 )
 def test_query_set_for_skill_lookup(target: str, expected_ids: tuple[str, ...]) -> None:
     """Verify QuerySet.for_skill matches expected skill names and out-of-scope sentinels."""
-    q1 = Query(id="q1", text="text 1", expected_skill="s1")
-    q2 = Query(id="q2", text="text 2", expected_skill="s2")
-    q3 = Query(id="q3", text="out of scope", kind=QueryKind.OUT_OF_SCOPE)
+    q1 = Query(query_id="q1", text="text 1", expected_skill="s1")
+    q2 = Query(query_id="q2", text="text 2", expected_skill="s2")
+    q3 = Query(query_id="q3", text="out of scope", kind=QueryKind.OUT_OF_SCOPE)
     qs = QuerySet(catalog_id="c", queries=(q1, q2, q3), provenance=provenance())
-    assert tuple(q.id for q in qs.for_skill(target)) == expected_ids
+    assert tuple(q.query_id for q in qs.for_skill(target)) == expected_ids
 
 
 def test_query_draft_sync_targets_missing_and_stale_skills(
@@ -422,8 +411,8 @@ def test_query_draft_sync_targets_missing_and_stale_skills(
     existing = QuerySet(
         catalog_id="all",
         queries=(
-            Query(id="skill-a-1", text="query a", expected_skill="skill-a"),
-            Query(id="skill-b-1", text="old query b", expected_skill="skill-b"),
+            Query(query_id="skill-a-1", text="query a", expected_skill="skill-a"),
+            Query(query_id="skill-b-1", text="old query b", expected_skill="skill-b"),
         ),
         provenance=QuerySetProvenance(
             origin=Origin.GENERATED,
@@ -517,10 +506,10 @@ def test_draft_query_set_prunes_stale_queries_and_updates_skill_digests(
     existing_qs = QuerySet(
         catalog_id="all",
         queries=(
-            Query(id="skill-a-1", text="Keep query A", expected_skill="skill-a"),
-            Query(id="skill-b-1", text="Stale query B", expected_skill="skill-b"),
+            Query(query_id="skill-a-1", text="Keep query A", expected_skill="skill-a"),
+            Query(query_id="skill-b-1", text="Stale query B", expected_skill="skill-b"),
             Query(
-                id="adv-skill-b-1",
+                query_id="adv-skill-b-1",
                 text="Stale adv B",
                 expected_skill="skill-a",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -581,7 +570,7 @@ def test_draft_query_set_prunes_stale_queries_and_updates_skill_digests(
     )
     assert rc == 0
     saved = load_query_set(dest)
-    assert [(q.id, q.text) for q in saved.queries] == [
+    assert [(q.query_id, q.text) for q in saved.queries] == [
         ("skill-a-1", "Keep query A"),
         ("skill-b-1", "Fresh query B"),
     ]
@@ -640,7 +629,7 @@ def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     )
     existing_qs = QuerySet(
         catalog_id="cat",
-        queries=(Query(id=existing_id, text="Existing query 1", expected_skill="skill-a"),),
+        queries=(Query(query_id=existing_id, text="Existing query 1", expected_skill="skill-a"),),
         provenance=existing_prov,
     )
 
@@ -702,7 +691,7 @@ def test_draft_backfill_resolves_id_collisions_and_preserves_provenance(
     assert rc == 0
     saved = load_query_set(dest)
     assert len(saved.queries) == 2
-    assert [q.id for q in saved.queries] == expected_ids
+    assert [q.query_id for q in saved.queries] == expected_ids
     assert saved.provenance.origin == Origin.IMPORTED
     assert saved.provenance.source == "benchmark-v1.json"
     assert saved.provenance.recorded_at == original_recorded
@@ -715,13 +704,25 @@ def test_query_set_covered_skills_filters_negatives_and_unassigned() -> None:
 
     qs = QuerySet(
         queries=(
-            Query(id="q1", text="Task 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
-            Query(id="q2", text="Task 2", expected_skill="skill-b", kind=QueryKind.CONTEXTUAL),
+            Query(query_id="q1", text="Task 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
             Query(
-                id="q3", text="Task 3", expected_skill="skill-c", kind=QueryKind.NEIGHBOR_NEGATIVE
+                query_id="q2", text="Task 2", expected_skill="skill-b", kind=QueryKind.CONTEXTUAL
             ),
-            Query(id="q4", text="Out of scope", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
-            Query(id="q5", text="Task 1 repeat", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+            Query(
+                query_id="q3",
+                text="Task 3",
+                expected_skill="skill-c",
+                kind=QueryKind.NEIGHBOR_NEGATIVE,
+            ),
+            Query(
+                query_id="q4", text="Out of scope", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
+            ),
+            Query(
+                query_id="q5",
+                text="Task 1 repeat",
+                expected_skill="skill-a",
+                kind=QueryKind.IMPLICIT,
+            ),
         )
     )
     assert qs.covered_skills() == frozenset({"skill-a", "skill-b"})
@@ -765,7 +766,7 @@ def test_stale_skills_provenance_states(
         digests["skill-a"] = recorded_digest
 
     qs = QuerySet(
-        queries=(Query(id="q1", text="t1", expected_skill="skill-a"),),
+        queries=(Query(query_id="q1", text="t1", expected_skill="skill-a"),),
         provenance=QuerySetProvenance(origin=origin, skill_digests=digests),
     )
     assert qs.stale_skills((skill_a,)) == expected_stale
@@ -816,13 +817,13 @@ def test_provenance_skill_digests_string_constraints_and_partial_sync(
     qs_prefix = QuerySet(
         queries=(
             Query(
-                id="adv-cloud-01",
+                query_id="adv-cloud-01",
                 text="t1",
                 expected_skill="other",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="adv-cloud-run-01",
+                query_id="adv-cloud-run-01",
                 text="t2",
                 expected_skill="other",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -830,7 +831,7 @@ def test_provenance_skill_digests_string_constraints_and_partial_sync(
         ),
     )
     pruned_prefix = qs_prefix.without_skills(("cloud",))
-    assert [q.id for q in pruned_prefix.queries] == ["adv-cloud-run-01"]
+    assert [q.query_id for q in pruned_prefix.queries] == ["adv-cloud-run-01"]
 
 
 def _invoke_draft_cli(
@@ -897,7 +898,7 @@ def test_query_draft_sync_sad_paths_and_backfill(
     save_query_set(
         QuerySet(
             catalog_id="all",
-            queries=(Query(id="skill-a-1", text="query a", expected_skill="skill-a"),),
+            queries=(Query(query_id="skill-a-1", text="query a", expected_skill="skill-a"),),
             provenance=QuerySetProvenance(origin=Origin.GENERATED, skill_digests={}),
         ),
         out_file,
@@ -958,7 +959,7 @@ def test_resolve_draft_study_flags_discovers_queries_via_reach_toml_skills(
     corpus_skills.mkdir(parents=True)
     corpus_queries = corpus_root / ".reach" / "queries.json"
     save_query_set(
-        QuerySet(queries=(Query(id="q1", text="t1", expected_skill="skill-a"),)),
+        QuerySet(queries=(Query(query_id="q1", text="t1", expected_skill="skill-a"),)),
         corpus_queries,
     )
     (ws_dir / "reach.toml").write_text(

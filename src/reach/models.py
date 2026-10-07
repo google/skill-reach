@@ -19,13 +19,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -141,14 +141,18 @@ class Skill(BaseModel):
         return value
 
 
+type _NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
+
+
 class Query(BaseModel):
     """Represent a single evaluation probe query and expected target skill."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: str = Field(description="Unique identifier for the evaluation query.")
-    text: str = Field(
-        validation_alias=AliasChoices("text", "query"),
+    query_id: _NonBlankStr = Field(
+        description="Unique identifier for the evaluation query.",
+    )
+    text: _NonBlankStr = Field(
         description="Realistic user request text presented to the agent.",
     )
     kind: QueryKind | None = Field(
@@ -172,7 +176,8 @@ class Query(BaseModel):
         """Validate out-of-scope query kinds align with absence of expected skills."""
         if (self.kind is QueryKind.OUT_OF_SCOPE) != (self.expected_skill is None):
             msg = (
-                f"{self.id}: kind={self.kind} disagrees with expected_skill={self.expected_skill!r}"
+                f"{self.query_id}: kind={self.kind} "
+                f"disagrees with expected_skill={self.expected_skill!r}"
             )
             raise ValueError(
                 msg,
@@ -376,7 +381,7 @@ class ProbeResult(BaseModel):
             disc_state = DisclosureState.FULL
 
         return cls(
-            query_id=query.id,
+            query_id=query.query_id,
             catalog_id=catalog.id,
             catalog_mode=catalog.mode,
             catalog_size=catalog.size,

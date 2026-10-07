@@ -82,7 +82,7 @@ def test_retriever_runtime_telemetry_withheld_state(tmp_path: Path) -> None:
 
     # Query expects cloud-tool-19, but query text only matches cloud-tool-00/01/02
     query = Query(
-        id="q-rare",
+        query_id="q-rare",
         text="cloud-tool-00 cloud-tool-01 cloud-tool-02",
         kind=QueryKind.IMPLICIT,
         expected_skill="cloud-tool-19",

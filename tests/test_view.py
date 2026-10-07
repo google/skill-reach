@@ -317,7 +317,7 @@ def test_an_unprobed_artifact_says_so_rather_than_rendering_an_empty_table(
 def test_query_text_is_escaped_not_executed(corpus, whole_catalog, make_config) -> None:
     """Verify query text containing HTML/JS tags is properly escaped in rendered HTML."""
     hostile = Query(
-        id="q-hostile",
+        query_id="q-hostile",
         text='<script>alert(1)</script> & "quoted"',
         kind=QueryKind.IMPLICIT,
         expected_skill="gcs-lifecycle-rules",

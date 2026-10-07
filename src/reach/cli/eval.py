@@ -235,7 +235,7 @@ def _typed_query_set(quick: QuickEval, catalog_id: str) -> QuerySet:
             tool_version=metadata.version("skill-reach"),
         ),
         queries=tuple(
-            Query(id=f"typed-{n}", text=text, expected_skill=quick.target)
+            Query(query_id=f"typed-{n}", text=text, expected_skill=quick.target)
             for n, text in enumerate(quick.texts, start=1)
         ),
     )

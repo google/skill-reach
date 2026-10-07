@@ -35,13 +35,13 @@ DRAFTED = QuerySet(
     catalog_id=NEIGHBORHOOD,
     queries=(
         Query(
-            id="q-lifecycle",
+            query_id="q-lifecycle",
             text="Tier old objects to Coldline after 30 days.",
             kind=QueryKind.IMPLICIT,
             expected_skill="gcs-lifecycle-rules",
         ),
         Query(
-            id="q-retention",
+            query_id="q-retention",
             text="Keep audit logs for seven years for compliance.",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
             expected_skill="gcs-retention-policy",

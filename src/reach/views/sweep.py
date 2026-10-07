@@ -25,7 +25,6 @@ from rich.text import Text
 
 from reach.rendering import csv_document, dispatch_render
 from reach.sweep import _MIN_KNEE_POINTS
-from reach.uncertainty import Interval
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -185,19 +184,19 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         decision_lines.append(("\n", ""))
 
     if len(study.scales) >= _MIN_SCALES_FOR_LOSS_DECOMPOSITION and (
-        study.total_delta != 0
-        or study.total_collision_loss != 0
-        or study.total_abstention_loss != 0
-        or study.total_truncated_loss != 0
+        study.delta_total != 0
+        or study.delta_collision != 0
+        or study.delta_abstention != 0
+        or study.delta_truncated != 0
     ):
         loss_text = (
             f"  • Loss Decomposition (K={study.scales[0]}→{study.scales[-1]}, "
-            f"{study.total_delta * 100:+.1f}% pass-rate drop): "
-            f"Δ Collision {study.total_collision_loss * 100:+.1f}% | "
-            f"Δ Abstention {study.total_abstention_loss * 100:+.1f}%"
+            f"{study.delta_total * 100:+.1f}% pass-rate drop): "
+            f"Δ Collision {study.delta_collision * 100:+.1f}% | "
+            f"Δ Abstention {study.delta_abstention * 100:+.1f}%"
         )
-        if study.total_truncated_loss != 0:
-            loss_text += f" | Δ Truncation {study.total_truncated_loss * 100:+.1f}%"
+        if study.delta_truncated != 0:
+            loss_text += f" | Δ Truncation {study.delta_truncated * 100:+.1f}%"
         decision_lines.append((loss_text, "dim"))
         decision_lines.append(("\n", ""))
 
@@ -216,7 +215,6 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             )
         )
         decision_lines.append(("\n", ""))
-
     if decision_lines:
         panel = Panel(
             Text.assemble(*decision_lines[:-1]),  # strip trailing newline
@@ -261,7 +259,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         rec_pct = f"{pt.recall * 100:.1f}%"
         prec_pct = f"{pt.precision * 100:.1f}%"
-        f1_ci_str = Interval.from_tuple(pt.f1_interval).format_percent(separator="-")
+        f1_ci_str = pt.f1_interval.format_percent(separator="-")
         col_str = f"{pt.delta_collision * 100:+.1f}%" if pt.delta_collision != 0 else "0.0%"
         tok_str = f"{pt.prompt_tokens_mean:,.0f}" if pt.prompt_tokens_mean is not None else "—"
         base_probes_str = (
@@ -363,10 +361,10 @@ def _print_single_skill_header(console: Console, study: ScalingStudy) -> None:
     if collision_summary:
         console.print(Text(f"Replicate Collision Sensitivity: {collision_summary}", style="yellow"))
 
-    if study.total_truncated_loss > 0:
+    if study.delta_truncated > 0:
         console.print(
             Text(
-                f"Budget Truncation Loss: {study.total_truncated_loss * 100:+.1f}% "
+                f"Budget Truncation Loss: {study.delta_truncated * 100:+.1f}% "
                 "(elided/withheld probes)",
                 style="yellow",
             )
@@ -407,9 +405,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             if pt.pass_rate >= _PASS_RATE_HIGH
             else ("yellow" if pt.pass_rate >= _PASS_RATE_MID else "bold red")
         )
-        ci = Interval.from_tuple(pt.pass_rate_interval).format_percent(
-            separator="-" if compact_cols else " - "
-        )
+        ci = pt.pass_rate_interval.format_percent(separator="-" if compact_cols else " - ")
 
         tot_str = f"{pt.delta_vs_baseline * 100:+.1f}%" if pt.delta_vs_baseline != 0 else "0.0%"
         abs_str = f"{pt.delta_abstention * 100:+.1f}%" if pt.delta_abstention != 0 else "0.0%"
@@ -561,15 +557,15 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             [
                 pt.scale,
                 f"{pt.recall:.4f}",
-                f"{pt.recall_interval[0]:.4f}",
-                f"{pt.recall_interval[1]:.4f}",
+                f"{pt.recall_interval.low:.4f}",
+                f"{pt.recall_interval.high:.4f}",
                 f"{pt.precision:.4f}",
-                f"{pt.precision_interval[0]:.4f}",
-                f"{pt.precision_interval[1]:.4f}",
+                f"{pt.precision_interval.low:.4f}",
+                f"{pt.precision_interval.high:.4f}",
                 f"{pt.abstention_rate:.4f}" if pt.abstention_rate is not None else "",
                 f"{pt.f1_score:.4f}",
-                f"{pt.f1_interval[0]:.4f}",
-                f"{pt.f1_interval[1]:.4f}",
+                f"{pt.f1_interval.low:.4f}",
+                f"{pt.f1_interval.high:.4f}",
                 f"{pt.step_efficiency_mean:.4f}",
                 f"{pt.skill_f1_mean:.4f}",
                 knee_str,
@@ -588,8 +584,8 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             study.target_skill or "all",
             pt.scale,
             f"{pt.pass_rate:.4f}",
-            f"{pt.pass_rate_interval[0]:.4f}",
-            f"{pt.pass_rate_interval[1]:.4f}",
+            f"{pt.pass_rate_interval.low:.4f}",
+            f"{pt.pass_rate_interval.high:.4f}",
             f"{pt.delta_vs_baseline:.4f}",
             f"{pt.delta_abstention:.4f}",
             f"{pt.delta_truncated:.4f}",

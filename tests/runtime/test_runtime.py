@@ -1621,7 +1621,7 @@ def test_selection_outcome_and_probe_result_early_exit_propagation(
         observed_catalog=catalog.skills,
         observed_tools=("Skill",),
     )
-    query = Query(id="q1", text="test query", expected_skill="target-skill")
+    query = Query(query_id="q1", text="test query", expected_skill="target-skill")
     result = ProbeResult.from_outcome(
         outcome=outcome,
         query=query,

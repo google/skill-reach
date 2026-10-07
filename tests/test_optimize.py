@@ -105,7 +105,7 @@ def make_test_queries() -> Callable[..., list[Query]]:
         kind: QueryKind = QueryKind.IMPLICIT,
     ) -> list[Query]:
         return [
-            Query(id=f"q{i}", text=f"{target} query {i}", expected_skill=target, kind=kind)
+            Query(query_id=f"q{i}", text=f"{target} query {i}", expected_skill=target, kind=kind)
             for i in range(count)
         ]
 
@@ -576,7 +576,7 @@ def test_evaluate_candidate_materializes_candidate_description_to_disk(
         rationale="Better phrasing.",
     )
     query = Query(
-        id="q1",
+        query_id="q1",
         text="calculate something",
         expected_skill="calc-tool",
         kind=QueryKind.IMPLICIT,
@@ -633,7 +633,7 @@ def test_evaluate_candidate_handles_nonexistent_or_file_target_path(
         rationale="Fallback test.",
     )
     query = Query(
-        id="q1",
+        query_id="q1",
         text="test query",
         expected_skill="ghost-tool",
         kind=QueryKind.IMPLICIT,
@@ -672,37 +672,37 @@ def test_run_candidate_probes_scores_rival_and_out_of_scope_queries(tmp_path: Pa
     """Verify candidate probe runner rewards correct rival and abstention choices."""
     queries = [
         Query(
-            id="q1",
+            query_id="q1",
             text="target query 1",
             expected_skill="target-tool",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q2",
+            query_id="q2",
             text="target query 2",
             expected_skill="target-tool",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q3",
+            query_id="q3",
             text="rival query 1",
             expected_skill="rival-tool",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q4",
+            query_id="q4",
             text="rival query 2",
             expected_skill="rival-tool",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q5",
+            query_id="q5",
             text="unrelated query 1",
             expected_skill=None,
             kind=QueryKind.OUT_OF_SCOPE,
         ),
         Query(
-            id="q6",
+            query_id="q6",
             text="unrelated query 2",
             expected_skill=None,
             kind=QueryKind.OUT_OF_SCOPE,
@@ -743,13 +743,13 @@ def test_evaluate_candidate_with_rival_queries_computes_accuracy(
 
     queries = [
         Query(
-            id="q1",
+            query_id="q1",
             text="Please run target tool",
             expected_skill="target-tool",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q2",
+            query_id="q2",
             text="Please run rival tool",
             expected_skill="rival-tool",
             kind=QueryKind.IMPLICIT,
@@ -844,8 +844,8 @@ def test_evaluate_all_candidates_budget_clamping_and_exact_spend(
     """Verify _evaluate_all_candidates returns exact probes spent and clamps to remaining budget."""
     target = write_skill_model(name="probe-tool", description="Tool for testing probe spend.")
     queries = [
-        Query(id="q1", text="query 1", expected_skill="probe-tool", kind=QueryKind.IMPLICIT),
-        Query(id="q2", text="query 2", expected_skill="probe-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="query 1", expected_skill="probe-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="q2", text="query 2", expected_skill="probe-tool", kind=QueryKind.IMPLICIT),
     ]
 
     _ranked, spent = _evaluate_all_candidates(
@@ -919,12 +919,26 @@ def test_split_query_set_boundary_clamping(
 ) -> None:
     """Verify split_query_set respects holdout clamping and stratification."""
     queries = (
-        Query(id="p1", text="run target 1", expected_skill="target-tool", kind=QueryKind.IMPLICIT),
-        Query(id="p2", text="run target 2", expected_skill="target-tool", kind=QueryKind.IMPLICIT),
-        Query(id="r1", text="run rival 1", expected_skill="rival-tool", kind=QueryKind.IMPLICIT),
-        Query(id="r2", text="run rival 2", expected_skill="rival-tool", kind=QueryKind.IMPLICIT),
-        Query(id="o1", text="other 1", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
-        Query(id="o2", text="other 2", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        Query(
+            query_id="p1",
+            text="run target 1",
+            expected_skill="target-tool",
+            kind=QueryKind.IMPLICIT,
+        ),
+        Query(
+            query_id="p2",
+            text="run target 2",
+            expected_skill="target-tool",
+            kind=QueryKind.IMPLICIT,
+        ),
+        Query(
+            query_id="r1", text="run rival 1", expected_skill="rival-tool", kind=QueryKind.IMPLICIT
+        ),
+        Query(
+            query_id="r2", text="run rival 2", expected_skill="rival-tool", kind=QueryKind.IMPLICIT
+        ),
+        Query(query_id="o1", text="other 1", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="o2", text="other 2", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
     )
 
     train, test = split_query_set(queries, "target-tool", holdout=holdout)
@@ -1200,19 +1214,19 @@ def test_multi_round_hill_climbing_preserves_best_incumbent(
         provenance=QuerySetProvenance(origin=Origin.GENERATED),
         queries=(
             Query(
-                id="q1",
+                query_id="q1",
                 text="target query 1",
                 expected_skill="target-tool",
                 kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="q2",
+                query_id="q2",
                 text="target query 2",
                 expected_skill="target-tool",
                 kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="q3",
+                query_id="q3",
                 text="target query 3",
                 expected_skill="target-tool",
                 kind=QueryKind.IMPLICIT,
@@ -1282,7 +1296,9 @@ def test_optimize_skill_with_review_triggers_launcher(
     """Verify review=True launches interactive review before probe evaluation."""
     write_skill(name="rev-tool", description="Review testing tool.")
 
-    queries = (Query(id="q1", text="query 1", expected_skill="rev-tool", kind=QueryKind.IMPLICIT),)
+    queries = (
+        Query(query_id="q1", text="query 1", expected_skill="rev-tool", kind=QueryKind.IMPLICIT),
+    )
     mock_qs = QuerySet(
         catalog_id="test",
         queries=queries,
@@ -1471,7 +1487,12 @@ def test_holdout_zero_test_share_skips_holdout_and_preserves_budget(
     """Verify holdout pass is skipped and preserves budget when round_budget <= 1."""
     write_skill(name="tight-tool", description="Tight budget tool.")
     queries = [
-        Query(id=f"q{i}", text=f"query {i}", expected_skill="tight-tool", kind=QueryKind.IMPLICIT)
+        Query(
+            query_id=f"q{i}",
+            text=f"query {i}",
+            expected_skill="tight-tool",
+            kind=QueryKind.IMPLICIT,
+        )
         for i in range(10)
     ]
     query_file = write_queries(target="tight-tool", queries=queries)
@@ -1500,7 +1521,7 @@ def test_multi_round_deduplicates_identical_descriptions(
     """Verify report.candidates deduplicates candidates with identical descriptions."""
     write_skill(name="dedup-tool", description="Deduplication tool.")
     queries = [
-        Query(id="q1", text="query 1", expected_skill="dedup-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="query 1", expected_skill="dedup-tool", kind=QueryKind.IMPLICIT),
     ]
     query_file = write_queries(target="dedup-tool", queries=queries)
 
@@ -1540,7 +1561,7 @@ def test_multi_round_prefers_later_round_on_score_tie(
     """Verify global_best prefers candidate from later iteration round on metric ties."""
     write_skill(name="tie-tool", description="Score tie tool.")
     queries = [
-        Query(id="q1", text="query 1", expected_skill="tie-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="query 1", expected_skill="tie-tool", kind=QueryKind.IMPLICIT),
     ]
     query_file = write_queries(target="tie-tool", queries=queries)
     round_calls = 0
@@ -1596,7 +1617,7 @@ def test_optimize_skill_auto_apply_safely_refuses_when_no_improvement_unless_for
     )
     manifest = target_dir / "SKILL.md"
     queries = [
-        Query(id="q1", text="query 1", expected_skill="safe-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="query 1", expected_skill="safe-tool", kind=QueryKind.IMPLICIT),
     ]
     query_file = write_queries(target="safe-tool", queries=queries)
 
@@ -1724,9 +1745,11 @@ def test_evaluate_candidate_preserves_origin_and_installs_full_corpus(
         origin=origin,
     )
     queries = [
-        Query(id="q-pos-1", text="deploy target-skill service", expected_skill="target-skill"),
         Query(
-            id="q-neg-third",
+            query_id="q-pos-1", text="deploy target-skill service", expected_skill="target-skill"
+        ),
+        Query(
+            query_id="q-neg-third",
             text="manage third-corpus-skill workflow",
             expected_skill="third-corpus-skill",
         ),
@@ -1767,7 +1790,7 @@ def test_evaluate_all_candidates_deduplicates_and_memoizes_across_rounds(
     )
     queries = [
         Query(
-            id="q1",
+            query_id="q1",
             text="run target-tool",
             expected_skill="target-tool",
             kind=QueryKind.IMPLICIT,
@@ -1917,10 +1940,12 @@ def test_run_optimization_round_test_budget_absorbs_unspent_train_budget(
         unclaimed_terms=(),
     )
     train_queries = [
-        Query(id="tr1", text="q train 1", expected_skill="my-tool", kind=QueryKind.IMPLICIT),
+        Query(query_id="tr1", text="q train 1", expected_skill="my-tool", kind=QueryKind.IMPLICIT),
     ]
     test_queries = [
-        Query(id=f"te{i}", text=f"q test {i}", expected_skill="my-tool", kind=QueryKind.IMPLICIT)
+        Query(
+            query_id=f"te{i}", text=f"q test {i}", expected_skill="my-tool", kind=QueryKind.IMPLICIT
+        )
         for i in range(10)
     ]
     baseline = _BaselineEvaluation(
@@ -2020,8 +2045,8 @@ def test_run_candidate_probes_batches_workers_and_tracks_trajectory_recall(
     from reach.models import CatalogMode, ProbeResult
 
     queries = [
-        Query(id="q1", text="query 1", expected_skill="metrics-collector"),
-        Query(id="q2", text="query 2", expected_skill="metrics-collector"),
+        Query(query_id="q1", text="query 1", expected_skill="metrics-collector"),
+        Query(query_id="q2", text="query 2", expected_skill="metrics-collector"),
     ]
     mock_runtime = MagicMock()
     batch_calls: list[tuple[int, int]] = []
@@ -2099,11 +2124,11 @@ def test_load_optimization_queries_retains_and_interleaves_primary_rival(
         catalog_id="cloud",
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         queries=(
-            Query(id="pos-1", text="pos 1", expected_skill=target.name),
-            Query(id="pos-2", text="pos 2", expected_skill=target.name),
-            Query(id="riv-1", text="riv 1", expected_skill=rival.name),
-            Query(id="riv-2", text="riv 2", expected_skill=rival.name),
-            Query(id="other-1", text="other 1", expected_skill="network-helper"),
+            Query(query_id="pos-1", text="pos 1", expected_skill=target.name),
+            Query(query_id="pos-2", text="pos 2", expected_skill=target.name),
+            Query(query_id="riv-1", text="riv 1", expected_skill=rival.name),
+            Query(query_id="riv-2", text="riv 2", expected_skill=rival.name),
+            Query(query_id="other-1", text="other 1", expected_skill="network-helper"),
         ),
     )
     qfile = tmp_path / "queries.json"
@@ -2196,7 +2221,7 @@ def test_reciprocal_handoff_upsert_staging_and_apply(
             candidate=cand,
             target=target,
             rivals=[rival],
-            queries=[Query(id="q1", text="test", expected_skill=target.name)],
+            queries=[Query(query_id="q1", text="test", expected_skill=target.name)],
             budget=1,
             handoff=handoff,
         )
@@ -2244,8 +2269,8 @@ def test_baseline_evaluation_populates_trajectory_hits_by_id_for_paired_deltas(
     target_dir = write_skill(name="metrics-collector", description="Target desc.")
     target = Skill(name="metrics-collector", description="Target desc.", path=target_dir)
     queries = [
-        Query(id="q1", text="query 1", expected_skill=target.name),
-        Query(id="q2", text="query 2", expected_skill=target.name),
+        Query(query_id="q1", text="query 1", expected_skill=target.name),
+        Query(query_id="q2", text="query 2", expected_skill=target.name),
     ]
 
     mock_eval_base = OptimizationCandidate(

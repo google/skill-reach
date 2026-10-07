@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Self
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -63,6 +62,7 @@ from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
 from reach.uncertainty import (
+    Interval,
     bootstrap_quantiles,
     ci_span_sigmas,
     cluster_wilson_interval,
@@ -157,38 +157,45 @@ class PairedTrialOutcomes(BaseModel):
 class ScalingPoint(BaseModel):
     """Represent evaluation outcomes and decomposition for a single catalog scale point."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    scale: int
+    # 1. Identifiers
+    scale: PositiveInt
     catalog_id: str
-    pass_rate: float
-    pass_rate_interval: tuple[float, float]
-    recall: float = 0.0
-    recall_interval: tuple[float, float] = (0.0, 1.0)
-    precision: float = 0.0
-    precision_interval: tuple[float, float] = (0.0, 1.0)
-    internal_precision: float = 0.0
-    external_distractor_precision: float | None = None
-    abstention_rate: float | None = None
-    abstention_interval: tuple[float, float] | None = None
-    f1_score: float = 0.0
-    f1_interval: tuple[float, float] = (0.0, 1.0)
-    entrypoint_pass_rate: float | None = None
-    entrypoint_f1_score: float | None = None
+
+    # 2. Primary rates & intervals (alphabetical pairs)
+    f1_score: UnitInterval = 0.0
+    f1_interval: Interval = Field(default_factory=Interval.unit)
+    pass_rate: UnitInterval
+    pass_rate_interval: Interval
+    precision: UnitInterval = 0.0
+    precision_interval: Interval = Field(default_factory=Interval.unit)
+    recall: UnitInterval = 0.0
+    recall_interval: Interval = Field(default_factory=Interval.unit)
+
+    # 3. Secondary rates
+    abstention_rate: UnitInterval | None = None
+    abstention_interval: Interval | None = None
+    entrypoint_f1_score: UnitInterval | None = None
+    entrypoint_pass_rate: UnitInterval | None = None
+    external_distractor_precision: UnitInterval | None = None
+    internal_precision: UnitInterval = 0.0
+
+    # 4. Probe accounting counts
+    probes_executed: NonNegativeInt
     in_scope_probes: NonNegativeInt = 0
     negative_probes: NonNegativeInt = 0
-    disclosure_states: dict[str, int] = Field(default_factory=dict)
-    delta_vs_baseline: float
-    delta_abstention: float = Field(
-        validation_alias=AliasChoices("delta_abstention", "delta_context")
-    )
-    delta_collision: float = Field(
-        validation_alias=AliasChoices("delta_collision", "delta_shadowing")
-    )
-    delta_truncated: float = 0.0
-    probes_executed: NonNegativeInt
     probes_failed: NonNegativeInt = 0
     probes_errored: NonNegativeInt = 0
+
+    # 5. Delta attribution
+    delta_vs_baseline: float
+    delta_abstention: float = 0.0
+    delta_collision: float = 0.0
+    delta_truncated: float = 0.0
+
+    # 6. Disclosure states & telemetry
+    disclosure_states: dict[str, int] = Field(default_factory=dict)
     prompt_tokens_mean: float | None = None
     duration_ms_mean: float = 0.0
     step_efficiency_mean: float = 0.0
@@ -221,38 +228,49 @@ class ScalingPoint(BaseModel):
 class ScalingStudy(BaseModel):
     """Represent multi-scale catalog scaling study and knee curvature analysis."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # 1. Corpus metadata
     target_skill: str | None = None
     is_corpus_sweep: bool = False
     catalog_replicates: PositiveInt = 1
+    total_corpus_skills: int = 0
     scales: tuple[int, ...]
-    points: tuple[ScalingPoint, ...]
+
+    # 2. Executive knee & drop findings
     knee_scale: int | None = None
     knee_scale_interval: tuple[int, int] | None = None
-    knee_scale_pmf: KneePmf | None = None
     knee_upper_censored: bool = False
     cliff_probability: UnitInterval | None = None
     drop_probability: UnitInterval | None = None
     steepest_drop_scales: tuple[int, int] | None = None
     steepest_drop_delta: float | None = None
-    baseline_pass_rate: float
-    final_pass_rate: float
-    total_delta: float
-    total_abstention_loss: float = Field(
-        validation_alias=AliasChoices("total_abstention_loss", "total_context_loss")
-    )
-    total_collision_loss: float = Field(
-        validation_alias=AliasChoices("total_collision_loss", "total_shadowing_loss")
-    )
-    total_truncated_loss: float = 0.0
+
+    # 3. Headline pass rates and loss deltas (flattened)
+    baseline_pass_rate: UnitInterval = 0.0
+    final_pass_rate: UnitInterval = 0.0
+    delta_total: float = 0.0
+    delta_abstention: float = 0.0
+    delta_collision: float = 0.0
+    delta_truncated: float = 0.0
+    delta_total_interval: Interval = Field(default_factory=Interval.zero)
+    delta_abstention_interval: Interval = Field(default_factory=Interval.zero)
+    delta_collision_interval: Interval = Field(default_factory=Interval.zero)
+    delta_truncated_interval: Interval = Field(default_factory=Interval.zero)
     noise_floor: float = 0.05
-    total_corpus_skills: int = 0
-    decomposition: DecompositionResult | None = None
+    sample_size: NonNegativeInt = 0
+    baseline_interval: Interval = Field(default_factory=Interval.zero)
+    scaled_interval: Interval = Field(default_factory=Interval.zero)
+
+    # 4. Diagnostics & maps
     anchor_skills: tuple[str, ...] | None = None
+    knee_scale_pmf: KneePmf | None = None
     paired_outcomes: PairedTrialOutcomes | None = None
-    skill_icc: UnitInterval | None = None
     replicate_collisions: tuple[ReplicateCollisionDiagnostic, ...] = ()
+    skill_icc: UnitInterval | None = None
+
+    # 5. Points leaf collection at the bottom
+    points: tuple[ScalingPoint, ...]
 
     @classmethod
     def load(cls, path: Path | str) -> Self:
@@ -406,7 +424,7 @@ _MIN_PAVA_VARIANCE: float = 1e-4
 
 
 def _compute_pava_weights(
-    intervals: Sequence[tuple[float, float]],
+    intervals: Sequence[Interval | tuple[float, float]],
     ci_span: float,
     *,
     min_variance: float = _MIN_PAVA_VARIANCE,
@@ -417,8 +435,19 @@ def _compute_pava_weights(
         raise ValueError(msg)
     clamped_min_var = max(1e-12, min_variance)
     return [
-        1.0 / max(clamped_min_var, (max(0.0, interval[1] - interval[0]) / ci_span) ** 2)
-        for interval in intervals
+        1.0
+        / max(
+            clamped_min_var,
+            (
+                max(
+                    0.0,
+                    (iv.high - iv.low) if isinstance(iv, Interval) else (iv[1] - iv[0]),
+                )
+                / ci_span
+            )
+            ** 2,
+        )
+        for iv in intervals
     ]
 
 
@@ -822,9 +851,12 @@ def _resolve_sweep_target_and_queries(
         or (
             q.kind == QueryKind.NEIGHBOR_NEGATIVE
             and not (
-                q.id.startswith("adv-")
-                and not q.id.removeprefix("adv-").startswith(f"{target}-")
-                and any(q.id.removeprefix("adv-").startswith(f"{other}-") for other in other_skills)
+                q.query_id.startswith("adv-")
+                and not q.query_id.removeprefix("adv-").startswith(f"{target}-")
+                and any(
+                    q.query_id.removeprefix("adv-").startswith(f"{other}-")
+                    for other in other_skills
+                )
             )
         )
     )
@@ -1183,7 +1215,7 @@ def _evaluate_baseline_decomposition(
         if target_skill is not None
         else list(queries)
     )
-    scoped_ids = {q.id for q in scoped_queries}
+    scoped_ids = {q.query_id for q in scoped_queries}
     scoped_base = [r for r in baseline_results if r.query_id in scoped_ids]
     scoped_res = [r for r in results if r.query_id in scoped_ids]
     decomp = decompose_pass_rate_drop(
@@ -1213,7 +1245,7 @@ def _build_scaling_point(
 ) -> tuple[ScalingPoint, DecompositionResult | None]:
     """Calculate point metrics, Wilson confidence intervals, and pass-rate decomposition."""
     queries = resolved_query_set.queries
-    queries_by_id = {q.id: q for q in queries}
+    queries_by_id = {q.query_id: q for q in queries}
 
     pass_stats = _calculate_scale_pass_rate(
         results,
@@ -1264,28 +1296,32 @@ def _build_scaling_point(
         scale=scale,
         catalog_id=catalog_id,
         pass_rate=round(pass_stats.pass_rate, 4),
-        pass_rate_interval=(
-            round(pass_stats.pass_interval[0], 4),
-            round(pass_stats.pass_interval[1], 4),
+        pass_rate_interval=Interval(
+            low=round(pass_stats.pass_interval[0], 4),
+            high=round(pass_stats.pass_interval[1], 4),
         ),
         recall=round(class_stats.recall, 4),
-        recall_interval=(
-            round(class_stats.recall_interval[0], 4),
-            round(class_stats.recall_interval[1], 4),
+        recall_interval=Interval(
+            low=round(class_stats.recall_interval[0], 4),
+            high=round(class_stats.recall_interval[1], 4),
         ),
         precision=round(class_stats.precision, 4),
-        precision_interval=(
-            round(class_stats.precision_interval[0], 4),
-            round(class_stats.precision_interval[1], 4),
+        precision_interval=Interval(
+            low=round(class_stats.precision_interval[0], 4),
+            high=round(class_stats.precision_interval[1], 4),
         ),
         internal_precision=round(class_stats.internal_precision, 4),
         external_distractor_precision=class_stats.external_distractor_precision,
         abstention_rate=class_stats.abstention_rate,
-        abstention_interval=class_stats.abstention_interval,
+        abstention_interval=(
+            Interval.from_tuple(class_stats.abstention_interval)
+            if class_stats.abstention_interval is not None
+            else None
+        ),
         f1_score=round(class_stats.f1_score, 4),
-        f1_interval=(
-            round(class_stats.f1_interval[0], 4),
-            round(class_stats.f1_interval[1], 4),
+        f1_interval=Interval(
+            low=round(class_stats.f1_interval[0], 4),
+            high=round(class_stats.f1_interval[1], 4),
         ),
         entrypoint_pass_rate=round(entry_pass_stats.pass_rate, 4),
         entrypoint_f1_score=round(entry_class_stats.f1_score, 4),
@@ -1379,15 +1415,26 @@ def _build_study_result(
     t_col = points[-1].delta_collision if len(points) > 1 else 0.0
     t_trunc = points[-1].delta_truncated if len(points) > 1 else 0.0
 
+    d_total = decomp.delta_total if decomp else t_delta
+    d_abs = decomp.delta_abstention if decomp else t_abs
+    d_col = decomp.delta_collision if decomp else t_col
+    d_trunc = decomp.delta_truncated if decomp else t_trunc
+    d_tot_iv = Interval.from_tuple(decomp.delta_total_ci) if decomp else Interval.zero()
+    d_abs_iv = Interval.from_tuple(decomp.delta_abstention_ci) if decomp else Interval.zero()
+    d_col_iv = Interval.from_tuple(decomp.delta_collision_ci) if decomp else Interval.zero()
+    d_trunc_iv = Interval.from_tuple(decomp.delta_truncated_ci) if decomp else Interval.zero()
+    s_size = decomp.sample_size if decomp else 0
+    b_iv = Interval.from_tuple(decomp.baseline_ci) if decomp else Interval.zero()
+    s_iv = Interval.from_tuple(decomp.scaled_ci) if decomp else Interval.zero()
+
     return ScalingStudy(
         target_skill=target,
         is_corpus_sweep=is_corpus,
         catalog_replicates=max(1, catalog_replicates),
+        total_corpus_skills=total_skills,
         scales=tuple(evaluated_scales),
-        points=tuple(points),
         knee_scale=knee,
         knee_scale_interval=knee_interval,
-        knee_scale_pmf=dict(knee_scale_pmf) if knee_scale_pmf is not None else None,
         knee_upper_censored=knee_upper_censored,
         cliff_probability=cliff_probability,
         drop_probability=drop_probability,
@@ -1395,17 +1442,24 @@ def _build_study_result(
         steepest_drop_delta=steepest_drop_delta,
         baseline_pass_rate=b_rate,
         final_pass_rate=f_rate,
-        total_delta=t_delta,
-        total_abstention_loss=t_abs,
-        total_collision_loss=t_col,
-        total_truncated_loss=t_trunc,
+        delta_total=d_total,
+        delta_abstention=d_abs,
+        delta_collision=d_col,
+        delta_truncated=d_trunc,
+        delta_total_interval=d_tot_iv,
+        delta_abstention_interval=d_abs_iv,
+        delta_collision_interval=d_col_iv,
+        delta_truncated_interval=d_trunc_iv,
         noise_floor=noise_floor,
-        total_corpus_skills=total_skills,
-        decomposition=decomp,
+        sample_size=s_size,
+        baseline_interval=b_iv,
+        scaled_interval=s_iv,
         anchor_skills=tuple(anchor_skills) if anchor_skills is not None else None,
+        knee_scale_pmf=dict(knee_scale_pmf) if knee_scale_pmf is not None else None,
         paired_outcomes=paired_outcomes,
-        skill_icc=skill_icc,
         replicate_collisions=tuple(replicate_collisions),
+        skill_icc=skill_icc,
+        points=tuple(points),
     )
 
 
@@ -2203,8 +2257,8 @@ def _execute_scale_replicates(
         pooled_results.extend(rep_results)
         installed_union.update(rep_catalog.skills)
 
-        rep_qmap = {q.id: q for q in scale_query_set.queries}
-        rep_truth = {q.id: q.expected_skill for q in scale_query_set.queries}
+        rep_qmap = {q.query_id: q for q in scale_query_set.queries}
+        rep_truth = {q.query_id: q.expected_skill for q in scale_query_set.queries}
         rep_q_outcomes = _extract_query_outcomes(
             outcome.results,
             rep_truth,
@@ -2355,7 +2409,7 @@ def run_scaling_sweep(
         raw_query_set=raw_query_set,
         resolved_query_set=primary_setup.query_set,
         resolved_skills=resolved_skills,
-        raw_query_map={q.id: q for q in raw_query_set.queries},
+        raw_query_map={q.query_id: q for q in raw_query_set.queries},
         is_corpus=is_corpus,
     )
 
@@ -2396,8 +2450,8 @@ def run_scaling_sweep(
         )
         points.append(point)
         latest_results = combined_results
-        scale_query_map = {q.id: q for q in primary_query_set.queries}
-        truth_expected = {q.id: q.expected_skill for q in primary_query_set.queries}
+        scale_query_map = {q.query_id: q for q in primary_query_set.queries}
+        truth_expected = {q.query_id: q.expected_skill for q in primary_query_set.queries}
         scale_query_sums[scale] = _extract_query_outcomes(
             combined_results,
             truth_expected,
