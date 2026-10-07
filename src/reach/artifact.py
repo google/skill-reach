@@ -24,15 +24,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     computed_field,
     field_validator,
     model_validator,
 )
 
-from reach._io import write_model
+from reach._io import read_model, write_model
 from reach.catalog import corpus_digest, resident_skills
 from reach.config import RunConfig, resolve_path
 from reach.difficulty import LexicalRank, lexical_ranks
@@ -129,6 +131,7 @@ class SkillScore(BaseModel):
 
     skill: str
     root: Path | None = None
+    attempts: Annotated[int, Field(ge=1)] = 1
     probes: int = Field(ge=0)
     reached: int = Field(ge=0)
     recall: float | None = None
@@ -136,7 +139,20 @@ class SkillScore(BaseModel):
     trajectory_recall: float | None = None
     absorbed: int = Field(default=0, ge=0)
     precision: float | None = None
-    attempts: Annotated[int, Field(ge=1)] = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_counts_and_rates(cls, data: object) -> object:
+        """Normalize trajectory counts and derive trajectory recall without post-freeze mutation."""
+        if isinstance(data, dict):
+            data = dict(data)
+            reached = data.get("reached", 0)
+            traj_reached = max(data.get("trajectory_reached", 0), reached)
+            data["trajectory_reached"] = traj_reached
+            probes = data.get("probes", 0)
+            if probes > 0 and data.get("trajectory_recall") is None:
+                data["trajectory_recall"] = traj_reached / probes
+        return data
 
     @model_validator(mode="after")
     def _rates_agree_with_their_counts(self) -> Self:
@@ -146,35 +162,21 @@ class SkillScore(BaseModel):
                 f"{self.skill}: recall is defined exactly when a query named the "
                 f"skill; got recall={self.recall} over {self.probes} probes"
             )
-            raise ValueError(
-                msg,
-            )
-        if self.trajectory_reached < self.reached:
-            object.__setattr__(self, "trajectory_reached", self.reached)
-        if self.probes > 0 and self.trajectory_recall is None:
-            object.__setattr__(
-                self,
-                "trajectory_recall",
-                self.trajectory_reached / self.probes,
-            )
+            raise ValueError(msg)
         if (self.probes > 0) != (self.trajectory_recall is not None):
             msg = (
                 f"{self.skill}: trajectory_recall is defined exactly when a query "
                 f"named the skill; got trajectory_recall={self.trajectory_recall} "
                 f"over {self.probes} probes"
             )
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
         if (self.reached + self.absorbed > 0) != (self.precision is not None):
             msg = (
                 f"{self.skill}: precision is defined exactly when the skill was "
                 f"selected; got precision={self.precision} over "
                 f"{self.reached + self.absorbed} selections"
             )
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
         return self
 
     @computed_field
@@ -266,17 +268,22 @@ class ConfusionPair(BaseModel):
 class QueryRecord(BaseModel):
     """Stage 3 telemetry: summarize probe outcomes, confidence interval, and leak status."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    query_id: str
-    text: str
+    query_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    text: Annotated[str, StringConstraints(min_length=1)]
     kind: QueryKind | None = None
-    expected: str
+    expected_skill: str = Field(validation_alias=AliasChoices("expected_skill", "expected"))
     probes: int = Field(default=0, ge=0)
     hits: int = Field(default=0, ge=0)
     selections: tuple[str, ...] = ()
     difficulty_rank: int | None = None
     leak: Leak | None = None
+
+    @property
+    def expected(self) -> str:
+        """Alias for expected_skill to maintain backward compatibility."""
+        return self.expected_skill
 
     @property
     def clean(self) -> bool:
@@ -473,9 +480,15 @@ class RunProvenance(BaseModel):
 class Artifact(BaseModel):
     """Represent complete evaluation results, summary scores, and provenance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # 1. Schema & Metadata
     schema_version: str = SCHEMA_VERSION
+    catalog_id: str
+    catalog_mode: CatalogMode
+    catalog_size: int = Field(ge=0)
+    catalog_target: str | None = None
+    provenance: RunProvenance
     digests: Provenance = Field(
         description="Configuration fingerprint, corpus digest, and query set digest.",
     )
@@ -483,28 +496,31 @@ class Artifact(BaseModel):
         default=(),
         description="Provenance digests corroborated by individual probe results.",
     )
-    provenance: RunProvenance
-    catalog_id: str
-    catalog_mode: CatalogMode
-    catalog_size: int = Field(ge=0)
-    catalog_target: str | None = None
     resolved_roots: tuple[ResolvedRoot, ...] = ()
     contested_skills: tuple[ContestedSkill, ...] = Field(
         default=(),
         description="Skills provided by multiple roots and resolved by precedence.",
     )
-    skills: tuple[SkillScore, ...] = Field(
-        default=(),
-        description="Per-skill evaluation scores in catalog order.",
-    )
+
+    # 2. Executive scores
     scores: RunScores
     spread: Spread
-    confusion: tuple[ConfusionPair, ...] = ()
-    queries: tuple[QueryRecord, ...] = ()
+
+    # 3. Run accounting counters
     probes: int = Field(default=0, ge=0)
     errors: int = Field(default=0, ge=0)
     spend_usd: float = Field(default=0.0, ge=0.0)
     reused: int = Field(default=0, ge=0)
+
+    # 4. Diagnostics
+    confusion: tuple[ConfusionPair, ...] = ()
+
+    # 5. Leaf collections at the bottom
+    skills: tuple[SkillScore, ...] = Field(
+        default=(),
+        description="Per-skill evaluation scores in catalog order.",
+    )
+    queries: tuple[QueryRecord, ...] = ()
 
     @field_validator("schema_version")
     @classmethod
@@ -685,9 +701,9 @@ def _is_artifact(path: Path) -> bool:
     return True
 
 
-def read_artifact(path: Path) -> Artifact:
-    """Read and validate a Artifact from a JSON file."""
-    return Artifact.model_validate_json(Path(path).read_text(encoding="utf-8"))
+def read_artifact(path: Path | str) -> Artifact:
+    """Read and validate an Artifact from a JSON file."""
+    return read_model(Artifact, path)
 
 
 def _named_root(corpus: Path | None) -> tuple[Path, ...]:

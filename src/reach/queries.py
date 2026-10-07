@@ -156,18 +156,18 @@ class QuerySet(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     catalog_id: str = ""
-    queries: tuple[Query, ...]
     notes: str = ""
     provenance: QuerySetProvenance = Field(default_factory=QuerySetProvenance)
+    queries: tuple[Query, ...]
 
     @model_validator(mode="before")
     @classmethod
     def _default_missing_query_ids(cls, data: object) -> object:
-        """Assign sequential default IDs (`q-001`, ...) to query entries that omit `id`."""
+        """Assign sequential default IDs to query entries that omit query identifiers."""
         if isinstance(data, dict) and isinstance(data.get("queries"), (list, tuple)):
             normalized_queries = [
-                {**q, "id": f"q-{idx:03d}"}
-                if isinstance(q, dict) and not str(q.get("id") or "").strip()
+                {**q, "query_id": f"q-{idx:03d}"}
+                if isinstance(q, dict) and not str(q.get("query_id") or q.get("id") or "").strip()
                 else q
                 for idx, q in enumerate(data["queries"], start=1)
             ]

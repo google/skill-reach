@@ -252,6 +252,15 @@ def test_interval_strictness() -> None:
         Interval.model_validate({"low": 0.2, "high": 0.8, "unexpected_field": "bogus"})
 
 
+def test_interval_to_tuple_and_negative_delta_bounds() -> None:
+    """Verify Interval converts to tuple and accommodates negative bounds for rate deltas."""
+    iv = Interval(low=-0.25, high=0.10, confidence=0.95)
+    assert iv.to_tuple() == (-0.25, 0.10)
+    assert iv.width == pytest.approx(0.35)
+    assert iv.low == -0.25
+    assert iv.high == 0.10
+
+
 @pytest.mark.parametrize(("finding", "counts"), sorted(DEPTH_PAIRS.items()))
 def test_no_published_ratio_was_contradicted_by_the_depth_that_replaced_it(
     finding: str,

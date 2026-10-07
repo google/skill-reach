@@ -19,13 +19,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -144,10 +145,13 @@ class Skill(BaseModel):
 class Query(BaseModel):
     """Represent a single evaluation probe query and expected target skill."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
-    id: str = Field(description="Unique identifier for the evaluation query.")
-    text: str = Field(
+    query_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
+        validation_alias=AliasChoices("query_id", "id"),
+        description="Unique identifier for the evaluation query.",
+    )
+    text: Annotated[str, StringConstraints(min_length=1)] = Field(
         validation_alias=AliasChoices("text", "query"),
         description="Realistic user request text presented to the agent.",
     )
@@ -167,12 +171,18 @@ class Query(BaseModel):
     )
     notes: str = Field(default="", description="Author notes, rationale, or difficulty context.")
 
+    @property
+    def id(self) -> str:
+        """Return unique query identifier for backward compatibility."""
+        return self.query_id
+
     @model_validator(mode="after")
     def _out_of_scope_is_consistent(self) -> Self:
         """Validate out-of-scope query kinds align with absence of expected skills."""
         if (self.kind is QueryKind.OUT_OF_SCOPE) != (self.expected_skill is None):
             msg = (
-                f"{self.id}: kind={self.kind} disagrees with expected_skill={self.expected_skill!r}"
+                f"{self.query_id}: kind={self.kind} "
+                f"disagrees with expected_skill={self.expected_skill!r}"
             )
             raise ValueError(
                 msg,

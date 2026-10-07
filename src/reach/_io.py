@@ -19,13 +19,12 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pydantic import BaseModel
+from pydantic import BaseModel
 
 __all__ = [
     "atomic_write_text",
+    "read_model",
     "write_model",
 ]
 
@@ -42,6 +41,12 @@ def atomic_write_text(
     temp_path.write_text(content, encoding=encoding)
     temp_path.replace(resolved)
     return resolved
+
+
+def read_model[M: BaseModel](model_cls: type[M], path: Path | str) -> M:
+    """Read and validate a Pydantic model from disk using UTF-8 encoding."""
+    resolved = Path(path).expanduser().resolve()
+    return model_cls.model_validate_json(resolved.read_text(encoding="utf-8"))
 
 
 def write_model(model: BaseModel, path: Path | str) -> Path:

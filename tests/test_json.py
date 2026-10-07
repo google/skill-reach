@@ -16,8 +16,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from reach._io import read_model, write_model
 from reach._json import (
     extract_json_payload,
     parse_model_json,
@@ -179,3 +182,21 @@ def test_parse_model_json_raw_trailing_comma_prior_to_fence_extraction() -> None
     raw = '{"queries": [{"text": "q1", }], }'
     data = parse_model_json(raw)
     assert data["queries"][0]["text"] == "q1"
+
+
+def test_read_model_and_write_model_round_trip(tmp_path: Path) -> None:
+    """Verify write_model and read_model serialize and restore Pydantic models faithfully."""
+    from pydantic import BaseModel
+
+    class SampleModel(BaseModel):
+        name: str
+        value: int
+
+    sample = SampleModel(name="test", value=42)
+    target = tmp_path / "subdir" / "model.json"
+    written = write_model(sample, target)
+    assert written == target.resolve()
+    assert target.exists()
+
+    loaded = read_model(SampleModel, target)
+    assert loaded == sample

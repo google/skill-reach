@@ -86,12 +86,12 @@ class CheckAssertion(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    name: str
+    passed: bool
+    observed: float | None = None
+    threshold: float
     comparison: str
     message: str
-    name: str
-    observed: float | None = None
-    passed: bool
-    threshold: float
 
 
 class CheckOutcome(BaseModel):
@@ -99,16 +99,16 @@ class CheckOutcome(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    assertions: tuple[CheckAssertion, ...] = ()
+    exit_code: int = 0
+    stage_failed: CheckStage | None = None
     budget: int = 50
     budget_exhausted: bool = False
-    exit_code: int = 0
-    lint_report: LintReport
-    probes_executed: int = 0
-    queries_probed: int = 0
     skills_checked: int = 0
-    stage_failed: CheckStage | None = None
+    queries_probed: int = 0
+    probes_executed: int = 0
+    lint_report: LintReport
     classification: ClassificationReport | None = None
+    assertions: tuple[CheckAssertion, ...] = ()
 
     @property
     def passed(self) -> bool:

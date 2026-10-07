@@ -277,7 +277,7 @@ def _execute_draft_generation(
                     num += 1
                     new_id = f"{base}-{num}"
             existing_ids.add(new_id)
-            remapped.append(q if new_id == q.id else q.model_copy(update={"id": new_id}))
+            remapped.append(q if new_id == q.id else q.model_copy(update={"query_id": new_id}))
         return partial.model_copy(update={"queries": kept + tuple(remapped)})
 
     def persist(partial: QuerySet) -> None:

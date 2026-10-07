@@ -326,9 +326,9 @@ class LintReport(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    issues: tuple[LintIssue, ...] = ()
-    skills_checked: int = 0
     skill_name: str | None = None
+    skills_checked: int = 0
+    issues: tuple[LintIssue, ...] = ()
 
     @property
     def errors(self) -> tuple[LintIssue, ...]:

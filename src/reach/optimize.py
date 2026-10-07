@@ -475,21 +475,21 @@ class OptimizationReport(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    skill_name: str
+    manifest_path: Path | None = None
     applied: bool = False
+    has_probes: bool = False
+    rival_name: str = ""
     baseline_accuracy: UnitMetric = 0.0
-    baseline_description: str
-    baseline_misroute: UnitMetric = 0.0
     baseline_recall: UnitMetric = 0.0
     baseline_trajectory_recall: UnitMetric = 0.0
-    candidates: tuple[OptimizationCandidate, ...] = ()
-    ceded_terms: tuple[str, ...] = ()
+    baseline_misroute: UnitMetric = 0.0
+    baseline_description: str
     handoff: ReciprocalHandoff | None = None
-    has_probes: bool = False
-    manifest_path: Path | None = None
-    rival_name: str = ""
-    rounds: tuple[IterationRecord, ...] = ()
-    skill_name: str
+    ceded_terms: tuple[str, ...] = ()
     unclaimed_terms: tuple[str, ...] = ()
+    rounds: tuple[IterationRecord, ...] = ()
+    candidates: tuple[OptimizationCandidate, ...] = ()
 
     @property
     def best_candidate(self) -> OptimizationCandidate | None:

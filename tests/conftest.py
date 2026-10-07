@@ -66,6 +66,7 @@ from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
 from reach.retrieval import K1, B, skill_text, tokenize
 from reach.run import Composition, append_result, compose, write_sidecar
 from reach.runtime.fake import FakeGenerator, FakeRuntime, register_fake_agent
+from reach.uncertainty import Interval
 from reach.views import build_console
 
 # ==============================================================================
@@ -836,12 +837,12 @@ def mock_subprocess(
 
 
 @pytest.fixture
-def make_result() -> Callable[..., ProbeResult]:
+def make_result(make_probe_result: Callable[..., ProbeResult]) -> Callable[..., ProbeResult]:
     """Return factory function creating ProbeResult models with default catalog parameters."""
 
     def _make(
-        query_id: str,
-        invoked: str | None,
+        query_id: str = "q1",
+        invoked: str | None = None,
         attempt: int = 1,
         error: str | None = None,
         fingerprint: str = "",
@@ -849,21 +850,27 @@ def make_result() -> Callable[..., ProbeResult]:
         queries: str = "",
         reasoning: tuple[str, ...] = (),
         runtime: str = "fake",
+        **kwargs: Any,
     ) -> ProbeResult:
-        return ProbeResult(
+        catalog_id = kwargs.pop("catalog_id", "fixture")
+        catalog_mode = kwargs.pop("catalog_mode", CatalogMode.ALL)
+        catalog_size = kwargs.pop("catalog_size", 4)
+        model = kwargs.pop("model", "sonnet")
+        return make_probe_result(
             query_id=query_id,
-            catalog_id="fixture",
-            catalog_mode=CatalogMode.ALL,
-            catalog_size=4,
-            model="sonnet",
+            catalog_id=catalog_id,
+            catalog_mode=catalog_mode,
+            catalog_size=catalog_size,
+            model=model,
             runtime=runtime,
             attempt=attempt,
-            invoked_skills=(invoked,) if invoked is not None else (),
+            invoked=invoked,
             error=error,
             config_fingerprint=fingerprint,
             condition_digest=condition,
             queries_digest=queries,
             reasoning=reasoning,
+            **kwargs,
         )
 
     return _make
@@ -1711,26 +1718,26 @@ def sample_two_scale_points(make_scaling_point: Callable[..., Any]) -> list[Any]
             scale=10,
             catalog_id="c1",
             pass_rate=1.0,
-            pass_rate_interval=(0.7, 1.0),
+            pass_rate_interval=Interval(low=0.7, high=1.0),
             recall=1.0,
-            recall_interval=(0.7, 1.0),
+            recall_interval=Interval(low=0.7, high=1.0),
             precision=1.0,
-            precision_interval=(0.7, 1.0),
+            precision_interval=Interval(low=0.7, high=1.0),
             f1_score=1.0,
-            f1_interval=(1.0, 1.0),
+            f1_interval=Interval(low=1.0, high=1.0),
             in_scope_probes=10,
         ),
         make_scaling_point(
             scale=25,
             catalog_id="c2",
             pass_rate=0.5,
-            pass_rate_interval=(0.2, 0.8),
+            pass_rate_interval=Interval(low=0.2, high=0.8),
             recall=0.5,
-            recall_interval=(0.2, 0.8),
+            recall_interval=Interval(low=0.2, high=0.8),
             precision=0.55,
-            precision_interval=(0.2, 0.8),
+            precision_interval=Interval(low=0.2, high=0.8),
             f1_score=0.52,
-            f1_interval=(0.2, 0.8),
+            f1_interval=Interval(low=0.2, high=0.8),
             in_scope_probes=10,
             delta_vs_baseline=0.5,
             delta_abstention=0.1,

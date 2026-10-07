@@ -1505,7 +1505,7 @@ def test_eval_filters_existing_queries_file_by_skill_flag(
         == 0
     )
     artifact = json.loads(out_file.read_text(encoding="utf-8"))
-    evaluated_skills = {q["expected"] for q in artifact["queries"]}
+    evaluated_skills = {q.get("expected_skill", q.get("expected")) for q in artifact["queries"]}
     assert evaluated_skills == {"gke-basics"}
 
 
