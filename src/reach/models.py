@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
-    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -42,7 +41,6 @@ __all__ = [
     "CatalogMode",
     "DisclosureState",
     "InvocationPattern",
-    "NonBlankStr",
     "ProbeResult",
     "Provenance",
     "Query",
@@ -143,17 +141,7 @@ class Skill(BaseModel):
         return value
 
 
-def _validate_not_blank(value: str) -> str:
-    """Validate that string is not empty or purely whitespace."""
-    if not value.strip():
-        msg = "String cannot be empty or whitespace only"
-        raise ValueError(msg)
-    return value
-
-
-type NonBlankStr = Annotated[
-    str, StringConstraints(min_length=1), AfterValidator(_validate_not_blank)
-]
+type _NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 
 class Query(BaseModel):
@@ -161,10 +149,10 @@ class Query(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    query_id: NonBlankStr = Field(
+    query_id: _NonBlankStr = Field(
         description="Unique identifier for the evaluation query.",
     )
-    text: NonBlankStr = Field(
+    text: _NonBlankStr = Field(
         description="Realistic user request text presented to the agent.",
     )
     kind: QueryKind | None = Field(

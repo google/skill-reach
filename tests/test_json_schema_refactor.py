@@ -76,12 +76,26 @@ def test_query_clean_break_schema() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
         Query.model_validate({"id": "qid-2", "text": "Deploy app", "expected_skill": "deploy"})
 
-    # Whitespace-only query_id or text is rejected by NonBlankStr
-    with pytest.raises(ValidationError, match="cannot be empty or whitespace only"):
+    # Empty string is rejected by min_length
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        Query(query_id="", text="Deploy app", expected_skill="deploy")
+
+    # Whitespace-only query_id or text is rejected by pattern constraint
+    with pytest.raises(ValidationError, match="String should match pattern"):
         Query(query_id="   ", text="Deploy app", expected_skill="deploy")
 
-    with pytest.raises(ValidationError, match="cannot be empty or whitespace only"):
+    with pytest.raises(ValidationError, match="String should match pattern"):
         Query(query_id="qid-3", text="   \t  ", expected_skill="deploy")
+
+    # Exact whitespace is preserved without unwanted mutation
+    exact_q = Query(query_id="  qid-exact  ", text="deploy app ", expected_skill="deploy")
+    assert exact_q.query_id == "  qid-exact  "
+    assert exact_q.text == "deploy app "
+
+    # NonBlankStr is not exposed in public __all__
+    import reach.models
+
+    assert "NonBlankStr" not in reach.models.__all__
 
 
 def test_queryset_leaf_at_bottom() -> None:

@@ -50,7 +50,6 @@ from reach.models import (
     NO_SKILL,
     Catalog,
     CatalogMode,
-    NonBlankStr,
     ProbeResult,
     Provenance,
     Query,
@@ -272,8 +271,8 @@ class QueryRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    query_id: NonBlankStr
-    text: NonBlankStr
+    query_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
     kind: QueryKind | None = None
     expected_skill: str
     probes: int = Field(default=0, ge=0)

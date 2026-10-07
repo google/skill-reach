@@ -12,7 +12,6 @@ Domain representations for skills, catalogs, queries, and probe results.
         - DisclosureState
         - InvocationPattern
         - NO_SKILL
-        - NonBlankStr
         - ProbeResult
         - Provenance
         - Query
