@@ -247,15 +247,6 @@ def _apply_catalog_id_fallback(parsed: QuerySet, catalog_id: str) -> QuerySet:
     return parsed
 
 
-def _parse_json_query_set(
-    content: str,
-    *,
-    catalog_id: str,
-) -> QuerySet:
-    """Parse and validate a QuerySet JSON payload."""
-    return _apply_catalog_id_fallback(QuerySet.model_validate_json(content), catalog_id)
-
-
 def load_query_set(
     path: Path | str,
     *,
@@ -281,7 +272,7 @@ def load_query_set(
     if suffix == ".json":
         return _apply_catalog_id_fallback(read_model(QuerySet, resolved), catalog_id)
     try:
-        return _parse_json_query_set(content, catalog_id=catalog_id)
+        return _apply_catalog_id_fallback(read_model(QuerySet, resolved), catalog_id)
     except (ValueError, ValidationError):
         from reach.exchange import Exchange, import_query_set
 

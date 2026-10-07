@@ -105,7 +105,9 @@ class Interval(BaseModel):
     ) -> Self:
         """Construct an Interval from an existing Interval or a 2-element sequence."""
         if isinstance(bounds, Interval):
-            return bounds
+            if bounds.confidence == confidence:
+                return bounds
+            return cls(low=bounds.low, high=bounds.high, confidence=confidence)
         if len(bounds) != _INTERVAL_BOUNDS_LEN:
             msg = f"expected 2 elements for interval bounds, got {len(bounds)}"
             raise ValueError(msg)

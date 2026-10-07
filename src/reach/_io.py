@@ -44,9 +44,12 @@ def atomic_write_text(
 
 
 def read_model[M: BaseModel](model_cls: type[M], path: Path | str) -> M:
-    """Read and validate a Pydantic model from disk using UTF-8 encoding."""
+    """Read and validate a Pydantic model from disk."""
     resolved = Path(path).expanduser().resolve()
-    return model_cls.model_validate_json(resolved.read_text(encoding="utf-8"))
+    if not resolved.is_file():
+        msg = f"Model source file not found or is not a regular file: {resolved}"
+        raise FileNotFoundError(msg)
+    return model_cls.model_validate_json(resolved.read_bytes())
 
 
 def write_model(model: BaseModel, path: Path | str) -> Path:

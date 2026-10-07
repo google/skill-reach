@@ -148,6 +148,15 @@ class SkillScore(BaseModel):
                 f"be less than reached ({self.reached})"
             )
             raise ValueError(msg)
+        if self.reached > self.probes:
+            msg = f"{self.skill}: reached ({self.reached}) cannot exceed probes ({self.probes})"
+            raise ValueError(msg)
+        if self.trajectory_reached > self.probes:
+            msg = (
+                f"{self.skill}: trajectory_reached ({self.trajectory_reached}) cannot "
+                f"exceed probes ({self.probes})"
+            )
+            raise ValueError(msg)
         if (self.probes > 0) != (self.recall is not None):
             msg = (
                 f"{self.skill}: recall is defined exactly when a query named the "

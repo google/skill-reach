@@ -29,7 +29,7 @@ from reach.lint import LintIssue, LintReport, Severity
 from reach.metrics import ClassMetrics
 from reach.models import Query
 from reach.optimize import OptimizationReport
-from reach.queries import Origin, QuerySet, QuerySetProvenance
+from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set
 from reach.sweep import ScalingPoint, ScalingStudy
 from reach.uncertainty import Interval
 
@@ -314,3 +314,74 @@ def test_cli_reports_leaf_collections_at_bottom(
     )
     data = json.loads(instance.model_dump_json())
     assert leaf_field in list(data.keys())[-2:], f"{leaf_field} should be serialized near the end"
+
+
+def test_skillscore_count_bounds_validation() -> None:
+    """Verify SkillScore validates that reached and trajectory_reached do not exceed probes."""
+    # reached > probes
+    with pytest.raises(ValidationError, match=r"reached .* cannot exceed probes"):
+        SkillScore(
+            skill="test-skill",
+            probes=10,
+            reached=12,
+            trajectory_reached=12,
+            trajectory_recall=1.0,
+            recall=1.0,
+            precision=1.0,
+        )
+
+    # trajectory_reached > probes
+    with pytest.raises(ValidationError, match=r"trajectory_reached .* cannot exceed probes"):
+        SkillScore(
+            skill="test-skill",
+            probes=10,
+            reached=8,
+            trajectory_reached=15,
+            trajectory_recall=1.0,
+            recall=0.8,
+            precision=1.0,
+        )
+
+
+def test_read_model_file_validation(tmp_path: Path) -> None:
+    """Verify read_model checks for regular file existence and raises FileNotFoundError."""
+    missing_file = tmp_path / "nonexistent.json"
+    with pytest.raises(FileNotFoundError, match="Model source file not found"):
+        read_model(Query, missing_file)
+
+    # Directory instead of file
+    with pytest.raises(FileNotFoundError, match="Model source file not found"):
+        read_model(Query, tmp_path)
+
+
+def test_interval_from_tuple_confidence_propagation() -> None:
+    """Verify Interval.from_tuple propagates or updates confidence when given an Interval."""
+    base = Interval(low=0.2, high=0.8, confidence=0.95)
+
+    # Same confidence returns the identical instance
+    same = Interval.from_tuple(base, confidence=0.95)
+    assert same is base
+
+    # Different confidence constructs a new instance with the updated confidence
+    updated = Interval.from_tuple(base, confidence=0.99)
+    assert updated is not base
+    assert updated.low == 0.2
+    assert updated.high == 0.8
+    assert updated.confidence == 0.99
+
+
+def test_load_query_set_extensionless_json(tmp_path: Path) -> None:
+    """Verify load_query_set correctly parses an extensionless JSON file using read_model."""
+    qs = QuerySet(
+        queries=[
+            Query(query_id="q1", text="Deploy app", expected_skill="deploy"),
+        ],
+        catalog_id="cat-test",
+    )
+    ext_less = tmp_path / "query_data"
+    write_model(qs, ext_less)
+
+    loaded = load_query_set(ext_less)
+    assert loaded.catalog_id == "cat-test"
+    assert len(loaded.queries) == 1
+    assert loaded.queries[0].query_id == "q1"
