@@ -1781,5 +1781,7 @@ def test_auto_enables_vertex_when_project_configured_and_no_api_key(
 
     # When GEMINI_API_KEY is present and vertex is not explicitly set, Gemini API takes precedence
     monkeypatch.setenv("GEMINI_API_KEY", "test-dev-key")
-    assert driver.options.effective_vertex is False
-    assert driver.options.effective_api_key == "test-dev-key"
+    driver_with_key = build_runtime(resolved_rt)
+    assert isinstance(driver_with_key, AntigravitySdkRuntime)
+    assert driver_with_key.options.effective_vertex is False
+    assert driver_with_key.options.effective_api_key == "test-dev-key"
