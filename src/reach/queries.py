@@ -163,15 +163,17 @@ class QuerySet(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_legacy_query_ids(cls, data: object) -> object:
-        """Migrate legacy 'id' field in query dictionaries to 'query_id'."""
-        if isinstance(data, dict) and isinstance(data.get("queries"), (list, tuple)):
+        """Migrate legacy 'id' keys in query mappings to 'query_id'."""
+        if isinstance(data, Mapping) and isinstance(
+            raw_queries := data.get("queries"), (list, tuple)
+        ):
             normalized_queries = [
                 (
                     {"query_id": q["id"], **{k: v for k, v in q.items() if k != "id"}}
-                    if isinstance(q, dict) and "id" in q and "query_id" not in q
+                    if isinstance(q, Mapping) and "id" in q and "query_id" not in q
                     else q
                 )
-                for q in data["queries"]
+                for q in raw_queries
             ]
             return {**data, "queries": normalized_queries}
         return data

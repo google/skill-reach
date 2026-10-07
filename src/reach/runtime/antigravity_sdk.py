@@ -625,15 +625,17 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
         skills_dir = self.skills_dir(workdir)
         skills_paths = [str(skills_dir)]
         if skills_dir.is_dir():
-            child_dirs = [str(p) for p in sorted(skills_dir.iterdir()) if p.is_dir()]
+            child_dirs = [
+                str(p) for p in sorted(skills_dir.iterdir()) if p.is_dir() and not p.is_symlink()
+            ]
             skills_paths.extend(p for p in child_dirs if p not in skills_paths)
             if self.options.use_symlinks:
-                resolved_targets = {
+                symlink_targets = {
                     str(resolved)
                     for child in skills_dir.iterdir()
                     if child.is_symlink() and (resolved := child.resolve()).is_dir()
                 }
-                skills_paths.extend(p for p in sorted(resolved_targets) if p not in skills_paths)
+                skills_paths.extend(p for p in sorted(symlink_targets) if p not in skills_paths)
         kwargs = self.options.base_config_kwargs(self._model_spec(), self.build_env(workdir))
         skills_prompt = self.format_available_skills_prompt(workdir)
         if skills_prompt:

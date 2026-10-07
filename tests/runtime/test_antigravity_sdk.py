@@ -151,10 +151,10 @@ def test_select_config_points_at_the_installed_skills_directory(
 def test_select_config_includes_symlink_targets_when_use_symlinks_true(
     tmp_path: Path,
 ) -> None:
-    """Verify skills_paths includes resolved symlink target directories when enabled."""
-    runtime = AntigravitySdkRuntime(options=AntigravitySdkOptions(use_symlinks=True))
+    """Verify skills_paths includes resolved symlink target directories only when enabled."""
     workdir = tmp_path / "work"
-    skills_dir = runtime.skills_dir(workdir)
+    runtime_enabled = AntigravitySdkRuntime(options=AntigravitySdkOptions(use_symlinks=True))
+    skills_dir = runtime_enabled.skills_dir(workdir)
     skills_dir.mkdir(parents=True, exist_ok=True)
 
     external_source = tmp_path / "external_skills" / "custom-skill"
@@ -162,10 +162,14 @@ def test_select_config_includes_symlink_targets_when_use_symlinks_true(
     symlink_dst = skills_dir / "custom-skill"
     symlink_dst.symlink_to(external_source, target_is_directory=True)
 
-    config = runtime._select_config(workdir)
-    assert str(skills_dir) in config.skills_paths
-    assert str(symlink_dst) in config.skills_paths
-    assert str(external_source) in config.skills_paths
+    config_enabled = runtime_enabled._select_config(workdir)
+    assert str(skills_dir) in config_enabled.skills_paths
+    assert str(symlink_dst) not in config_enabled.skills_paths
+    assert str(external_source) in config_enabled.skills_paths
+
+    runtime_disabled = AntigravitySdkRuntime(options=AntigravitySdkOptions(use_symlinks=False))
+    config_disabled = runtime_disabled._select_config(workdir)
+    assert config_disabled.skills_paths == [str(skills_dir)]
 
 
 def test_select_config_includes_child_skill_directories(
@@ -205,6 +209,26 @@ def test_select_config_formats_available_skills_into_system_instructions(
     assert "skill-a" in str(config.system_instructions)
     assert "Helpful assistant for task A" in str(config.system_instructions)
     assert str(skill_a / "SKILL.md") in str(config.system_instructions)
+
+
+def test_format_available_skills_prompt_logs_warning_on_corrupted_skill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify format_available_skills_prompt logs warning and returns None on load error."""
+    runtime = AntigravitySdkRuntime()
+    workdir = tmp_path / "work"
+    skills_dir = runtime.skills_dir(workdir)
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    def _fail_load(_path: Path) -> list[Any]:
+        msg = "corrupted YAML frontmatter"
+        raise ValueError(msg)
+
+    monkeypatch.setattr("reach.runtime.load_skills", _fail_load)
+    assert runtime.format_available_skills_prompt(workdir) is None
+    assert "Failed to load skills" in caplog.text
 
 
 def test_select_reports_the_structured_selection(

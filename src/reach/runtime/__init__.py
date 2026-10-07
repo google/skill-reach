@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import logging
 import os
 import time
 from abc import ABC, abstractmethod
@@ -29,6 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from reach.catalog import load_skills
 from reach.config import (
     KEYWORD_AGENT,
     RuntimeSettings,
@@ -61,6 +63,8 @@ from reach.runtime.profiles import model_profile
 if TYPE_CHECKING:
     from reach.models import Catalog, Skill
     from reach.runtime.retriever import TwoStageRetrieverRuntime
+
+logger = logging.getLogger(__name__)
 
 #: Canonical identifier for the internal fake test runtime agent.
 FAKE_AGENT = "fake"
@@ -1142,28 +1146,31 @@ class AntigravityRuntime[AntigravityOptionsT: AntigravityOptions](
         return json.dumps(schema_dict)
 
     def format_available_skills_prompt(self, workdir: Path) -> str | None:
-        """Format progressive-disclosure available skills prompt from workspace skills directory."""
-        import contextlib
-
-        from reach.catalog import load_skills
-
+        """Format the progressive-disclosure prompt describing available skills in the workspace."""
         skills_dir = self.skills_dir(workdir)
         if not skills_dir.is_dir():
             return None
-        with contextlib.suppress(Exception):
+        try:
             installed_skills = load_skills(skills_dir)
-            if installed_skills:
-                header = (
-                    "If a skill seems relevant to your current task, you MUST read its "
-                    "`SKILL.md` instructions using `view_file` before proceeding.\n\n"
-                    "Available skills:"
-                )
-                skills_lines = [header]
-                for s in installed_skills:
-                    skill_md_path = skills_dir / s.name / "SKILL.md"
-                    skills_lines.append(f"- {s.name} ({skill_md_path}): {s.description}")
-                return "\n".join(skills_lines)
-        return None
+        except (OSError, ValueError, KeyError):
+            logger.warning(
+                "Failed to load skills from %s for prompt formatting",
+                skills_dir,
+                exc_info=True,
+            )
+            return None
+        if not installed_skills:
+            return None
+        header = (
+            "If a skill seems relevant to your current task, you MUST read its "
+            "`SKILL.md` instructions using `view_file` before proceeding.\n\n"
+            "Available skills:"
+        )
+        skills_lines = [header]
+        for s in installed_skills:
+            skill_md_path = skills_dir / s.name / "SKILL.md"
+            skills_lines.append(f"- {s.name} ({skill_md_path}): {s.description}")
+        return "\n".join(skills_lines)
 
 
 def builtin_tool_names() -> frozenset[str]:
