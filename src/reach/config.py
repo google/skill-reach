@@ -474,12 +474,17 @@ class RuntimeSettings(BaseModel):
 
     def with_overrides(self, **overrides: object) -> RuntimeSettings:
         """Return a copy with overrides applied, discarding stale options when the agent changes."""
+        options_specified = "options" in overrides
         clean_overrides = {k: v for k, v in overrides.items() if v is not None}
         agent_specified = "agent" in clean_overrides
         target_agent = clean_overrides.get("agent", self.agent)
         same_agent = target_agent == self.agent
         model = clean_overrides.pop("model", None)
-        base_opts: Any = dict(self.options) if same_agent else {}
+
+        if options_specified and overrides["options"] is None:
+            base_opts: Any = {}
+        else:
+            base_opts = dict(self.options) if same_agent else {}
         options_override = clean_overrides.pop("options", None)
         if isinstance(options_override, Mapping):
             base_opts.update(options_override)

@@ -3328,6 +3328,7 @@ def test_scaling_study_load_and_save(
     saved = study.save(save_path)
     assert saved == save_path.resolve()
     assert save_path.exists()
+    assert not any(save_path.parent.glob("*.tmp.*"))
 
     loaded = ScalingStudy.load(save_path)
     assert loaded == study

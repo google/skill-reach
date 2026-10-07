@@ -19,6 +19,7 @@ from __future__ import annotations
 import difflib
 import logging
 import math
+import os
 import random
 import statistics
 import tempfile
@@ -282,10 +283,26 @@ class ScalingStudy(BaseModel):
             raise ValueError(msg) from err
 
     def save(self, path: Path | str) -> Path:
-        """Serialize the scaling study to a formatted JSON file."""
+        """Serialize the scaling study to a formatted JSON file atomically.
+
+        Args:
+            path: Target file path for the serialized JSON output.
+
+        Returns:
+            The resolved Path where the study was written.
+
+        Raises:
+            OSError: If directory creation or file writing fails.
+        """
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        tmp_target = target.with_suffix(f"{target.suffix}.tmp.{os.getpid()}")
+        try:
+            tmp_target.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            tmp_target.replace(target)
+        finally:
+            if tmp_target.exists():
+                tmp_target.unlink(missing_ok=True)
         return target
 
     @model_validator(mode="after")

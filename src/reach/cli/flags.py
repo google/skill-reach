@@ -811,8 +811,11 @@ def _opt_error_reason(
         for f in error.errors()
         if f.get("loc")
         and (
-            f["loc"][0] == "runtime"
-            or any(isinstance(part, str) and part in typed for part in f["loc"])
+            f["loc"][0] in ("runtime", "options")
+            or (
+                f["loc"][0] not in type(loaded).model_fields
+                and any(isinstance(part, str) and part in typed for part in f["loc"])
+            )
         )
     ]
     if not failures:
