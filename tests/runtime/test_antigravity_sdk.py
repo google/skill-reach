@@ -164,7 +164,47 @@ def test_select_config_includes_symlink_targets_when_use_symlinks_true(
 
     config = runtime._select_config(workdir)
     assert str(skills_dir) in config.skills_paths
+    assert str(symlink_dst) in config.skills_paths
     assert str(external_source) in config.skills_paths
+
+
+def test_select_config_includes_child_skill_directories(
+    tmp_path: Path,
+) -> None:
+    """Verify skills_paths includes child skill directories when installed in workspace."""
+    runtime = AntigravitySdkRuntime()
+    workdir = tmp_path / "work"
+    skills_dir = runtime.skills_dir(workdir)
+    skill_a = skills_dir / "skill-a"
+    skill_b = skills_dir / "skill-b"
+    skill_a.mkdir(parents=True, exist_ok=True)
+    skill_b.mkdir(parents=True, exist_ok=True)
+
+    config = runtime._select_config(workdir)
+    assert str(skills_dir) in config.skills_paths
+    assert str(skill_a) in config.skills_paths
+    assert str(skill_b) in config.skills_paths
+
+
+def test_select_config_formats_available_skills_into_system_instructions(
+    tmp_path: Path,
+) -> None:
+    """Verify available skills are formatted into system instructions with paths."""
+    runtime = AntigravitySdkRuntime()
+    workdir = tmp_path / "work"
+    skills_dir = runtime.skills_dir(workdir)
+    skill_a = skills_dir / "skill-a"
+    skill_a.mkdir(parents=True, exist_ok=True)
+    (skill_a / "SKILL.md").write_text(
+        "---\nname: skill-a\ndescription: Helpful assistant for task A\n---\nBody",
+        encoding="utf-8",
+    )
+
+    config = runtime._select_config(workdir)
+    assert config.system_instructions is not None
+    assert "skill-a" in str(config.system_instructions)
+    assert "Helpful assistant for task A" in str(config.system_instructions)
+    assert str(skill_a / "SKILL.md") in str(config.system_instructions)
 
 
 def test_select_reports_the_structured_selection(

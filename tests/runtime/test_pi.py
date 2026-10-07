@@ -656,6 +656,61 @@ def test_parse_session_entries_extracts_prompt_tokens() -> None:
     assert PiUsage(input=10, cache_read=5, cache_write=2).total_prompt_tokens == 17
 
 
+def test_parse_session_entries_accumulates_multi_turn_prompt_tokens() -> None:
+    """Verify parse_session_entries sums prompt tokens and cost across multiple assistant turns."""
+    from reach.runtime.pi import parse_session_entries
+
+    entries = [
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "model": "gemini-3.8-flash",
+                "usage": {
+                    "input": 1000,
+                    "cacheRead": 100,
+                    "cacheWrite": 10,
+                    "cost": {"total": 0.001},
+                },
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "name": "read",
+                        "arguments": {"path": ".pi/skills/step1/SKILL.md"},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "model": "gemini-3.8-flash",
+                "usage": {
+                    "input": 1200,
+                    "cacheRead": 100,
+                    "cacheWrite": 20,
+                    "cost": {"total": 0.0015},
+                },
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "name": "read",
+                        "arguments": {"path": ".pi/skills/step2/SKILL.md"},
+                    }
+                ],
+            },
+        },
+    ]
+    summary = parse_session_entries(entries, resident=("step1", "step2"))
+    assert summary.invoked_skills == ("step1", "step2")
+    # Turn 1: 1000 + 100 + 10 = 1110 tokens; Turn 2: 1200 + 100 + 20 = 1320 tokens.
+    # Cumulative prompt tokens: 1110 + 1320 = 2430 tokens.
+    assert summary.prompt_tokens == 2430
+    assert summary.cost_usd == pytest.approx(0.0025)
+    assert summary.turns_taken == 2
+
+
 def test_pi_select_records_duration_ms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -662,8 +662,8 @@ def test_install_does_not_clear_a_configured_model_provider(
         pytest.param(
             {"model": "test-model"},
             "do a thing",
-            ("--new-project", "--disable-slash-commands", "--dangerously-skip-permissions"),
-            ("--effort",),
+            ("--new-project", "--dangerously-skip-permissions"),
+            ("--effort", "--disable-slash-commands"),
             (
                 ("--model", "test-model"),
                 ("--output-format", "stream-json"),
@@ -674,14 +674,14 @@ def test_install_does_not_clear_a_configured_model_provider(
         pytest.param(
             {
                 "model": "m",
-                "disable_slash_commands": False,
+                "disable_slash_commands": True,
                 "dangerously_skip_permissions": False,
                 "print_timeout": "45s",
                 "effort": "high",
             },
             "q",
-            ("--new-project",),
-            ("--disable-slash-commands", "--dangerously-skip-permissions"),
+            ("--new-project", "--disable-slash-commands"),
+            ("--dangerously-skip-permissions",),
             (("--model", "m"), ("--print-timeout", "45s"), ("--effort", "high")),
             id="overrides",
         ),
@@ -705,6 +705,57 @@ def test_build_command_default_and_override_flags(
         assert flag not in command
     for flag, value in expected_pairs:
         assert command[command.index(flag) + 1] == value
+
+
+def test_antigravity_cli_options_disable_slash_commands_defaults_to_false() -> None:
+    """Verify AntigravityCliOptions defaults disable_slash_commands to False for evaluation."""
+    options = AntigravityCliOptions()
+    assert options.disable_slash_commands is False
+
+
+def test_antigravity_cli_generator_enforces_disable_slash_commands_true() -> None:
+    """Verify AntigravityCliGenerator enforces disable_slash_commands=True for text completions."""
+    from reach.runtime.antigravity_cli import AntigravityCliGenerator
+
+    # When options is omitted
+    gen_default = AntigravityCliGenerator(model="gemini-3.8-flash")
+    assert gen_default.options.disable_slash_commands is True
+
+    # When options is passed without explicit disable_slash_commands
+    opts = AntigravityCliOptions(model="gemini-3.8-flash")
+    gen_opts = AntigravityCliGenerator(options=opts)
+    assert gen_opts.options.disable_slash_commands is True
+
+    # When explicitly set to False, respect explicit setting
+    opts_explicit = AntigravityCliOptions(model="gemini-3.8-flash", disable_slash_commands=False)
+    gen_explicit = AntigravityCliGenerator(options=opts_explicit)
+    assert gen_explicit.options.disable_slash_commands is False
+
+
+def test_antigravity_cli_runtime_caches_and_injects_available_skills_prompt(
+    tmp_path: Path,
+    home_dir: Path,
+) -> None:
+    """Verify AntigravityCliRuntime caches available skills and injects into prompt."""
+    rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir))
+    workdir = tmp_path / "work"
+    skills_dir = rt.skills_dir(workdir)
+    skill_a = skills_dir / "my-skill"
+    skill_a.mkdir(parents=True, exist_ok=True)
+    (skill_a / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: Does awesome stuff\n---\nBody",
+        encoding="utf-8",
+    )
+
+    rt._post_install(workdir)
+    assert rt._cached_skills_prompt is not None
+    assert "my-skill" in rt._cached_skills_prompt
+    assert "Does awesome stuff" in rt._cached_skills_prompt
+
+    command = rt.build_command("how do i do awesome stuff?")
+    prompt_arg = command[command.index("-p") + 1]
+    assert "my-skill" in prompt_arg
+    assert "Task:\nhow do i do awesome stuff?" in prompt_arg
 
 
 @pytest.mark.parametrize("use_explicit_schema", [False, True], ids=["default-omitted", "explicit"])

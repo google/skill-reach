@@ -1141,6 +1141,30 @@ class AntigravityRuntime[AntigravityOptionsT: AntigravityOptions](
         schema_dict["required"] = ["selected_skill", "reasoning"]
         return json.dumps(schema_dict)
 
+    def format_available_skills_prompt(self, workdir: Path) -> str | None:
+        """Format progressive-disclosure available skills prompt from workspace skills directory."""
+        import contextlib
+
+        from reach.catalog import load_skills
+
+        skills_dir = self.skills_dir(workdir)
+        if not skills_dir.is_dir():
+            return None
+        with contextlib.suppress(Exception):
+            installed_skills = load_skills(skills_dir)
+            if installed_skills:
+                header = (
+                    "If a skill seems relevant to your current task, you MUST read its "
+                    "`SKILL.md` instructions using `view_file` before proceeding.\n\n"
+                    "Available skills:"
+                )
+                skills_lines = [header]
+                for s in installed_skills:
+                    skill_md_path = skills_dir / s.name / "SKILL.md"
+                    skills_lines.append(f"- {s.name} ({skill_md_path}): {s.description}")
+                return "\n".join(skills_lines)
+        return None
+
 
 def builtin_tool_names() -> frozenset[str]:
     """Return canonical built-in tool primitives across all supported agent harnesses."""

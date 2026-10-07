@@ -184,7 +184,7 @@ class AntigravityCliOptions(AntigravityOptions, CliOptions):
     )
     home_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "home_dir"
-    disable_slash_commands: bool = True
+    disable_slash_commands: bool = False
     dangerously_skip_permissions: bool = True
     print_timeout: str | None = None
     go_max_procs: PositiveInt = 4
@@ -601,6 +601,7 @@ class AntigravityCliRuntime(
     options: AntigravityCliOptions
     api_key_env_var: str | None = "GEMINI_API_KEY"
     _skills_subpath = ".agents/skills"
+    _cached_skills_prompt: str | None = None
 
     def __init__(
         self,
@@ -615,7 +616,9 @@ class AntigravityCliRuntime(
     def clone_isolated(self) -> Self:
         """Create a thread-local isolated clone with a dedicated temporary home directory."""
         cloned_options = self.options.model_copy(update={"home_dir": None})
-        return type(self)(settings=self.settings, options=cloned_options)
+        cloned = type(self)(settings=self.settings, options=cloned_options)
+        cloned._cached_skills_prompt = self._cached_skills_prompt  # noqa: SLF001
+        return cloned
 
     def __enter__(self) -> Self:
         """Enter runtime context."""
@@ -639,6 +642,7 @@ class AntigravityCliRuntime(
             allow_read=skills_root,
             model_provider=self.options.resolve_model_provider(self.model),
         )
+        self._cached_skills_prompt = self.format_available_skills_prompt(workdir)
 
     def clean_conversation_state(self) -> None:
         """Purge persisted conversation records, SQLite summaries, and isolated ADC file."""
@@ -652,10 +656,15 @@ class AntigravityCliRuntime(
     def build_command(self, query_text: str) -> list[str]:
         """Assemble command-line arguments for executing a probe."""
         options = self.options
+        prompt = (
+            f"{self._cached_skills_prompt}\n\nTask:\n{query_text}"
+            if self._cached_skills_prompt
+            else query_text
+        )
         return [
             options.executable,
             "-p",
-            query_text,
+            prompt,
             "--model",
             self.model,
             "--output-format",
@@ -763,6 +772,8 @@ class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityC
             opts = AntigravityCliOptions(model=model)
         else:
             opts = AntigravityCliOptions()
+        if "disable_slash_commands" not in opts.model_fields_set:
+            opts = opts.model_copy(update={"disable_slash_commands": True})
         super().__init__(model=opts.model or model, timeout_s=timeout_s, options=opts)
         self._init_isolated_home("reach-agy-draft-")
 

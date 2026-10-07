@@ -970,3 +970,34 @@ def test_resolve_draft_study_flags_discovers_queries_via_reach_toml_skills(
 
     resolved = _resolve_draft_study_flags(None, None, None)
     assert resolved.queries == corpus_queries.resolve()
+
+
+def test_queryset_normalizes_legacy_id_field() -> None:
+    """Verify that QuerySet converts legacy query 'id' fields to 'query_id'."""
+    raw = {
+        "catalog_id": "test-cat",
+        "queries": [
+            {"id": "legacy-q1", "text": "Do work", "expected_skill": "worker"},
+            {"query_id": "modern-q2", "text": "Do more work", "expected_skill": "worker"},
+        ],
+    }
+    qs = QuerySet.model_validate(raw)
+    assert len(qs.queries) == 2
+    assert qs.queries[0].query_id == "legacy-q1"
+    assert qs.queries[1].query_id == "modern-q2"
+
+    # Verify serialized output uses canonical query_id
+    dumped = qs.model_dump()
+    assert dumped["queries"][0]["query_id"] == "legacy-q1"
+    assert "id" not in dumped["queries"][0]
+
+    # Verify duplicate legacy ids still trigger validation error
+    with pytest.raises(ValueError, match="duplicate query ids"):
+        QuerySet.model_validate(
+            {
+                "queries": [
+                    {"id": "dupe-id", "text": "A", "expected_skill": "s1"},
+                    {"id": "dupe-id", "text": "B", "expected_skill": "s2"},
+                ]
+            }
+        )

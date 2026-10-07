@@ -173,6 +173,11 @@ TOOL_PATH_KEYS: tuple[str, ...] = (
     "SearchDirectory",
     "SearchPath",
     "file",
+    "file_path",
+    "filePath",
+    "dir_path",
+    "directory_path",
+    "directoryPath",
     "path_str",
 )
 
@@ -223,7 +228,15 @@ def normalize_skill_tool_args(
     skill: str | None = None,
 ) -> dict[str, Any] | None:
     """Rewrite skill directory path arguments in tool args to point at SKILL.md."""
-    for key in ("AbsolutePath", "path"):
+    for key in (
+        "AbsolutePath",
+        "path",
+        "file_path",
+        "filePath",
+        "dir_path",
+        "directory_path",
+        "directoryPath",
+    ):
         p = _clean_path(args.get(key))
         if p is None or p.name.lower() == "skill.md" or p.suffix.lower() == ".md":
             continue
