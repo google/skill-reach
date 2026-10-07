@@ -20,6 +20,7 @@ import importlib
 import textwrap
 from inspect import signature
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -1726,3 +1727,120 @@ def test_build_config_decouples_implicit_queries_when_cli_skills_overridden(
     )
     assert cfg.study.skills == other_skills.resolve()
     assert cfg.study.queries is None
+
+
+@pytest.mark.parametrize(
+    ("override_agent", "override_options", "expected_agent", "expected_options"),
+    [
+        ("antigravity-cli", None, "antigravity-cli", {}),
+        ("antigravity-cli", {"vertex": True}, "antigravity-cli", {"vertex": True}),
+        (
+            "claude-code",
+            None,
+            "claude-code",
+            {"model": "claude-sonnet-5", "setting_sources": "user"},
+        ),
+        (
+            "claude-code",
+            {"effort": "high"},
+            "claude-code",
+            {"model": "claude-sonnet-5", "setting_sources": "user", "effort": "high"},
+        ),
+    ],
+)
+def test_runtime_settings_with_overrides_isolation(
+    override_agent: str,
+    override_options: dict[str, Any] | None,
+    expected_agent: str,
+    expected_options: dict[str, Any],
+) -> None:
+    """Verify RuntimeSettings.with_overrides isolates options across agent boundaries."""
+    base = RuntimeSettings(
+        agent="claude-code",
+        options={"model": "claude-sonnet-5", "setting_sources": "user"},
+    )
+    overrides: dict[str, Any] = {"agent": override_agent}
+    if override_options is not None:
+        overrides["options"] = override_options
+    result = base.with_overrides(**overrides)
+    assert result.agent == expected_agent
+    assert result.options == expected_options
+
+
+def test_runtime_settings_with_overrides_default_agent_isolation() -> None:
+    """Verify unconfigured default agent resets options when switching to another agent."""
+    base = RuntimeSettings(options={"project": "my-project"})
+    assert base.agent == "antigravity-cli"
+    assert "agent" not in base.model_fields_set
+    switched = base.with_overrides(agent="claude-code")
+    assert switched.agent == "claude-code"
+    assert switched.options == {}
+    assert "agent" in switched.model_fields_set
+
+
+@pytest.mark.parametrize(
+    ("override_agent", "override_options", "expected_agent", "expected_options"),
+    [
+        ("antigravity-cli", None, "antigravity-cli", {}),
+        ("antigravity-cli", {"vertex": True}, "antigravity-cli", {"vertex": True}),
+        (
+            "claude-code",
+            None,
+            "claude-code",
+            {"model": "claude-sonnet-5", "setting_sources": "user"},
+        ),
+        (
+            "claude-code",
+            {"effort": "high"},
+            "claude-code",
+            {"model": "claude-sonnet-5", "setting_sources": "user", "effort": "high"},
+        ),
+    ],
+)
+def test_run_config_resolve_and_with_overrides_isolation(
+    tmp_path: Path,
+    override_agent: str,
+    override_options: dict[str, Any] | None,
+    expected_agent: str,
+    expected_options: dict[str, Any],
+) -> None:
+    """Verify RunConfig.resolve and RunConfig.with_overrides isolate options across agents."""
+    toml_path = write_toml(
+        tmp_path,
+        """
+        [study]
+        skills = "skills"
+        queries = "queries.json"
+        workdir = "work"
+
+        [runtime]
+        agent = "claude-code"
+        [runtime.options]
+        model = "claude-sonnet-5"
+        setting_sources = "user"
+        """,
+    )
+    cfg = RunConfig.from_toml(toml_path)
+
+    # 1. Test RunConfig.resolve
+    resolve_kwargs: dict[str, Any] = {"agent": override_agent}
+    if override_options is not None:
+        resolve_kwargs["options"] = override_options
+    resolved = RunConfig.resolve(RuntimeSettings, config=cfg, **resolve_kwargs)
+    assert resolved.agent == expected_agent
+    assert resolved.options == expected_options
+
+    # 2. Test RunConfig.with_overrides
+    runtime_override: dict[str, Any] = {"agent": override_agent}
+    if override_options is not None:
+        runtime_override["options"] = override_options
+    overridden_cfg = cfg.with_overrides(runtime=runtime_override)
+    assert overridden_cfg.runtime.agent == expected_agent
+    assert overridden_cfg.runtime.options == expected_options
+
+    # 3. Test RuntimeSettings.resolve_for_optimize
+    rt_opt = RuntimeSettings.resolve_for_optimize(
+        toml_path, agent=override_agent, options=override_options
+    )
+    assert rt_opt.agent == expected_agent
+    assert rt_opt.options == expected_options

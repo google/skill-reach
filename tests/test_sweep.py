@@ -2304,7 +2304,8 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
     corpus_text = console.export_text()
     assert "Steepest Drop Interval: K=10→25 (-25.0% F1)" in corpus_text
     assert "Loss Decomposition (K=10→50, +27.0% pass-rate drop): " in corpus_text
-    assert "Budget Truncation Loss: +10.0%" in corpus_text
+    assert "Δ Truncation +10.0%" in corpus_text
+    assert "Budget Truncation Loss" not in corpus_text
 
     from reach.views.sweep import render_sweep_csv
 
@@ -3309,3 +3310,148 @@ def test_legacy_decomposition_field_aliases_and_collision_bounds() -> None:
     assert study.total_collision_loss == pytest.approx(0.06)
 
     assert _resolve_collision_suspects("q1", "s1", [5, 6], [0], ()) == ()
+
+
+def test_scaling_study_load_and_save(
+    tmp_path: Path,
+    make_scaling_point: Callable[..., ScalingPoint],
+    make_scaling_study: Callable[..., ScalingStudy],
+) -> None:
+    """Verify ScalingStudy load and save methods serialize and restore data faithfully."""
+    pt = make_scaling_point(scale=10, pass_rate=0.9, f1_score=0.9, probes_executed=10)
+    study = make_scaling_study(
+        points=(pt,),
+        knee_scale=10,
+        drop_probability=0.8,
+    )
+    save_path = tmp_path / "subdir" / "study.json"
+    saved = study.save(save_path)
+    assert saved == save_path.resolve()
+    assert save_path.exists()
+
+    loaded = ScalingStudy.load(save_path)
+    assert loaded == study
+    assert loaded.knee_scale == 10
+    assert loaded.drop_probability == 0.8
+
+
+def test_select_curve_levels_high_accuracy_includes_75_percent(
+    make_scaling_point: Callable[..., ScalingPoint],
+) -> None:
+    """Verify _select_curve_levels includes 75% tick and ASCII curve renders it."""
+    from reach.views.sweep import _select_curve_levels, render_ascii_curve
+
+    claude_vals = [0.9362, 0.8571, 0.8211, 0.7629, 0.7789]
+    levels = _select_curve_levels(claude_vals)
+    assert levels == (1.0, 0.95, 0.90, 0.85, 0.80, 0.75)
+
+    scales = [10, 25, 50, 100, 150]
+    points = [
+        make_scaling_point(scale=s, f1_score=v, pass_rate=v)
+        for s, v in zip(scales, claude_vals, strict=True)
+    ]
+    lines = render_ascii_curve(points, metric="f1")
+    full_curve = "\n".join(lines)
+    assert " 75% |" in full_curve
+    assert " 80% |" in full_curve
+    row_80 = next(line for line in lines if " 80% |" in line)
+    row_75 = next(line for line in lines if " 75% |" in line)
+    assert row_80.count("●") == 2
+    assert row_75.count("●") == 1
+
+
+def test_format_knee_bootstrap_distribution_first_step_cliff(
+    make_scaling_study: Callable[..., ScalingStudy],
+) -> None:
+    """Verify _format_knee_bootstrap_distribution renders cliff after drop probability."""
+    from reach.views.sweep import _format_knee_bootstrap_distribution
+
+    study = make_scaling_study(
+        scales=(10, 25, 50),
+        knee_scale_pmf={25: 0.08, 50: 0.02},
+        cliff_probability=0.08,
+        drop_probability=0.86,
+    )
+    formatted = _format_knee_bootstrap_distribution(study)
+    assert formatted == "K=25: 8%, K=50: 2% (gradual=76%, drop=86%; first-step cliff=8%)"
+
+
+def test_print_sweep_table_standardizes_prec_and_time_headers(
+    make_scaling_point: Callable[..., ScalingPoint],
+    make_scaling_study: Callable[..., ScalingStudy],
+) -> None:
+    """Verify corpus and single-skill sweeps render Prec and Time across all truncation cases."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from reach.views.sweep import print_sweep
+
+    pt1 = make_scaling_point(
+        scale=10, pass_rate=0.9, f1_score=0.9, duration_ms_mean=3400.0, probes_executed=10
+    )
+    pt2 = make_scaling_point(
+        scale=25, pass_rate=0.8, f1_score=0.8, duration_ms_mean=4200.0, probes_executed=10
+    )
+    pt_trunc = make_scaling_point(
+        scale=50,
+        pass_rate=0.7,
+        f1_score=0.7,
+        duration_ms_mean=5100.0,
+        delta_truncated=0.05,
+        probes_executed=10,
+    )
+
+    # Case 1: Corpus sweep without truncation
+    corpus_study = make_scaling_study(points=(pt1, pt2))
+    buf1 = StringIO()
+    print_sweep(Console(file=buf1, force_terminal=False, width=100), corpus_study)
+    corpus_out = buf1.getvalue()
+    assert "Prec" in corpus_out
+    assert "Time" in corpus_out
+    assert "3.4s" in corpus_out
+    assert "4.2s" in corpus_out
+
+    # Case 2: Corpus sweep with truncation
+    corpus_trunc_study = make_scaling_study(
+        points=(pt1, pt_trunc),
+        total_truncated_loss=0.05,
+    )
+    buf2 = StringIO()
+    print_sweep(Console(file=buf2, force_terminal=False, width=100), corpus_trunc_study)
+    corpus_trunc_out = buf2.getvalue()
+    assert "Prec" in corpus_trunc_out
+    assert "Time" in corpus_trunc_out
+    assert "Trunc" in corpus_trunc_out
+    assert "5.1s" in corpus_trunc_out
+
+    # Case 3: Single-skill sweep without truncation
+    single_study_notrunc = make_scaling_study(
+        is_corpus_sweep=False,
+        target_skill="skill-demo",
+        points=(pt1, pt2),
+    )
+    buf3 = StringIO()
+    print_sweep(Console(file=buf3, force_terminal=False, width=100), single_study_notrunc)
+    single_notrunc_out = buf3.getvalue()
+    assert "Pass Rate" in single_notrunc_out
+    assert "Time" in single_notrunc_out
+    assert "3.4s" in single_notrunc_out
+    assert "4.2s" in single_notrunc_out
+    assert "ms" not in single_notrunc_out.split("Time")[1]
+
+    # Case 4: Single-skill sweep with truncation
+    single_study_trunc = make_scaling_study(
+        is_corpus_sweep=False,
+        target_skill="skill-demo",
+        points=(pt1, pt_trunc),
+        total_truncated_loss=0.05,
+    )
+    buf4 = StringIO()
+    print_sweep(Console(file=buf4, force_terminal=False, width=100), single_study_trunc)
+    single_out = buf4.getvalue()
+    assert "Pass Rate" in single_out
+    assert "Time" in single_out
+    assert "3.4s" in single_out
+    assert "5.1s" in single_out
+    assert "ms" not in single_out.split("Time")[1]

@@ -252,6 +252,19 @@ class ScalingStudy(BaseModel):
     skill_icc: UnitInterval | None = None
     replicate_collisions: tuple[ReplicateCollisionDiagnostic, ...] = ()
 
+    @classmethod
+    def load(cls, path: Path | str) -> Self:
+        """Deserialize a ScalingStudy from a JSON file."""
+        p = Path(path).expanduser().resolve()
+        return cls.model_validate_json(p.read_text(encoding="utf-8"))
+
+    def save(self, path: Path | str) -> Path:
+        """Serialize ScalingStudy to a formatted JSON file."""
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        return target
+
     @model_validator(mode="after")
     def _validate_target_skill_for_mode(self) -> Self:
         """Ensure targeted sweeps specify a target skill and statistical bounds are valid."""

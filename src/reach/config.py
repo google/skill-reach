@@ -96,6 +96,8 @@ BUILTIN_AGENT_DEFAULT_MODELS: dict[str, str] = {
     "pi": DEFAULT_GEMINI_MODEL,
 }
 
+_ANTIGRAVITY_AGENTS: tuple[str, ...] = ("antigravity-cli", "antigravity-sdk")
+
 
 def expand_path(value: object, base: Path | None = None) -> Path:
     """Expand env vars and user home shortcuts in path string, anchoring to base."""
@@ -470,6 +472,30 @@ class RuntimeSettings(BaseModel):
         resolved = resolve_options(self)
         return resolved.model_dump(mode="json") if resolved is not None else {}
 
+    def with_overrides(self, **overrides: object) -> RuntimeSettings:
+        """Return copy with overrides applied, discarding stale options when agent changes."""
+        clean_overrides = {k: v for k, v in overrides.items() if v is not None}
+        agent_specified = "agent" in clean_overrides
+        target_agent = str(clean_overrides.get("agent", self.agent))
+        same_agent = target_agent == self.agent
+        model = clean_overrides.pop("model", None)
+        base_opts: dict[str, Any] = dict(self.options) if same_agent else {}
+        if "options" in clean_overrides and isinstance(clean_overrides["options"], Mapping):
+            base_opts.update(clean_overrides.pop("options"))
+        if model is not None:
+            base_opts["model"] = model
+
+        payload: dict[str, Any] = {
+            **self.model_dump(exclude_unset=True),
+            **clean_overrides,
+            "options": base_opts,
+        }
+        if agent_specified or "agent" in self.model_fields_set:
+            payload["agent"] = target_agent
+        else:
+            payload.pop("agent", None)
+        return type(self).model_validate(payload)
+
     @classmethod
     def resolve_for_optimize(
         cls,
@@ -479,8 +505,6 @@ class RuntimeSettings(BaseModel):
         options: Mapping[str, Any] | None = None,
     ) -> RuntimeSettings:
         """Resolve RuntimeSettings merging reach.toml [runtime.options] with overrides."""
-        from reach.runtime import options_model
-
         raw_cfg = load_config(config)
         raw_runtime = raw_cfg.get("runtime", {})
         cfg_agent = (
@@ -488,23 +512,20 @@ class RuntimeSettings(BaseModel):
             if isinstance(raw_runtime, Mapping) and raw_runtime.get("agent")
             else default_agent(config)
         )
-        resolved_agent = agent or cfg_agent
-        cfg_opts: dict[str, Any] = {}
         if isinstance(raw_runtime, Mapping) and isinstance(raw_runtime.get("options"), Mapping):
             raw_opts = dict(raw_runtime["options"])
-            model = options_model(resolved_agent)
-            if resolved_agent == cfg_agent or model is not None:
-                if model is not None:
-                    try:
-                        model.model_validate(raw_opts)
-                        cfg_opts = raw_opts
-                    except ValueError:
-                        cfg_opts = {}
-                else:
-                    cfg_opts = raw_opts
-
-        merged_opts = {**cfg_opts, **dict(options or {})}
-        return cls(agent=resolved_agent, options=merged_opts)
+            try:
+                base_runtime = cls(agent=cfg_agent, options=raw_opts)
+            except ValueError:
+                base_runtime = cls(agent=cfg_agent)
+        else:
+            base_runtime = cls(agent=cfg_agent)
+        overrides: dict[str, Any] = {}
+        if agent is not None:
+            overrides["agent"] = agent
+        if options is not None:
+            overrides["options"] = dict(options)
+        return base_runtime.with_overrides(**overrides)
 
 
 class Severity(StrEnum):
@@ -977,26 +998,17 @@ class RunConfig(BaseModel):
         section = config.get_section(section_cls) if config is not None else None
         active_overrides = dict(overrides)
 
-        if issubclass(section_cls, RuntimeSettings) and (
-            "model" in active_overrides or "options" in active_overrides
-        ):
-            model = active_overrides.pop("model", None)
+        if issubclass(section_cls, RuntimeSettings):
             configured_runtime = section if isinstance(section, RuntimeSettings) else None
-            base_opts = (
-                dict(explicit_settings.options)
-                if isinstance(explicit_settings, RuntimeSettings) and explicit_settings.options
-                else (
-                    dict(configured_runtime.options)
-                    if configured_runtime is not None and configured_runtime.options
-                    else {}
-                )
+            base_runtime = (
+                explicit_settings
+                if isinstance(explicit_settings, RuntimeSettings)
+                else (configured_runtime if configured_runtime is not None else RuntimeSettings())
             )
-            if "options" in active_overrides and isinstance(active_overrides["options"], dict):
-                base_opts.update(active_overrides["options"])
-            if model is not None:
-                base_opts["model"] = model
-            if base_opts or "options" in active_overrides:
-                active_overrides["options"] = base_opts
+            resolved_runtime = base_runtime.with_overrides(**active_overrides)
+            if config is not None:
+                resolved_runtime = _propagate_registry_to_runtime(resolved_runtime, config.registry)
+            return cast(T, resolved_runtime)
 
         resolved = resolve_sub_settings(
             section_cls,
@@ -1004,19 +1016,6 @@ class RunConfig(BaseModel):
             explicit_settings=explicit_settings,
             **active_overrides,
         )
-
-        if (
-            isinstance(resolved, RuntimeSettings)
-            and resolved.agent in ("antigravity-sdk", "antigravity-cli")
-            and config is not None
-            and config.registry.project
-            and not resolved.options.get("project")
-        ):
-            opts = dict(resolved.options)
-            opts["project"] = config.registry.project
-            if "location" in config.registry.model_fields_set and not opts.get("location"):
-                opts["location"] = config.registry.location
-            resolved = resolved.model_copy(update={"options": opts})
 
         if isinstance(resolved, RegistrySettings):
             return cast(T, cls._resolve_registry_section(resolved, config))
@@ -1104,13 +1103,17 @@ class RunConfig(BaseModel):
 
         for section, fields in sections.items():
             live = {k: v for k, v in (fields or {}).items() if v is not None}
-            if (
-                section == "runtime"
-                and isinstance(live.get("options"), dict)
-                and isinstance(payload.get("runtime", {}).get("options"), dict)
-            ):
-                live["options"] = {**payload["runtime"]["options"], **live["options"]}
-            payload[section] = {**payload.get(section, {}), **live}
+            if section == "runtime":
+                new_runtime = self.runtime.with_overrides(**live)
+                sec_dump = {
+                    **new_runtime.model_dump(exclude_defaults=True),
+                    **new_runtime.model_dump(exclude_unset=True),
+                }
+                if "agent" not in new_runtime.model_fields_set:
+                    sec_dump.pop("agent", None)
+                payload["runtime"] = sec_dump
+            else:
+                payload[section] = {**payload.get(section, {}), **live}
         return type(self).model_validate(payload)
 
     @cached_property
@@ -1207,6 +1210,8 @@ def resolve_sub_settings[T: BaseModel](
         if explicit_settings is not None
         else (config_section if config_section is not None else default_factory())
     )
+    if isinstance(base, RuntimeSettings):
+        return cast(T, base.with_overrides(**overrides))
     active = {k: v for k, v in overrides.items() if v is not None}
     base_dump = {
         **base.model_dump(exclude_defaults=True),
@@ -1214,3 +1219,21 @@ def resolve_sub_settings[T: BaseModel](
     }
     payload = {**base_dump, **active}
     return default_factory.model_validate(payload)
+
+
+def _propagate_registry_to_runtime(
+    runtime: RuntimeSettings,
+    registry: RegistrySettings,
+) -> RuntimeSettings:
+    """Propagate registry project and location into Antigravity runtime options when unset."""
+    if (
+        runtime.agent in _ANTIGRAVITY_AGENTS
+        and registry.project
+        and not runtime.options.get("project")
+    ):
+        opts = dict(runtime.options)
+        opts["project"] = registry.project
+        if "location" in registry.model_fields_set and not opts.get("location"):
+            opts["location"] = registry.location
+        return runtime.model_copy(update={"options": opts})
+    return runtime

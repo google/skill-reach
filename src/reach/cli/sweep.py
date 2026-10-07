@@ -29,6 +29,7 @@ from reach.config import (
     RuntimeSettings,
     StudySettings,
     _discover_config_path,
+    _propagate_registry_to_runtime,
     default_agent,
     resolve_path,
 )
@@ -866,16 +867,7 @@ def _resolve_sweep_effective_config(
         **reg_overrides,
     )
 
-    if (
-        eff_runtime.agent == "antigravity-sdk"
-        and eff_registry.project
-        and not eff_runtime.options.get("project")
-    ):
-        opts = dict(eff_runtime.options)
-        opts["project"] = eff_registry.project
-        if "location" in eff_registry.model_fields_set and not opts.get("location"):
-            opts["location"] = eff_registry.location
-        eff_runtime = eff_runtime.model_copy(update={"options": opts})
+    eff_runtime = _propagate_registry_to_runtime(eff_runtime, eff_registry)
 
     eff_plan = RunConfig.resolve(
         PlanSettings,
