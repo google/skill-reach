@@ -82,7 +82,7 @@ def drive(
 def test_attempts_are_interleaved_not_grouped(queries: list[Query]) -> None:
     """Verify planned probes interleave all queries per attempt index."""
     pairs = plan_probes(queries, attempts=2)
-    assert [(q.id, a) for q, a in pairs] == [
+    assert [(q.query_id, a) for q, a in pairs] == [
         ("q-lifecycle", 1),
         ("q-retention", 1),
         ("q-lifecycle", 2),
@@ -176,7 +176,7 @@ def test_results_are_persisted_as_they_land(
 
     list(stream)
     reloaded = load_results(out)
-    assert [r.query_id for r in reloaded] == [q.id for q in queries]
+    assert [r.query_id for r in reloaded] == [q.query_id for q in queries]
     assert reloaded[0].recorded_at.tzinfo is not None
 
 
@@ -238,7 +238,7 @@ def test_concurrent_workers_run_every_planned_probe_exactly_once(
     )
     assert len(results) == 6
     assert {(r.query_id, r.attempt) for r in results} == {
-        (q.id, a) for q, a in plan_probes(queries, attempts=3)
+        (q.query_id, a) for q, a in plan_probes(queries, attempts=3)
     }
 
 
@@ -314,7 +314,7 @@ def test_concurrent_appends_are_all_individually_valid_json_lines(
     loaded = load_results(out)
     assert len(loaded) == len(queries) * 5
     assert {(r.query_id, r.attempt) for r in loaded} == {
-        (q.id, a) for q, a in plan_probes(queries, attempts=5)
+        (q.query_id, a) for q, a in plan_probes(queries, attempts=5)
     }
 
 

@@ -273,7 +273,7 @@ def test_export_then_import_reproduces_the_query_text_exactly(
     """Verify query text round-trips exactly through export and import across all formats."""
     original = QuerySet(
         catalog_id="all",
-        queries=(Query(id="q-1", text=text, expected_skill="some-skill"),),
+        queries=(Query(query_id="q-1", text=text, expected_skill="some-skill"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
 
@@ -291,12 +291,12 @@ def generated_query(draw: st.DrawFn, query_id: str = "q-1") -> Query:
     """Generate an in-scope or out-of-scope Query over a bounded skill pool."""
     is_oos = draw(st.booleans())
     if is_oos:
-        return Query(id=query_id, text="unhandled request", kind=QueryKind.OUT_OF_SCOPE)
+        return Query(query_id=query_id, text="unhandled request", kind=QueryKind.OUT_OF_SCOPE)
     expected = draw(st.sampled_from(_SKILL_POOL))
     remaining = [s for s in _SKILL_POOL if s != expected]
     acceptable = tuple(draw(st.lists(st.sampled_from(remaining), max_size=1, unique=True)))
     return Query(
-        id=query_id,
+        query_id=query_id,
         text="handled request",
         expected_skill=expected,
         acceptable_skills=acceptable,
@@ -367,7 +367,7 @@ def evaluated_run(draw: st.DrawFn) -> _EvaluatedRun:
                 )
                 rows.append(
                     ProbeResult(
-                        query_id=q.id,
+                        query_id=q.query_id,
                         attempt=attempt,
                         catalog_id="all",
                         catalog_mode=CatalogMode.ALL,
@@ -464,7 +464,7 @@ def _synthetic_arm(
         QueryRecord(
             query_id=f"q-{idx}",
             text=f"query {idx}",
-            expected="s-alpha",
+            expected_skill="s-alpha",
             probes=p,
             hits=h,
         )

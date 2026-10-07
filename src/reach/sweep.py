@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Self
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -40,7 +39,6 @@ from pydantic import (
     model_validator,
 )
 
-from reach._io import read_model, write_model
 from reach.catalog import (
     CorpusScalingPlan,
     build_scaling_catalogs,
@@ -159,7 +157,7 @@ class PairedTrialOutcomes(BaseModel):
 class ScalingPoint(BaseModel):
     """Represent evaluation outcomes and decomposition for a single catalog scale point."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     # 1. Identifiers
     scale: PositiveInt
@@ -167,19 +165,13 @@ class ScalingPoint(BaseModel):
 
     # 2. Primary rates & intervals (alphabetical pairs)
     f1_score: UnitInterval = 0.0
-    f1_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=1.0, confidence=0.95)
-    )
+    f1_interval: Interval = Field(default_factory=Interval.unit)
     pass_rate: UnitInterval
     pass_rate_interval: Interval
     precision: UnitInterval = 0.0
-    precision_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=1.0, confidence=0.95)
-    )
+    precision_interval: Interval = Field(default_factory=Interval.unit)
     recall: UnitInterval = 0.0
-    recall_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=1.0, confidence=0.95)
-    )
+    recall_interval: Interval = Field(default_factory=Interval.unit)
 
     # 3. Secondary rates
     abstention_rate: UnitInterval | None = None
@@ -198,12 +190,8 @@ class ScalingPoint(BaseModel):
 
     # 5. Delta attribution
     delta_vs_baseline: float
-    delta_abstention: float = Field(
-        validation_alias=AliasChoices("delta_abstention", "delta_context")
-    )
-    delta_collision: float = Field(
-        validation_alias=AliasChoices("delta_collision", "delta_shadowing")
-    )
+    delta_abstention: float = 0.0
+    delta_collision: float = 0.0
     delta_truncated: float = 0.0
 
     # 6. Disclosure states & telemetry
@@ -240,7 +228,7 @@ class ScalingPoint(BaseModel):
 class ScalingStudy(BaseModel):
     """Represent multi-scale catalog scaling study and knee curvature analysis."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     # 1. Corpus metadata
     target_skill: str | None = None
@@ -261,69 +249,18 @@ class ScalingStudy(BaseModel):
     # 3. Headline pass rates and loss deltas (flattened)
     baseline_pass_rate: UnitInterval = 0.0
     final_pass_rate: UnitInterval = 0.0
-    delta_total: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices("delta_total", "total_delta"),
-    )
-    delta_abstention: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "delta_abstention",
-            "delta_context",
-            "total_abstention_loss",
-            "total_context_loss",
-        ),
-    )
-    delta_collision: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "delta_collision",
-            "delta_shadowing",
-            "total_collision_loss",
-            "total_shadowing_loss",
-        ),
-    )
-    delta_truncated: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices("delta_truncated", "total_truncated_loss"),
-    )
-    delta_total_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices("delta_total_interval", "delta_total_ci"),
-    )
-    delta_abstention_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices(
-            "delta_abstention_interval",
-            "delta_abstention_ci",
-            "delta_context_ci",
-        ),
-    )
-    delta_collision_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices(
-            "delta_collision_interval",
-            "delta_collision_ci",
-            "delta_shadowing_ci",
-        ),
-    )
-    delta_truncated_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices(
-            "delta_truncated_interval",
-            "delta_truncated_ci",
-        ),
-    )
+    delta_total: float = 0.0
+    delta_abstention: float = 0.0
+    delta_collision: float = 0.0
+    delta_truncated: float = 0.0
+    delta_total_interval: Interval = Field(default_factory=Interval.zero)
+    delta_abstention_interval: Interval = Field(default_factory=Interval.zero)
+    delta_collision_interval: Interval = Field(default_factory=Interval.zero)
+    delta_truncated_interval: Interval = Field(default_factory=Interval.zero)
     noise_floor: float = 0.05
     sample_size: NonNegativeInt = 0
-    baseline_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices("baseline_interval", "baseline_ci"),
-    )
-    scaled_interval: Interval = Field(
-        default_factory=lambda: Interval(low=0.0, high=0.0, confidence=0.95),
-        validation_alias=AliasChoices("scaled_interval", "scaled_ci"),
-    )
+    baseline_interval: Interval = Field(default_factory=Interval.zero)
+    scaled_interval: Interval = Field(default_factory=Interval.zero)
 
     # 4. Diagnostics & maps
     anchor_skills: tuple[str, ...] | None = None
@@ -334,78 +271,6 @@ class ScalingStudy(BaseModel):
 
     # 5. Points leaf collection at the bottom
     points: tuple[ScalingPoint, ...]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _unpack_decomposition_and_legacy_fields(cls, data: Any) -> Any:  # noqa: ANN401
-        """Unpack nested decomposition objects and normalize legacy loss field aliases."""
-        if isinstance(data, dict):
-            data = dict(data)
-            decomp = data.pop("decomposition", None)
-            if isinstance(decomp, DecompositionResult):
-                data.setdefault("delta_total", decomp.delta_total)
-                data.setdefault("delta_abstention", decomp.delta_abstention)
-                data.setdefault("delta_collision", decomp.delta_collision)
-                data.setdefault("delta_truncated", decomp.delta_truncated)
-                data.setdefault("delta_total_interval", decomp.delta_total_ci)
-                data.setdefault("delta_abstention_interval", decomp.delta_abstention_ci)
-                data.setdefault("delta_collision_interval", decomp.delta_collision_ci)
-                data.setdefault("delta_truncated_interval", decomp.delta_truncated_ci)
-                data.setdefault("sample_size", decomp.sample_size)
-                data.setdefault("baseline_interval", decomp.baseline_ci)
-                data.setdefault("scaled_interval", decomp.scaled_ci)
-            elif isinstance(decomp, dict):
-                data.setdefault("delta_total", decomp.get("delta_total"))
-                data.setdefault(
-                    "delta_abstention",
-                    decomp.get("delta_abstention", decomp.get("delta_context")),
-                )
-                data.setdefault(
-                    "delta_collision",
-                    decomp.get("delta_collision", decomp.get("delta_shadowing")),
-                )
-                data.setdefault("delta_truncated", decomp.get("delta_truncated", 0.0))
-                data.setdefault(
-                    "delta_total_interval",
-                    decomp.get("delta_total_interval", decomp.get("delta_total_ci")),
-                )
-                data.setdefault(
-                    "delta_abstention_interval",
-                    decomp.get(
-                        "delta_abstention_interval",
-                        decomp.get(
-                            "delta_abstention_ci",
-                            decomp.get("delta_context_ci"),
-                        ),
-                    ),
-                )
-                data.setdefault(
-                    "delta_collision_interval",
-                    decomp.get(
-                        "delta_collision_interval",
-                        decomp.get(
-                            "delta_collision_ci",
-                            decomp.get("delta_shadowing_ci"),
-                        ),
-                    ),
-                )
-                data.setdefault(
-                    "delta_truncated_interval",
-                    decomp.get(
-                        "delta_truncated_interval",
-                        decomp.get("delta_truncated_ci"),
-                    ),
-                )
-                data.setdefault("sample_size", decomp.get("sample_size", 0))
-                data.setdefault(
-                    "baseline_interval",
-                    decomp.get("baseline_interval", decomp.get("baseline_ci")),
-                )
-                data.setdefault(
-                    "scaled_interval",
-                    decomp.get("scaled_interval", decomp.get("scaled_ci")),
-                )
-        return data
 
     @classmethod
     def load(cls, path: Path | str) -> Self:
@@ -500,54 +365,6 @@ class ScalingStudy(BaseModel):
                 raise ValueError(msg)
         return self
 
-    @property
-    def total_delta(self) -> float:
-        """Alias for delta_total to maintain backward compatibility."""
-        return self.delta_total
-
-    @property
-    def total_abstention_loss(self) -> float:
-        """Alias for delta_abstention to maintain backward compatibility."""
-        return self.delta_abstention
-
-    @property
-    def total_collision_loss(self) -> float:
-        """Alias for delta_collision to maintain backward compatibility."""
-        return self.delta_collision
-
-    @property
-    def total_truncated_loss(self) -> float:
-        """Alias for delta_truncated to maintain backward compatibility."""
-        return self.delta_truncated
-
-    @property
-    def decomposition(self) -> DecompositionResult:
-        """Construct synthetic DecompositionResult from flattened loss fields."""
-        return DecompositionResult(
-            baseline_pass_rate=self.baseline_pass_rate,
-            scaled_pass_rate=self.final_pass_rate,
-            delta_total=self.delta_total,
-            delta_abstention=self.delta_abstention,
-            delta_collision=self.delta_collision,
-            delta_truncated=self.delta_truncated,
-            delta_total_ci=self.delta_total_interval.to_tuple(),
-            delta_abstention_ci=self.delta_abstention_interval.to_tuple(),
-            delta_collision_ci=self.delta_collision_interval.to_tuple(),
-            delta_truncated_ci=self.delta_truncated_interval.to_tuple(),
-            sample_size=self.sample_size,
-            baseline_ci=self.baseline_interval.to_tuple(),
-            scaled_ci=self.scaled_interval.to_tuple(),
-        )
-
-    def save(self, path: Path | str) -> None:
-        """Write this scaling study model to a JSON file on disk."""
-        write_model(self, path)
-
-    @classmethod
-    def load(cls, path: Path | str) -> Self:
-        """Read and validate a ScalingStudy model from a JSON file on disk."""
-        return read_model(cls, path)
-
 
 _PMF_SUM_MAX: float = 1.001
 _MIN_KNEE_POINTS: int = 3
@@ -607,7 +424,7 @@ _MIN_PAVA_VARIANCE: float = 1e-4
 
 
 def _compute_pava_weights(
-    intervals: Sequence[tuple[float, float]],
+    intervals: Sequence[Interval | tuple[float, float]],
     ci_span: float,
     *,
     min_variance: float = _MIN_PAVA_VARIANCE,
@@ -618,8 +435,19 @@ def _compute_pava_weights(
         raise ValueError(msg)
     clamped_min_var = max(1e-12, min_variance)
     return [
-        1.0 / max(clamped_min_var, (max(0.0, interval[1] - interval[0]) / ci_span) ** 2)
-        for interval in intervals
+        1.0
+        / max(
+            clamped_min_var,
+            (
+                max(
+                    0.0,
+                    (iv.high - iv.low) if isinstance(iv, Interval) else (iv[1] - iv[0]),
+                )
+                / ci_span
+            )
+            ** 2,
+        )
+        for iv in intervals
     ]
 
 
@@ -1023,9 +851,12 @@ def _resolve_sweep_target_and_queries(
         or (
             q.kind == QueryKind.NEIGHBOR_NEGATIVE
             and not (
-                q.id.startswith("adv-")
-                and not q.id.removeprefix("adv-").startswith(f"{target}-")
-                and any(q.id.removeprefix("adv-").startswith(f"{other}-") for other in other_skills)
+                q.query_id.startswith("adv-")
+                and not q.query_id.removeprefix("adv-").startswith(f"{target}-")
+                and any(
+                    q.query_id.removeprefix("adv-").startswith(f"{other}-")
+                    for other in other_skills
+                )
             )
         )
     )
@@ -1384,7 +1215,7 @@ def _evaluate_baseline_decomposition(
         if target_skill is not None
         else list(queries)
     )
-    scoped_ids = {q.id for q in scoped_queries}
+    scoped_ids = {q.query_id for q in scoped_queries}
     scoped_base = [r for r in baseline_results if r.query_id in scoped_ids]
     scoped_res = [r for r in results if r.query_id in scoped_ids]
     decomp = decompose_pass_rate_drop(
@@ -1414,7 +1245,7 @@ def _build_scaling_point(
 ) -> tuple[ScalingPoint, DecompositionResult | None]:
     """Calculate point metrics, Wilson confidence intervals, and pass-rate decomposition."""
     queries = resolved_query_set.queries
-    queries_by_id = {q.id: q for q in queries}
+    queries_by_id = {q.query_id: q for q in queries}
 
     pass_stats = _calculate_scale_pass_rate(
         results,
@@ -1465,28 +1296,32 @@ def _build_scaling_point(
         scale=scale,
         catalog_id=catalog_id,
         pass_rate=round(pass_stats.pass_rate, 4),
-        pass_rate_interval=(
-            round(pass_stats.pass_interval[0], 4),
-            round(pass_stats.pass_interval[1], 4),
+        pass_rate_interval=Interval(
+            low=round(pass_stats.pass_interval[0], 4),
+            high=round(pass_stats.pass_interval[1], 4),
         ),
         recall=round(class_stats.recall, 4),
-        recall_interval=(
-            round(class_stats.recall_interval[0], 4),
-            round(class_stats.recall_interval[1], 4),
+        recall_interval=Interval(
+            low=round(class_stats.recall_interval[0], 4),
+            high=round(class_stats.recall_interval[1], 4),
         ),
         precision=round(class_stats.precision, 4),
-        precision_interval=(
-            round(class_stats.precision_interval[0], 4),
-            round(class_stats.precision_interval[1], 4),
+        precision_interval=Interval(
+            low=round(class_stats.precision_interval[0], 4),
+            high=round(class_stats.precision_interval[1], 4),
         ),
         internal_precision=round(class_stats.internal_precision, 4),
         external_distractor_precision=class_stats.external_distractor_precision,
         abstention_rate=class_stats.abstention_rate,
-        abstention_interval=class_stats.abstention_interval,
+        abstention_interval=(
+            Interval.from_tuple(class_stats.abstention_interval)
+            if class_stats.abstention_interval is not None
+            else None
+        ),
         f1_score=round(class_stats.f1_score, 4),
-        f1_interval=(
-            round(class_stats.f1_interval[0], 4),
-            round(class_stats.f1_interval[1], 4),
+        f1_interval=Interval(
+            low=round(class_stats.f1_interval[0], 4),
+            high=round(class_stats.f1_interval[1], 4),
         ),
         entrypoint_pass_rate=round(entry_pass_stats.pass_rate, 4),
         entrypoint_f1_score=round(entry_class_stats.f1_score, 4),
@@ -1584,13 +1419,13 @@ def _build_study_result(
     d_abs = decomp.delta_abstention if decomp else t_abs
     d_col = decomp.delta_collision if decomp else t_col
     d_trunc = decomp.delta_truncated if decomp else t_trunc
-    d_tot_iv = decomp.delta_total_ci if decomp else (0.0, 0.0)
-    d_abs_iv = decomp.delta_abstention_ci if decomp else (0.0, 0.0)
-    d_col_iv = decomp.delta_collision_ci if decomp else (0.0, 0.0)
-    d_trunc_iv = decomp.delta_truncated_ci if decomp else (0.0, 0.0)
+    d_tot_iv = Interval.from_tuple(decomp.delta_total_ci) if decomp else Interval.zero()
+    d_abs_iv = Interval.from_tuple(decomp.delta_abstention_ci) if decomp else Interval.zero()
+    d_col_iv = Interval.from_tuple(decomp.delta_collision_ci) if decomp else Interval.zero()
+    d_trunc_iv = Interval.from_tuple(decomp.delta_truncated_ci) if decomp else Interval.zero()
     s_size = decomp.sample_size if decomp else 0
-    b_iv = decomp.baseline_ci if decomp else (0.0, 0.0)
-    s_iv = decomp.scaled_ci if decomp else (0.0, 0.0)
+    b_iv = Interval.from_tuple(decomp.baseline_ci) if decomp else Interval.zero()
+    s_iv = Interval.from_tuple(decomp.scaled_ci) if decomp else Interval.zero()
 
     return ScalingStudy(
         target_skill=target,
@@ -2422,8 +2257,8 @@ def _execute_scale_replicates(
         pooled_results.extend(rep_results)
         installed_union.update(rep_catalog.skills)
 
-        rep_qmap = {q.id: q for q in scale_query_set.queries}
-        rep_truth = {q.id: q.expected_skill for q in scale_query_set.queries}
+        rep_qmap = {q.query_id: q for q in scale_query_set.queries}
+        rep_truth = {q.query_id: q.expected_skill for q in scale_query_set.queries}
         rep_q_outcomes = _extract_query_outcomes(
             outcome.results,
             rep_truth,
@@ -2574,7 +2409,7 @@ def run_scaling_sweep(
         raw_query_set=raw_query_set,
         resolved_query_set=primary_setup.query_set,
         resolved_skills=resolved_skills,
-        raw_query_map={q.id: q for q in raw_query_set.queries},
+        raw_query_map={q.query_id: q for q in raw_query_set.queries},
         is_corpus=is_corpus,
     )
 
@@ -2615,8 +2450,8 @@ def run_scaling_sweep(
         )
         points.append(point)
         latest_results = combined_results
-        scale_query_map = {q.id: q for q in primary_query_set.queries}
-        truth_expected = {q.id: q.expected_skill for q in primary_query_set.queries}
+        scale_query_map = {q.query_id: q for q in primary_query_set.queries}
+        truth_expected = {q.query_id: q.expected_skill for q in primary_query_set.queries}
         scale_query_sums[scale] = _extract_query_outcomes(
             combined_results,
             truth_expected,

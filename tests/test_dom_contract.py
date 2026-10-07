@@ -101,25 +101,25 @@ def sample_queryset() -> QuerySet:
     """Provide a sample query set with implicit, negative, and out-of-scope queries."""
     queries = (
         Query(
-            id="q1",
+            query_id="q1",
             text="my mac disk is almost full",
             expected_skill="mac-storage-cleanup",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q2",
+            query_id="q2",
             text="prune stopped docker containers",
             expected_skill="docker-clean",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
         ),
         Query(
-            id="q3",
+            query_id="q3",
             text="clean git branch history",
             expected_skill="git-workflow",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
         ),
         Query(
-            id="q4",
+            query_id="q4",
             text="unrelated question",
             expected_skill=None,
             kind=QueryKind.OUT_OF_SCOPE,

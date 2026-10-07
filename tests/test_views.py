@@ -643,6 +643,8 @@ def test_an_attractor_skill_sorts_above_a_well_served_one() -> None:
         probes=10,
         reached=10,
         recall=1.0,
+        trajectory_reached=10,
+        trajectory_recall=1.0,
         absorbed=0,
         precision=1.0,
     )
@@ -895,7 +897,7 @@ def test_a_query_nobody_probed_is_not_painted_as_one_that_failed(
     only = QueryRecord(
         query_id="q-alone",
         text="Does anything reach this?",
-        expected="gke-basics",
+        expected_skill="gke-basics",
         probes=probes,
         hits=hits,
     )
@@ -1008,7 +1010,7 @@ LONG_NAMED = QuerySet(
     notes="drafted",
     queries=(
         Query(
-            id="google-cloud-waf-security-2",
+            query_id="google-cloud-waf-security-2",
             text=(
                 "Someone got into one of our service accounts overnight. What "
                 "should we have in place to catch that and work through it?"
@@ -1640,7 +1642,7 @@ def test_print_query_view_folds_long_leaks_citations_and_text_without_ellipsis(
         notes="",
         queries=(
             Query(
-                id="q-long-1",
+                query_id="q-long-1",
                 text=q_text,
                 expected_skill="vault-retention-policy",
             ),

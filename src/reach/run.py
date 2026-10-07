@@ -436,7 +436,7 @@ class Composition(BaseModel):
     @property
     def truth(self) -> dict[str, str]:
         """Return a mapping of query ID to ground truth skill label."""
-        return {q.id: q.truth_label for q in self.query_set.queries}
+        return {q.query_id: q.truth_label for q in self.query_set.queries}
 
     @property
     def plan(self) -> Plan:
@@ -602,7 +602,7 @@ class ProbeHarness:
             runtime_name=self.runtime.name,
             runtime_model=self.runtime.model,
             resident_skills=resident,
-            query_id=query.id,
+            query_id=query.query_id,
             query_text=query.text,
             expected_skill=query.expected_skill,
             attempt=attempt,
@@ -622,7 +622,7 @@ class ProbeHarness:
                     outcome = self.runtime.select(query.text, workdir)
             except Exception as err:
                 err.add_note(
-                    f"Reach probe execution context: query_id={query.id!r}, "
+                    f"Reach probe execution context: query_id={query.query_id!r}, "
                     f"attempt={attempt}, catalog_id={catalog.id!r}, runtime={self.runtime.name!r}"
                 )
                 raise
@@ -663,7 +663,7 @@ class ProbeHarness:
         planned = [
             (query, attempt)
             for query, attempt in plan_probes(queries, attempts)
-            if (query.id, attempt) not in (skip or set())
+            if (query.query_id, attempt) not in (skip or set())
         ]
 
         if self.workers <= 1:
@@ -759,7 +759,7 @@ class ProbeHarness:
                 raw_previous = load_results(resolved_out)
                 previous, skip, retained_other, needs_compaction = _partition_resumed_results(
                     raw_previous,
-                    active_query_ids={q.id for q in query_set.queries},
+                    active_query_ids={q.query_id for q in query_set.queries},
                     corpus_digest=provenance.corpus_digest,
                     catalog_skills=set(catalog.skills),
                     config_fingerprint=provenance.config_fingerprint,

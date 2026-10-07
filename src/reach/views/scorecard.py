@@ -254,7 +254,7 @@ def print_query_records(console: Console, artifact: Artifact) -> None:
 
     groups: dict[str, list[QueryRecord]] = {}
     for record in artifact.queries:
-        groups.setdefault(record.expected, []).append(record)
+        groups.setdefault(record.expected_skill, []).append(record)
 
     skill_order = {s.skill: i for i, s in enumerate(_worst_first(artifact.skills))}
     sorted_expected = sorted(groups.keys(), key=lambda name: (skill_order.get(name, 999), name))
@@ -291,7 +291,7 @@ def print_query_records(console: Console, artifact: Artifact) -> None:
             elif record.probes == 0:
                 selected_cell = Text("-", style="reach.digest")
             else:
-                rivals = [s for s in record.selections if s != record.expected]
+                rivals = [s for s in record.selections if s != record.expected_skill]
                 disp = ", ".join(rivals) if rivals else ", ".join(record.selections)
                 selected_cell = _TruncatedName(disp, style="reach.error")
 

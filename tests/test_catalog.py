@@ -807,11 +807,11 @@ def test_build_corpus_scaling_queries() -> None:
     from reach.queries import Origin, QuerySet, QuerySetProvenance
 
     raw_queries = [
-        Query(id="q1", text="deploy alpha", expected_skill="alpha"),
-        Query(id="q2", text="scale alpha", expected_skill="alpha"),
-        Query(id="q3", text="deploy beta", expected_skill="beta"),
-        Query(id="q4", text="scale beta", expected_skill="beta"),
-        Query(id="q5", text="query gamma", expected_skill="gamma"),
+        Query(query_id="q1", text="deploy alpha", expected_skill="alpha"),
+        Query(query_id="q2", text="scale alpha", expected_skill="alpha"),
+        Query(query_id="q3", text="deploy beta", expected_skill="beta"),
+        Query(query_id="q4", text="scale beta", expected_skill="beta"),
+        Query(query_id="q5", text="query gamma", expected_skill="gamma"),
     ]
     qset = QuerySet(
         catalog_id="test",
@@ -825,7 +825,7 @@ def test_build_corpus_scaling_queries() -> None:
         raw_query_set=qset,
     )
     assert len(q_alpha.queries) == 2
-    assert {q.id for q in q_alpha.queries} == {"q1", "q2"}
+    assert {q.query_id for q in q_alpha.queries} == {"q1", "q2"}
     assert all(q.expected_skill == "alpha" for q in q_alpha.queries)
 
     # Scale with all skills installed
@@ -856,10 +856,17 @@ def test_build_corpus_scaling_queries_preserves_out_of_scope(
     from reach.queries import Origin, QuerySet, QuerySetProvenance
 
     raw_queries = [
-        Query(id="q_pos1", text="run alpha", expected_skill="alpha"),
-        Query(id="q_pos2", text="run beta", expected_skill="beta"),
-        Query(id="q_oos1", text="weather report", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
-        Query(id="q_oos2", text="who are you", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="q_pos1", text="run alpha", expected_skill="alpha"),
+        Query(query_id="q_pos2", text="run beta", expected_skill="beta"),
+        Query(
+            query_id="q_oos1",
+            text="weather report",
+            expected_skill=None,
+            kind=QueryKind.OUT_OF_SCOPE,
+        ),
+        Query(
+            query_id="q_oos2", text="who are you", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
+        ),
     ]
     qset = QuerySet(
         catalog_id="test-oos",
@@ -872,8 +879,8 @@ def test_build_corpus_scaling_queries_preserves_out_of_scope(
         raw_query_set=qset,
         anchor_skills=anchor_skills,
     )
-    assert {q.id for q in sliced.queries} == expected_qids
-    assert all(q.is_out_of_scope for q in sliced.queries if q.id in {"q_oos1", "q_oos2"})
+    assert {q.query_id for q in sliced.queries} == expected_qids
+    assert all(q.is_out_of_scope for q in sliced.queries if q.query_id in {"q_oos1", "q_oos2"})
 
 
 def test_corpus_scaling_plan(tmp_path: Path) -> None:
@@ -888,10 +895,10 @@ def test_corpus_scaling_plan(tmp_path: Path) -> None:
         Skill(name="gamma", description="gamma spanner database", path=tmp_path / "gamma"),
     ]
     raw_queries = [
-        Query(id="q1", text="deploy alpha", expected_skill="alpha", kind=QueryKind.IMPLICIT),
-        Query(id="q2", text="scale alpha", expected_skill="alpha", kind=QueryKind.IMPLICIT),
-        Query(id="q3", text="deploy beta", expected_skill="beta", kind=QueryKind.IMPLICIT),
-        Query(id="q4", text="query gamma", expected_skill="gamma", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="deploy alpha", expected_skill="alpha", kind=QueryKind.IMPLICIT),
+        Query(query_id="q2", text="scale alpha", expected_skill="alpha", kind=QueryKind.IMPLICIT),
+        Query(query_id="q3", text="deploy beta", expected_skill="beta", kind=QueryKind.IMPLICIT),
+        Query(query_id="q4", text="query gamma", expected_skill="gamma", kind=QueryKind.IMPLICIT),
     ]
     qset = QuerySet(
         catalog_id="test",
@@ -970,7 +977,7 @@ def test_corpus_scaling_plan_with_anchors(tmp_path: Path) -> None:
     ]
     raw_queries = [
         Query(
-            id=f"q-{i:02d}",
+            query_id=f"q-{i:02d}",
             text=f"query for {i}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -1198,9 +1205,9 @@ def test_build_corpus_scaling_queries_with_anchors() -> None:
     from reach.queries import Origin, QuerySet, QuerySetProvenance
 
     queries = [
-        Query(id="q1", text="text 1", expected_skill="s1"),
-        Query(id="q2", text="text 2", expected_skill="s2"),
-        Query(id="q3", text="text 3", expected_skill="s3"),
+        Query(query_id="q1", text="text 1", expected_skill="s1"),
+        Query(query_id="q2", text="text 2", expected_skill="s2"),
+        Query(query_id="q3", text="text 3", expected_skill="s3"),
     ]
     qset = QuerySet(
         catalog_id="test",

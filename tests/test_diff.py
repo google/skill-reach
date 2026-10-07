@@ -125,7 +125,7 @@ def disjoint_query_file(tmp_path: Path) -> Path:
             catalog_id="neighborhood:gcs-lifecycle-rules",
             queries=(
                 Query(
-                    id="q-elsewhere",
+                    query_id="q-elsewhere",
                     text="Tier cold objects after a month.",
                     kind=QueryKind.IMPLICIT,
                     expected_skill="gcs-lifecycle-rules",
@@ -1174,7 +1174,7 @@ def test_sub_slicing_combined_run_via_queries_subset_and_filters(
             catalog_id="neighborhood:gcs-lifecycle-rules",
             queries=(
                 Query(
-                    id="q-retention",
+                    query_id="q-retention",
                     text="Hold audit logs for seven years under bucket lock.",
                     kind=QueryKind.IMPLICIT,
                     expected_skill="gcs-retention-policy",
@@ -1257,7 +1257,7 @@ def test_sub_slicing_combined_run_via_queries_subset_and_filters(
             catalog_id="neighborhood:gcs-lifecycle-rules",
             queries=(
                 Query(
-                    id="q-retention",
+                    query_id="q-retention",
                     text="Hold audit logs for seven years under bucket lock.",
                     kind=QueryKind.IMPLICIT,
                     expected_skill="gcs-lifecycle-rules",

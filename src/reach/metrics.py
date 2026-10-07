@@ -21,7 +21,7 @@ import statistics
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Annotated, NamedTuple, Self
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from reach.models import (
     NO_SKILL,
@@ -340,7 +340,7 @@ def _paired(
     queries: Sequence[Query],
 ) -> list[tuple[Query, ProbeResult]]:
     """Pair each usable result with its corresponding query."""
-    truth = {q.id: q for q in queries}
+    truth = {q.query_id: q for q in queries}
     unknown = {r.query_id for r in results} - truth.keys()
     if unknown:
         msg = f"results reference unlabeled queries: {sorted(unknown)}"
@@ -514,7 +514,7 @@ def confusion(
     queries: Sequence[Query],
 ) -> Counter[tuple[str, str | None]]:
     """Count occurrences of expected-to-invoked skill selection pairs."""
-    truth = {q.id: q for q in queries}
+    truth = {q.query_id: q for q in queries}
     pairs: Counter[tuple[str, str | None]] = Counter()
     for result in results:
         if result.error:
@@ -532,7 +532,7 @@ def collisions(
     queries: Sequence[Query],
 ) -> Counter[tuple[str, str]]:
     """Count misroutes between skill pairs."""
-    truth = {q.id: q for q in queries}
+    truth = {q.query_id: q for q in queries}
     pairs: Counter[tuple[str, str]] = Counter()
     for result in results:
         if result.error or not result.selected:
@@ -550,27 +550,17 @@ def collisions(
 class DecompositionResult(BaseModel):
     """Represent decomposition of pass-rate drop between baseline and scaled catalogs."""
 
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     baseline_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     scaled_pass_rate: Annotated[float, Field(ge=0.0, le=1.0)]
     delta_total: float
-    delta_abstention: float = Field(
-        validation_alias=AliasChoices("delta_abstention", "delta_context")
-    )
-    delta_collision: float = Field(
-        validation_alias=AliasChoices("delta_collision", "delta_shadowing")
-    )
+    delta_abstention: float = 0.0
+    delta_collision: float = 0.0
     delta_truncated: float = 0.0
     delta_total_ci: tuple[float, float] = (0.0, 0.0)
-    delta_abstention_ci: tuple[float, float] = Field(
-        default=(0.0, 0.0),
-        validation_alias=AliasChoices("delta_abstention_ci", "delta_context_ci"),
-    )
-    delta_collision_ci: tuple[float, float] = Field(
-        default=(0.0, 0.0),
-        validation_alias=AliasChoices("delta_collision_ci", "delta_shadowing_ci"),
-    )
+    delta_abstention_ci: tuple[float, float] = (0.0, 0.0)
+    delta_collision_ci: tuple[float, float] = (0.0, 0.0)
     delta_truncated_ci: tuple[float, float] = (0.0, 0.0)
     sample_size: Annotated[int, Field(ge=0)] = 0
     baseline_ci: tuple[float, float] = (0.0, 0.0)
@@ -771,7 +761,7 @@ def decompose_pass_rate_drop(
     seed: int = 42,
 ) -> DecompositionResult:
     """Decompose overall pass-rate drop into abstention, collision, and truncation components."""
-    truth_map: dict[str, Query] = {q.id: q for q in queries} if queries else {}
+    truth_map: dict[str, Query] = {q.query_id: q for q in queries} if queries else {}
     base_by_query = _group_valid_results_by_query(baseline_results)
     scaled_by_query = _group_valid_results_by_query(scaled_results)
 

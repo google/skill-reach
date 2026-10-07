@@ -73,7 +73,7 @@ def test_classify_invocation_pattern(
     expected_pattern: InvocationPattern,
 ) -> None:
     """Verify trajectory classification matches expected InvocationPattern across all cases."""
-    query = Query(id="q-test", text="Test query", kind=kind, expected_skill=expected_skill)
+    query = Query(query_id="q-test", text="Test query", kind=kind, expected_skill=expected_skill)
     pattern = classify_invocation_pattern(query, invoked)
     assert pattern == expected_pattern
 
@@ -81,7 +81,7 @@ def test_classify_invocation_pattern(
 def test_probe_result_from_outcome_sets_invocation_pattern() -> None:
     """Verify ProbeResult.from_outcome assigns invocation_pattern and disclosure_state."""
     query = Query(
-        id="q-1", text="Deploy service", kind=QueryKind.IMPLICIT, expected_skill="cloud-run"
+        query_id="q-1", text="Deploy service", kind=QueryKind.IMPLICIT, expected_skill="cloud-run"
     )
     catalog = Catalog(id="cat-1", mode=CatalogMode.SINGLETON, skills=("cloud-run",))
     outcome = SelectionOutcome(invoked_skills=("cloud-run",))

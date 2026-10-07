@@ -357,9 +357,11 @@ def test_run_check_changed_scope_drops_skills_deleted_from_disk(
     )
     queries_file = write_queries(
         queries=[
-            Query(id="q-live", text="Sample query for valid-skill", expected_skill="valid-skill"),
             Query(
-                id="q-gone",
+                query_id="q-live", text="Sample query for valid-skill", expected_skill="valid-skill"
+            ),
+            Query(
+                query_id="q-gone",
                 text="Sample query for deleted tool",
                 expected_skill="deleted-skill",
             ),
@@ -581,7 +583,7 @@ def test_check_empirical_probes_cache_and_invalidation(
     target_path = skill_dir if target_is_file else skill_dir.parent
     queries = [
         Query(
-            id="q-cache-1",
+            query_id="q-cache-1",
             text="please run cache-tool now",
             expected_skill="cache-tool",
             kind=QueryKind.IMPLICIT,
@@ -655,17 +657,17 @@ def test_filter_check_queries_includes_competing_neighbor_guardrails(
     queries_file = write_queries(
         queries=[
             Query(
-                id="q-gke-1",
+                query_id="q-gke-1",
                 text="debug PVC pending state in GKE",
                 expected_skill="gke-storage-troubleshooting",
             ),
             Query(
-                id="oos-storage-fuse-1",
+                query_id="oos-storage-fuse-1",
                 text="tune Cloud Storage FUSE read cache for GKE training",
                 expected_skill="google-cloud-storage-fuse",
             ),
             Query(
-                id="q-billing-1",
+                query_id="q-billing-1",
                 text="export monthly finance invoice to CSV",
                 expected_skill="unrelated-billing-export",
             ),
@@ -680,7 +682,7 @@ def test_filter_check_queries_includes_competing_neighbor_guardrails(
         skills=skills,
     )
     assert not exhausted
-    selected_ids = [q.id for q in selected]
+    selected_ids = [q.query_id for q in selected]
     assert "q-gke-1" in selected_ids
     assert "oos-storage-fuse-1" in selected_ids
     assert "q-billing-1" not in selected_ids
@@ -697,9 +699,15 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
         QuerySet(
             catalog_id="catalog",
             queries=(
-                Query(id="q-1", text="text 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
-                Query(id="q-2", text="text 2", expected_skill="skill-b", kind=QueryKind.IMPLICIT),
-                Query(id="q-3", text="text 3", expected_skill="skill-a", kind=QueryKind.IMPLICIT),
+                Query(
+                    query_id="q-1", text="text 1", expected_skill="skill-a", kind=QueryKind.IMPLICIT
+                ),
+                Query(
+                    query_id="q-2", text="text 2", expected_skill="skill-b", kind=QueryKind.IMPLICIT
+                ),
+                Query(
+                    query_id="q-3", text="text 3", expected_skill="skill-a", kind=QueryKind.IMPLICIT
+                ),
             ),
             provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         ),
@@ -714,7 +722,7 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
         budget=10,
         filter_skill="skill-a",
     )
-    assert [q.id for q in filtered_skill] == ["q-1", "q-3"]
+    assert [q.query_id for q in filtered_skill] == ["q-1", "q-3"]
 
     # Filter by query id
     filtered_id, _ = _filter_check_queries(
@@ -724,7 +732,7 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
         budget=10,
         filter_id=("q-2",),
     )
-    assert [q.id for q in filtered_id] == ["q-2"]
+    assert [q.query_id for q in filtered_id] == ["q-2"]
 
     # Filter by skill glob pattern
     filtered_skill_glob, _ = _filter_check_queries(
@@ -734,7 +742,7 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
         budget=10,
         filter_skill="skill-*",
     )
-    assert [q.id for q in filtered_skill_glob] == ["q-1", "q-2", "q-3"]
+    assert [q.query_id for q in filtered_skill_glob] == ["q-1", "q-2", "q-3"]
 
     # Filter by query id glob pattern
     filtered_id_glob, _ = _filter_check_queries(
@@ -744,7 +752,7 @@ def test_filter_check_queries_by_skill_and_id(tmp_path: Path) -> None:
         budget=10,
         filter_id="q-[13]",
     )
-    assert [q.id for q in filtered_id_glob] == ["q-1", "q-3"]
+    assert [q.query_id for q in filtered_id_glob] == ["q-1", "q-3"]
 
 
 def test_find_competing_neighbors_includes_dense_semantic_rivals(tmp_path: Path) -> None:

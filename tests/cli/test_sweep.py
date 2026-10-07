@@ -28,6 +28,7 @@ from reach.models import Query, QueryKind
 from reach.queries import Origin, QuerySet, QuerySetProvenance, save_query_set
 from reach.runtime.fake import FakeGenerator
 from reach.sweep import ScalingPoint, ScalingStudy
+from reach.uncertainty import Interval
 
 
 @pytest.fixture
@@ -46,7 +47,7 @@ def sweep_corpus(corpus_builder, tmp_path: Path) -> tuple[Path, Path]:
     queries_file = tmp_path / "queries.json"
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -107,7 +108,9 @@ def _make_stub_study(
         scale=point_scale,
         catalog_id=f"sweep:corpus:{point_scale}",
         pass_rate=0.0 if probes_errored else 1.0,
-        pass_rate_interval=(0.0, 0.27) if probes_errored else (1.0, 1.0),
+        pass_rate_interval=(
+            Interval(low=0.0, high=0.27) if probes_errored else Interval(low=1.0, high=1.0)
+        ),
         recall=0.0 if probes_errored else 1.0,
         precision=0.0 if probes_errored else 1.0,
         f1_score=0.0 if probes_errored else 1.0,
@@ -124,9 +127,9 @@ def _make_stub_study(
         points=(point,) if scales else (),
         baseline_pass_rate=point.pass_rate,
         final_pass_rate=point.pass_rate,
-        total_delta=0.0,
-        total_abstention_loss=0.0,
-        total_collision_loss=0.0,
+        delta_total=0.0,
+        delta_abstention=0.0,
+        delta_collision=0.0,
         noise_floor=0.05,
         total_corpus_skills=max(scales) if scales else 2,
     )
@@ -341,7 +344,7 @@ def test_sweep_discovers_queries_beside_skills_dir(
     reach_dir.mkdir(parents=True)
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -720,7 +723,7 @@ def test_sweep_warns_when_anchor_has_zero_matching_queries(
             catalog_id="synthetic",
             queries=(
                 Query(
-                    id="q-0",
+                    query_id="q-0",
                     text="Requesting task number 00",
                     expected_skill="skill-00",
                     kind=QueryKind.IMPLICIT,
@@ -843,13 +846,13 @@ def test_sweep_auto_queries_backfills_missing_anchor_skills(
             catalog_id="synthetic",
             queries=(
                 Query(
-                    id="q-0",
+                    query_id="q-0",
                     text="Requesting task number 00",
                     expected_skill="skill-00",
                     kind=QueryKind.IMPLICIT,
                 ),
                 Query(
-                    id="adv-skill-00-1",
+                    query_id="adv-skill-00-1",
                     text="Near-miss task number 05",
                     expected_skill="skill-05",
                     kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -969,13 +972,13 @@ def test_sweep_auto_queries_refreshes_stale_anchor_skills(
             catalog_id="synthetic",
             queries=(
                 Query(
-                    id="skill-00-1",
+                    query_id="skill-00-1",
                     text="Keep unchanged query for skill 00",
                     expected_skill="skill-00",
                     kind=QueryKind.IMPLICIT,
                 ),
                 Query(
-                    id="skill-05-1",
+                    query_id="skill-05-1",
                     text="Outdated query for skill 05 before body edit",
                     expected_skill="skill-05",
                     kind=QueryKind.IMPLICIT,
@@ -1489,7 +1492,7 @@ def test_sweep_existing_partial_query_set_does_not_draft_or_mutate_on_corpus_swe
     # Cover only 4 of the 6 skills so at least 1 medoid would have been unqueried if unclamped
     queries = tuple(
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,

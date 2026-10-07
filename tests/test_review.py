@@ -72,14 +72,16 @@ def sample_review_bundle(
 
     prov = QuerySetProvenance(origin=Origin.AUTHORED)
     queries = (
-        Query(id="q1", text="Query 1", expected_skill="target-skill", kind=QueryKind.IMPLICIT),
         Query(
-            id="q2",
+            query_id="q1", text="Query 1", expected_skill="target-skill", kind=QueryKind.IMPLICIT
+        ),
+        Query(
+            query_id="q2",
             text="Query 2",
             expected_skill="rival-skill",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
         ),
-        Query(id="q3", text="Query 3", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="q3", text="Query 3", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
     )
     qs = QuerySet(catalog_id="test-cat", provenance=prov, queries=queries)
     return target, rival, qs
@@ -483,7 +485,7 @@ def test_launch_query_review_http_server_saves_and_shuts_down(
 
     initial_queries = (
         Query(
-            id="init-1",
+            query_id="init-1",
             text="Initial query",
             expected_skill="t-skill",
             kind=QueryKind.IMPLICIT,
@@ -543,7 +545,12 @@ def test_launch_query_review_terminal_enter_proceeds_with_defaults(
     target = Skill(name="t-skill", description="desc", path=target_dir)
 
     initial_queries = (
-        Query(id="init-1", text="Initial query", expected_skill="t-skill", kind=QueryKind.IMPLICIT),
+        Query(
+            query_id="init-1",
+            text="Initial query",
+            expected_skill="t-skill",
+            kind=QueryKind.IMPLICIT,
+        ),
     )
     qs = QuerySet(
         catalog_id="test-cat",

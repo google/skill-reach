@@ -268,7 +268,7 @@ def _query_detail_html(record: QueryRecord, catalog_size: int) -> str:
 <dl>
   <dt>text</dt><dd>{_esc(record.text)}</dd>
   <dt>kind</dt><dd>{_esc(record.kind.value) if record.kind else "unset"}</dd>
-  <dt>expected</dt><dd>{_esc(record.expected)}</dd>
+  <dt>expected</dt><dd>{_esc(record.expected_skill)}</dd>
   <dt>difficulty rank</dt><dd>{_esc(rank)}</dd>
   <dt>leak</dt><dd>{leak}</dd>
   <dt>selections</dt><dd>{selections}</dd>
@@ -288,14 +288,14 @@ def _queries_html(artifact: Artifact) -> str:
             if record.probes == 0
             else ("hit" if record.hits == record.probes else "miss" if record.hits else "error")
         )
-        expected_attr = _esc(record.expected)
+        expected_attr = _esc(record.expected_skill)
         selections_attr = _esc(",".join(record.selections))
         entries.append(
             f'<details class="query {css}" data-expected="{expected_attr}" '
             f'data-selections="{selections_attr}">'
             "<summary>"
             f'<span class="query-id">{_esc(record.query_id)}</span>'
-            f'<span class="expected">{_esc(record.expected)}</span>'
+            f'<span class="expected">{_esc(record.expected_skill)}</span>'
             f'<span class="query-text">{_esc(record.text)}</span>'
             f'<span class="rate">{_esc(rate)}</span>'
             "</summary>"

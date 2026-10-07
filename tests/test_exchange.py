@@ -72,7 +72,7 @@ def test_a_set_a_spreadsheet_saved_still_carries_its_own_ids(
         fmt,
         catalog_id=exchange_set.catalog_id,
     )
-    assert [q.id for q in returned.queries] == [q.id for q in exchange_set.queries]
+    assert [q.query_id for q in returned.queries] == [q.query_id for q in exchange_set.queries]
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
@@ -108,7 +108,7 @@ def test_an_abstention_survives_the_trip(exchange_set: QuerySet, fmt: Exchange) 
         fmt,
         catalog_id=exchange_set.catalog_id,
     )
-    abstain = next(q for q in returned.queries if q.id == "x-abstain")
+    abstain = next(q for q in returned.queries if q.query_id == "x-abstain")
     assert abstain.kind is QueryKind.OUT_OF_SCOPE
     assert abstain.expected_skill is None
 
@@ -124,7 +124,7 @@ def test_punctuation_in_a_query_survives_the_trip(
         fmt,
         catalog_id=exchange_set.catalog_id,
     )
-    punctuated = next(q for q in returned.queries if q.id == "x-punctuated")
+    punctuated = next(q for q in returned.queries if q.query_id == "x-punctuated")
     assert punctuated.text == 'Delete "cold" objects, then archive\nwhatever is left.'
 
 
@@ -251,7 +251,7 @@ def test_a_row_with_no_id_is_numbered() -> None:
         catalog_id="c",
         mapping=FOREIGN_MAP,
     )
-    assert imported.queries[0].id == "q-1"
+    assert imported.queries[0].query_id == "q-1"
 
 
 def test_the_generated_id_prefix_belongs_to_the_caller() -> None:
@@ -262,7 +262,7 @@ def test_the_generated_id_prefix_belongs_to_the_caller() -> None:
         catalog_id="c",
         mapping=FOREIGN_MAP.model_copy(update={"id_prefix": "kms"}),
     )
-    assert imported.queries[0].id == "kms-1"
+    assert imported.queries[0].query_id == "kms-1"
 
 
 def test_an_import_records_that_it_was_imported() -> None:
@@ -431,7 +431,7 @@ def test_import_generates_sequential_ids_when_missing() -> None:
         catalog_id="c",
         mapping=mapping,
     )
-    assert [q.id for q in imported.queries] == ["custom-1", "custom-2"]
+    assert [q.query_id for q in imported.queries] == ["custom-1", "custom-2"]
 
 
 def test_jsonl_import_ignores_trailing_empty_lines() -> None:

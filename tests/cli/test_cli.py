@@ -984,7 +984,7 @@ def test_a_foreign_file_is_mapped_by_flags_and_records_import_provenance(
     assert loaded.provenance.origin is Origin.IMPORTED
     assert loaded.provenance.source == str(foreign_file)
     imported = loaded.queries[0]
-    assert imported.id == "q-1"
+    assert imported.query_id == "q-1"
     assert imported.expected_skill == "kms-rotation"
     assert imported.acceptable_skills == ("skill-finder", "kms-router")
     assert imported.notes == "reviewed manually"
@@ -1047,7 +1047,7 @@ def test_query_command_converts_between_formats_directly(
 
     loaded = load_query_set(dest)
     assert len(loaded.queries) == 4
-    assert any(q.id == "x-lifecycle" for q in loaded.queries)
+    assert any(q.query_id == "x-lifecycle" for q in loaded.queries)
 
 
 def test_query_view_renders_table_without_skills_catalog(
@@ -1424,7 +1424,7 @@ def test_a_drafted_set_records_the_terms_it_was_drafted_under(
     """Verify generated query set records generator provenance and configuration digests."""
     drafted = QuerySet(
         catalog_id="all",
-        queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+        queries=(Query(query_id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     monkeypatch.setattr(
@@ -1469,7 +1469,7 @@ def test_draft_with_review_flag_invokes_review_curator(
 
     drafted = QuerySet(
         catalog_id="all",
-        queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+        queries=(Query(query_id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     monkeypatch.setattr(
@@ -1523,7 +1523,7 @@ def test_draft_concurrency_flag_reaches_generate_query_set(
         captured.update(kwargs)
         return QuerySet(
             catalog_id="all",
-            queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+            queries=(Query(query_id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
             provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         )
 
@@ -1588,7 +1588,7 @@ def test_recording_how_a_set_was_made_does_not_move_its_digest(
     """Verify query set ground truth digest remains invariant under provenance attachment."""
     drafted = QuerySet(
         catalog_id="all",
-        queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+        queries=(Query(query_id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     monkeypatch.setattr(
@@ -1626,12 +1626,12 @@ def viewable_set(skill_repo: Path, tmp_path: Path) -> Path:
         catalog_id="all",
         queries=(
             Query(
-                id="v-1",
+                query_id="v-1",
                 text="Tier old objects to Coldline after 30 days.",
                 expected_skill="gcs-lifecycle-rules",
             ),
             Query(
-                id="v-2",
+                query_id="v-2",
                 text="Keep audit logs for seven years for compliance.",
                 expected_skill="gcs-retention-policy",
             ),
@@ -1665,7 +1665,7 @@ def test_query_view_leaks_flag_adds_a_column(skill_repo: Path, tmp_path: Path, c
         catalog_id="all",
         queries=(
             Query(
-                id="leaky",
+                query_id="leaky",
                 text="I need the gcs-lifecycle-rules skill.",
                 expected_skill="gcs-lifecycle-rules",
             ),
@@ -1693,7 +1693,7 @@ def test_query_view_citations_flag_reads_the_trail_beside_the_set(
         catalog_id="all",
         queries=(
             Query(
-                id="grounded",
+                query_id="grounded",
                 text="Tier old objects to Coldline after 30 days.",
                 expected_skill="gcs-lifecycle-rules",
             ),
@@ -2078,7 +2078,7 @@ def test_query_draft_destination_collision_and_force(
     """Verify query drafting rejects existing destination unless --force is supplied."""
     drafted = QuerySet(
         catalog_id="all",
-        queries=(Query(id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
+        queries=(Query(query_id="d-1", text="Tier old objects.", expected_skill="gke-basics"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     monkeypatch.setattr("reach.cli.drafting.generate_query_set", lambda *_, **__: drafted)
@@ -2123,7 +2123,7 @@ def test_bare_query_command_auto_discovers_skills(
     """Verify bare reach query without target auto-discovers skills from workspace."""
     drafted = QuerySet(
         catalog_id="all",
-        queries=(Query(id="d-1", text="Run test discovery.", expected_skill="test-skill"),),
+        queries=(Query(query_id="d-1", text="Run test discovery.", expected_skill="test-skill"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     monkeypatch.setattr("reach.cli.drafting.generate_query_set", lambda *_, **__: drafted)
@@ -2273,8 +2273,12 @@ def test_query_draft_sync_dry_run_respects_auto_discovered_reach_toml(
         QuerySet(
             catalog_id="all",
             queries=(
-                Query(id="q-1", text="Lifecycle rules.", expected_skill="gcs-lifecycle-rules"),
-                Query(id="q-2", text="Retention lock.", expected_skill="gcs-retention-policy"),
+                Query(
+                    query_id="q-1", text="Lifecycle rules.", expected_skill="gcs-lifecycle-rules"
+                ),
+                Query(
+                    query_id="q-2", text="Retention lock.", expected_skill="gcs-retention-policy"
+                ),
             ),
             provenance=QuerySetProvenance(origin=Origin.GENERATED),
         ),

@@ -227,9 +227,9 @@ def test_calculate_paired_outcomes(
     from reach.sweep import _calculate_paired_outcomes
 
     queries = {
-        "q1": Query(id="q1", text="text 1", expected_skill="s1"),
-        "q2": Query(id="q2", text="text 2", expected_skill="s2"),
-        "q3": Query(id="q3", text="text 3", expected_skill="s3"),
+        "q1": Query(query_id="q1", text="text 1", expected_skill="s1"),
+        "q2": Query(query_id="q2", text="text 2", expected_skill="s2"),
+        "q3": Query(query_id="q3", text="text 3", expected_skill="s3"),
     }
 
     def _build_results(specs: list[tuple[Any, ...]]) -> list[Any]:
@@ -329,7 +329,9 @@ def test_run_scaling_sweep_insufficient_corpus(tmp_path: Path) -> None:
     q_file = tmp_path / "queries.json"
     qs = QuerySet(
         catalog_id="all",
-        queries=(Query(id="q1", text="text", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),),
+        queries=(
+            Query(query_id="q1", text="text", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
+        ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     save_query_set(qs, q_file)
@@ -368,9 +370,17 @@ def test_scaling_sweep_happy_path(tmp_path: Path) -> None:
     qs = QuerySet(
         catalog_id="all",
         queries=(
-            Query(id="q0", text="run skill 0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
             Query(
-                id="q1", text="deploy skill 0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"
+                query_id="q0",
+                text="run skill 0",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
+            ),
+            Query(
+                query_id="q1",
+                text="deploy skill 0",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
             ),
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
@@ -429,7 +439,12 @@ def test_run_scaling_sweep_with_duplicate_skills_in_corpus(tmp_path: Path) -> No
     qs = QuerySet(
         catalog_id="all",
         queries=(
-            Query(id="q0", text="run skill 0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
+            Query(
+                query_id="q0",
+                text="run skill 0",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
+            ),
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
@@ -468,7 +483,12 @@ def test_run_scaling_sweep_in_memory(tmp_path: Path) -> None:
     qs = QuerySet(
         catalog_id="in-memory",
         queries=(
-            Query(id="q0", text="run skill 0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
+            Query(
+                query_id="q0",
+                text="run skill 0",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
+            ),
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
@@ -493,7 +513,7 @@ def test_corpus_scaling_sweep_happy_path(tmp_path: Path) -> None:
 
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -548,7 +568,7 @@ def test_corpus_scaling_sweep_completes_all_scales_without_early_stopping(tmp_pa
 
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -596,7 +616,7 @@ def test_corpus_scaling_sweep_anchor_default(tmp_path: Path) -> None:
 
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -646,7 +666,7 @@ def test_corpus_scaling_sweep_anchor_explicit_and_all(tmp_path: Path) -> None:
 
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -732,7 +752,7 @@ def test_scaling_sweep_does_not_skip_probes_when_out_path_configured(tmp_path: P
     _create_mock_skills(skills_dir, 4)
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -790,7 +810,7 @@ def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
         catalog_id="in-memory",
         queries=(
             Query(
-                id="q0",
+                query_id="q0",
                 text="please run skill-00",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="skill-00",
@@ -899,11 +919,13 @@ def test_single_skill_sweep_classification_metrics(
     from reach.sweep import _build_scaling_point
 
     pos_queries = [
-        Query(id=f"q{i}", text=f"query {i}", expected_skill="my-skill", kind=QueryKind.IMPLICIT)
+        Query(
+            query_id=f"q{i}", text=f"query {i}", expected_skill="my-skill", kind=QueryKind.IMPLICIT
+        )
         for i in range(len(positive_invocations))
     ]
     neg_queries = [
-        Query(id=f"neg{j}", text=f"neg {j}", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE)
+        Query(query_id=f"neg{j}", text=f"neg {j}", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE)
         for j in range(len(negative_specs))
     ]
     query_set = QuerySet(
@@ -953,7 +975,9 @@ def test_prompt_tokens_telemetry_propagates_from_outcome_to_scaling_point() -> N
     outcome = summary.to_outcome(observed_catalog=("my-skill",))
     assert outcome.prompt_tokens == 1250
 
-    query = Query(id="q1", text="use my-skill", expected_skill="my-skill", kind=QueryKind.IMPLICIT)
+    query = Query(
+        query_id="q1", text="use my-skill", expected_skill="my-skill", kind=QueryKind.IMPLICIT
+    )
     cat = Catalog(
         id="sweep:my-skill:5",
         mode=CatalogMode.SWEEP,
@@ -997,16 +1021,19 @@ def test_single_skill_sweep_retains_neighbor_negative_queries_and_tracks_interna
         catalog_id="c",
         queries=(
             Query(
-                id="pos-1", text="use target", expected_skill="my-skill", kind=QueryKind.IMPLICIT
+                query_id="pos-1",
+                text="use target",
+                expected_skill="my-skill",
+                kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="adv-1",
+                query_id="adv-1",
                 text="use rival near miss",
                 expected_skill="rival-skill",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="other-pos",
+                query_id="other-pos",
                 text="unrelated rival positive",
                 expected_skill="rival-skill",
                 kind=QueryKind.IMPLICIT,
@@ -1016,7 +1043,7 @@ def test_single_skill_sweep_retains_neighbor_negative_queries_and_tracks_interna
     )
     target, filtered_qs = _resolve_sweep_target_and_queries(skills, raw_qs, "my-skill")
     assert target == "my-skill"
-    assert [q.id for q in filtered_qs.queries] == ["pos-1", "adv-1"]
+    assert [q.query_id for q in filtered_qs.queries] == ["pos-1", "adv-1"]
 
     # At k=1 (only my-skill installed), abstaining on adv-1 is a pass (pass_rate = 1.0)
     baseline_results = (
@@ -1072,37 +1099,37 @@ def test_single_skill_sweep_filters_out_unrelated_neighbor_negatives_from_corpus
         catalog_id="c",
         queries=(
             Query(
-                id="cr-1",
+                query_id="cr-1",
                 text="Deploy container",
                 expected_skill="cloud-run",
                 kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="adv-cloud-run-1",
+                query_id="adv-cloud-run-1",
                 text="Cloud run near miss",
                 expected_skill="bigquery",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="adv-bigquery-1",
+                query_id="adv-bigquery-1",
                 text="Bigquery near miss",
                 expected_skill="spanner",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="adv-spanner-1",
+                query_id="adv-spanner-1",
                 text="Spanner near miss",
                 expected_skill="bigquery",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="bq-pos",
+                query_id="bq-pos",
                 text="Run SQL query",
                 expected_skill="bigquery",
                 kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="span-pos",
+                query_id="span-pos",
                 text="Spanner transaction",
                 expected_skill="spanner",
                 kind=QueryKind.IMPLICIT,
@@ -1112,7 +1139,7 @@ def test_single_skill_sweep_filters_out_unrelated_neighbor_negatives_from_corpus
     )
     target, filtered_qs = _resolve_sweep_target_and_queries(skills, raw_qs, "cloud-run")
     assert target == "cloud-run"
-    assert [q.id for q in filtered_qs.queries] == ["cr-1", "adv-cloud-run-1"]
+    assert [q.query_id for q in filtered_qs.queries] == ["cr-1", "adv-cloud-run-1"]
 
 
 def test_single_skill_sweep_preserves_target_adversarial_on_prefix_collision(
@@ -1135,19 +1162,19 @@ def test_single_skill_sweep_preserves_target_adversarial_on_prefix_collision(
         catalog_id="c",
         queries=(
             Query(
-                id="cr-basics-pos",
+                query_id="cr-basics-pos",
                 text="Deploy container basics",
                 expected_skill="cloud-run-basics",
                 kind=QueryKind.IMPLICIT,
             ),
             Query(
-                id="adv-cloud-run-basics-1",
+                query_id="adv-cloud-run-basics-1",
                 text="Cloud run basics near miss",
                 expected_skill="cloud-run",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
             ),
             Query(
-                id="adv-cloud-run-1",
+                query_id="adv-cloud-run-1",
                 text="Cloud run near miss",
                 expected_skill="cloud-run-basics",
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -1157,7 +1184,7 @@ def test_single_skill_sweep_preserves_target_adversarial_on_prefix_collision(
     )
     target, filtered_qs = _resolve_sweep_target_and_queries(skills, raw_qs, "cloud-run-basics")
     assert target == "cloud-run-basics"
-    assert [q.id for q in filtered_qs.queries] == ["cr-basics-pos", "adv-cloud-run-basics-1"]
+    assert [q.query_id for q in filtered_qs.queries] == ["cr-basics-pos", "adv-cloud-run-basics-1"]
 
 
 def test_render_ascii_curve_single_bullet_per_column_on_midpoint_boundaries(
@@ -1205,7 +1232,7 @@ def test_resolve_anchor_and_target_skills_fuzzy_suggestions(tmp_path: Path) -> N
         catalog_id="all",
         queries=(
             Query(
-                id="q1",
+                query_id="q1",
                 text="configure sink",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="cloud-logging-configuration-basics",
@@ -1280,7 +1307,12 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
     qs = QuerySet(
         catalog_id="in-memory",
         queries=(
-            Query(id="q0", text="run skill 0", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
+            Query(
+                query_id="q0",
+                text="run skill 0",
+                kind=QueryKind.IMPLICIT,
+                expected_skill="skill-00",
+            ),
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
@@ -1371,13 +1403,13 @@ def test_sweep_scores_two_turn_mutual_handoff_as_true_positive_and_records_entry
 
     queries = (
         Query(
-            id="q-handoff",
+            query_id="q-handoff",
             text="harden GKE cluster security posture",
             expected_skill="gke-platform-security",
             kind=QueryKind.IMPLICIT,
         ),
         Query(
-            id="q-acceptable",
+            query_id="q-acceptable",
             text="deploy agent endpoint on Vertex",
             expected_skill="agent-platform-deploy",
             acceptable_skills=("gcloud",),
@@ -1476,7 +1508,7 @@ def test_run_scaling_sweep_invalidates_workdir_cache_on_anchor_or_skill_edit(
         catalog_id="corpus",
         queries=tuple(
             Query(
-                id=f"q-{idx}",
+                query_id=f"q-{idx}",
                 text=f"query for skill-{idx:02d}",
                 kind=QueryKind.IMPLICIT,
                 expected_skill=f"skill-{idx:02d}",
@@ -1552,7 +1584,7 @@ def test_run_scaling_sweep_listing_budget_guard(tmp_path: Path) -> None:
         catalog_id="corpus",
         queries=tuple(
             Query(
-                id=f"q-{idx}",
+                query_id=f"q-{idx}",
                 text=f"query for skill-{idx:02d}",
                 kind=QueryKind.IMPLICIT,
                 expected_skill=f"skill-{idx:02d}",
@@ -1615,13 +1647,13 @@ def test_resolve_anchor_skills_filters_to_queried_skills_and_warns_missing_corpu
         catalog_id="all",
         queries=(
             Query(
-                id="q0",
+                query_id="q0",
                 text="query for skill-00",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="skill-00",
             ),
             Query(
-                id="q1",
+                query_id="q1",
                 text="query for skill-01",
                 kind=QueryKind.IMPLICIT,
                 expected_skill="skill-01",
@@ -1705,9 +1737,9 @@ def test_print_sweep_surfaces_collision_and_truncation_without_ellipsis(
         knee_scale=25,
         baseline_pass_rate=0.951,
         final_pass_rate=0.854,
-        total_delta=0.097,
-        total_abstention_loss=0.024,
-        total_collision_loss=0.098,
+        delta_total=0.097,
+        delta_abstention=0.024,
+        delta_collision=0.098,
         total_corpus_skills=147,
         points=(
             make_scaling_point(
@@ -1790,7 +1822,7 @@ def test_resolve_anchor_skills_warns_when_query_set_has_no_resident_queries(
     ]
     qs = QuerySet(
         catalog_id="cat",
-        queries=(Query(id="q-1", text="Other query", expected_skill="other-skill"),),
+        queries=(Query(query_id="q-1", text="Other query", expected_skill="other-skill"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     with caplog.at_level(logging.WARNING):
@@ -1821,7 +1853,8 @@ def test_resolve_anchor_skills_unclamped_computes_full_corpus_medoids(
     sufficient_qs = QuerySet(
         catalog_id="cat",
         queries=tuple(
-            Query(id=f"q-{i}", text=f"Query {i}", expected_skill=f"skill-{i:02d}") for i in range(4)
+            Query(query_id=f"q-{i}", text=f"Query {i}", expected_skill=f"skill-{i:02d}")
+            for i in range(4)
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
@@ -1849,7 +1882,7 @@ def test_resolve_anchor_skills_unclamped_computes_full_corpus_medoids(
     # When queried skills (1) < requested anchors (3), avoids demotion even when clamped
     sparse_qs = QuerySet(
         catalog_id="cat",
-        queries=(Query(id="q-0", text="Query 0", expected_skill="skill-00"),),
+        queries=(Query(query_id="q-0", text="Query 0", expected_skill="skill-00"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     fallback_anchors = _resolve_anchor_skills(
@@ -1899,7 +1932,7 @@ def test_run_scaling_sweep_early_aborts_on_100_percent_runtime_errors_at_first_s
 
     queries = [
         Query(
-            id=f"q-{i}",
+            query_id=f"q-{i}",
             text=f"Requesting task number {i:02d}",
             expected_skill=f"skill-{i:02d}",
             kind=QueryKind.IMPLICIT,
@@ -2002,8 +2035,8 @@ def test_scaling_point_records_step_efficiency_and_skill_f1(
     from reach.sweep import _build_scaling_point
 
     queries = [
-        Query(id="q1", text="Do thing 1", expected_skill="s1", kind=QueryKind.IMPLICIT),
-        Query(id="q2", text="Do thing 2", expected_skill="s2", kind=QueryKind.IMPLICIT),
+        Query(query_id="q1", text="Do thing 1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+        Query(query_id="q2", text="Do thing 2", expected_skill="s2", kind=QueryKind.IMPLICIT),
     ]
     query_set = QuerySet(
         catalog_id="c",
@@ -2182,8 +2215,8 @@ def test_paired_trial_outcomes_calculates_effective_paired(
     from reach.sweep import _calculate_paired_outcomes
 
     queries = {
-        "q1": Query(id="q1", text="t1", expected_skill="s1", kind=QueryKind.IMPLICIT),
-        "q2": Query(id="q2", text="t2", expected_skill="s2", kind=QueryKind.IMPLICIT),
+        "q1": Query(query_id="q1", text="t1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+        "q2": Query(query_id="q2", text="t2", expected_skill="s2", kind=QueryKind.IMPLICIT),
     }
 
     # 2 queries, 5 attempts each (10 total probes)
@@ -2295,9 +2328,9 @@ def test_sweep_steepest_drop_and_truncation_loss_rendering(
         knee_scale=25,
         steepest_drop_scales=(10, 25),
         steepest_drop_delta=0.25,
-        total_abstention_loss=0.12,
-        total_collision_loss=0.15,
-        total_truncated_loss=0.10,
+        delta_abstention=0.12,
+        delta_collision=0.15,
+        delta_truncated=0.10,
     )
     console = Console(record=True, width=100)
     print_sweep(console, corpus_study)
@@ -2379,10 +2412,10 @@ def test_calculate_scale_pass_rate_excludes_runtime_errors(
     from reach.sweep import _calculate_scale_pass_rate
 
     queries = {
-        "q1": Query(id="q1", text="run 1", expected_skill="s1"),
-        "q2": Query(id="q2", text="run 2", expected_skill="s1"),
-        "q3": Query(id="q3", text="run 3", expected_skill="s1"),
-        "q4": Query(id="q4", text="run 4", expected_skill="s1"),
+        "q1": Query(query_id="q1", text="run 1", expected_skill="s1"),
+        "q2": Query(query_id="q2", text="run 2", expected_skill="s1"),
+        "q3": Query(query_id="q3", text="run 3", expected_skill="s1"),
+        "q4": Query(query_id="q4", text="run 4", expected_skill="s1"),
     }
     results = [
         make_probe_result(query_id="q1", catalog_id="c", invoked="s1"),
@@ -2406,11 +2439,13 @@ def test_calculate_scale_classification_excludes_runtime_errors(
     from reach.sweep import _calculate_scale_classification
 
     queries = {
-        "pos1": Query(id="pos1", text="run pos", expected_skill="s1"),
-        "pos_err": Query(id="pos_err", text="run pos err", expected_skill="s1"),
-        "neg1": Query(id="neg1", text="run neg", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        "pos1": Query(query_id="pos1", text="run pos", expected_skill="s1"),
+        "pos_err": Query(query_id="pos_err", text="run pos err", expected_skill="s1"),
+        "neg1": Query(
+            query_id="neg1", text="run neg", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
+        ),
         "neg_err": Query(
-            id="neg_err", text="run neg err", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
+            query_id="neg_err", text="run neg err", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
         ),
     }
     results = [
@@ -2435,9 +2470,9 @@ def test_single_skill_trajectory_metrics_not_inverted_by_adversarial_queries(
     from reach.sweep import _calculate_scale_classification
 
     queries = {
-        "target_q": Query(id="target_q", text="target query", expected_skill="cloud-deploy"),
+        "target_q": Query(query_id="target_q", text="target query", expected_skill="cloud-deploy"),
         "rival_adv_q": Query(
-            id="rival_adv_q",
+            query_id="rival_adv_q",
             text="rival near miss",
             expected_skill="container-build",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -2602,7 +2637,7 @@ def test_resolve_medoid_anchors_avoids_demotion_on_partial_queries(
     # Only 1 skill has queries in pre-existing query set
     partial_qs = QuerySet(
         catalog_id="partial",
-        queries=(Query(id="q-0", text="Task 0", expected_skill="skill-00"),),
+        queries=(Query(query_id="q-0", text="Task 0", expected_skill="skill-00"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     with caplog.at_level("WARNING"):
@@ -2641,7 +2676,7 @@ def test_resolve_medoid_anchors_errors_on_no_auto_queries_insufficient(
     ]
     partial_qs = QuerySet(
         catalog_id="partial",
-        queries=(Query(id="q-0", text="Task 0", expected_skill="skill-00"),),
+        queries=(Query(query_id="q-0", text="Task 0", expected_skill="skill-00"),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     config = RunConfig(study=StudySettings(auto_queries=False))
@@ -2687,8 +2722,12 @@ def test_all_probes_errored_property_and_sweep_abort(
     qs = QuerySet(
         catalog_id="all",
         queries=(
-            Query(id="q1", text="q1 text", kind=QueryKind.IMPLICIT, expected_skill="skill-00"),
-            Query(id="q2", text="q2 text", kind=QueryKind.IMPLICIT, expected_skill="skill-01"),
+            Query(
+                query_id="q1", text="q1 text", kind=QueryKind.IMPLICIT, expected_skill="skill-00"
+            ),
+            Query(
+                query_id="q2", text="q2 text", kind=QueryKind.IMPLICIT, expected_skill="skill-01"
+            ),
         ),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
@@ -2743,25 +2782,25 @@ def test_single_skill_pass_rate_and_decomposition_aligned(
 
     queries = [
         Query(
-            id="q_target",
+            query_id="q_target",
             text="target query",
             kind=QueryKind.IMPLICIT,
             expected_skill="target-skill",
         ),
         Query(
-            id="q_distractor",
+            query_id="q_distractor",
             text="distractor query",
             kind=QueryKind.IMPLICIT,
             expected_skill="other-skill",
         ),
         Query(
-            id="q_oos",
+            query_id="q_oos",
             text="out of scope query",
             kind=QueryKind.OUT_OF_SCOPE,
             expected_skill=None,
         ),
     ]
-    queries_by_id = {q.id: q for q in queries}
+    queries_by_id = {q.query_id: q for q in queries}
 
     baseline_results = [
         make_probe_result(query_id="q_target", invoked="target-skill"),
@@ -2814,12 +2853,19 @@ def test_extract_query_outcomes_and_single_skill_bootstrap_resampling(
     from reach.sweep import _extract_query_outcomes, _resample_cluster_curve
 
     queries = [
-        Query(id="q1", text="target query", kind=QueryKind.IMPLICIT, expected_skill="skill-a"),
-        Query(id="q2", text="distractor query", kind=QueryKind.IMPLICIT, expected_skill="skill-b"),
-        Query(id="q3", text="oos query", kind=QueryKind.OUT_OF_SCOPE, expected_skill=None),
+        Query(
+            query_id="q1", text="target query", kind=QueryKind.IMPLICIT, expected_skill="skill-a"
+        ),
+        Query(
+            query_id="q2",
+            text="distractor query",
+            kind=QueryKind.IMPLICIT,
+            expected_skill="skill-b",
+        ),
+        Query(query_id="q3", text="oos query", kind=QueryKind.OUT_OF_SCOPE, expected_skill=None),
     ]
-    queries_by_id = {q.id: q for q in queries}
-    truth = {q.id: q.expected_skill for q in queries}
+    queries_by_id = {q.query_id: q for q in queries}
+    truth = {q.query_id: q.expected_skill for q in queries}
 
     results = [
         make_probe_result(query_id="q1", invoked="skill-a"),
@@ -2871,19 +2917,19 @@ def test_build_scaling_point_scopes_probe_accounting_with_rivals(
 
     queries = [
         Query(
-            id="q_target",
+            query_id="q_target",
             text="target task",
             kind=QueryKind.IMPLICIT,
             expected_skill="target-skill",
         ),
         Query(
-            id="q_oos",
+            query_id="q_oos",
             text="out of scope task",
             kind=QueryKind.OUT_OF_SCOPE,
             expected_skill=None,
         ),
         Query(
-            id="q_rival",
+            query_id="q_rival",
             text="rival negative task",
             kind=QueryKind.NEIGHBOR_NEGATIVE,
             expected_skill="rival-skill",
@@ -2932,10 +2978,10 @@ def test_stratified_bootstrap_preserves_skill_stratum_sizes() -> None:
     from reach.sweep import _build_query_strata, _draw_stratified_qids
 
     queries_by_id = {
-        "q1": Query(id="q1", text="t1", expected_skill="skill-a"),
-        "q2": Query(id="q2", text="t2", expected_skill="skill-a"),
-        "q3": Query(id="q3", text="t3", expected_skill="skill-b"),
-        "q4": Query(id="q4", text="t4", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+        "q1": Query(query_id="q1", text="t1", expected_skill="skill-a"),
+        "q2": Query(query_id="q2", text="t2", expected_skill="skill-a"),
+        "q3": Query(query_id="q3", text="t3", expected_skill="skill-b"),
+        "q4": Query(query_id="q4", text="t4", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
     }
     strata = _build_query_strata(["q1", "q2", "q3", "q4"], queries_by_id=queries_by_id)
     assert len(strata) == 3
@@ -3104,8 +3150,8 @@ def test_detect_replicate_collisions_identifies_flipped_queries_and_suspect_dist
         id="sweep:corpus:4-r1", mode=CatalogMode.SWEEP, skills=("s1", "s2", "d2", "d3")
     )
     queries_by_id = {
-        "q1": Query(id="q1", text="use s1", expected_skill="s1"),
-        "q2": Query(id="q2", text="use s2", expected_skill="s2"),
+        "q1": Query(query_id="q1", text="use s1", expected_skill="s1"),
+        "q2": Query(query_id="q2", text="use s2", expected_skill="s2"),
     }
     replicates_by_scale = {
         4: (
@@ -3258,56 +3304,50 @@ def test_print_corpus_capacity_sweep_renders_all_summary_lines(
     assert "gcloud ← cloud-run-basics (1 flip @ K=30)" in single_out
 
 
-def test_legacy_decomposition_field_aliases_and_collision_bounds() -> None:
-    """Verify legacy field aliases deserialize and out-of-bounds replicates are safe."""
+def test_legacy_decomposition_aliases_rejected_under_strict_config() -> None:
+    """Verify legacy field aliases are rejected under extra='forbid'."""
+    from pydantic import ValidationError
+
     from reach.metrics import DecompositionResult
-    from reach.sweep import ScalingPoint, ScalingStudy, _resolve_collision_suspects
+    from reach.sweep import ScalingPoint, ScalingStudy
 
-    decomp = DecompositionResult.model_validate(
-        {
-            "baseline_pass_rate": 0.9,
-            "scaled_pass_rate": 0.7,
-            "delta_total": 0.2,
-            "delta_context": 0.08,
-            "delta_shadowing": 0.12,
-            "delta_context_ci": (0.02, 0.14),
-            "delta_shadowing_ci": (0.05, 0.19),
-        }
-    )
-    assert decomp.delta_abstention == pytest.approx(0.08)
-    assert decomp.delta_collision == pytest.approx(0.12)
-    assert decomp.delta_abstention_ci == (0.02, 0.14)
-    assert decomp.delta_collision_ci == (0.05, 0.19)
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        DecompositionResult.model_validate(
+            {
+                "baseline_pass_rate": 0.9,
+                "scaled_pass_rate": 0.7,
+                "delta_total": 0.2,
+                "delta_context": 0.08,
+            }
+        )
 
-    point = ScalingPoint.model_validate(
-        {
-            "scale": 10,
-            "catalog_id": "cat-10",
-            "pass_rate": 0.8,
-            "pass_rate_interval": (0.6, 0.9),
-            "delta_vs_baseline": 0.1,
-            "delta_context": 0.04,
-            "delta_shadowing": 0.06,
-            "probes_executed": 10,
-        }
-    )
-    assert point.delta_abstention == pytest.approx(0.04)
-    assert point.delta_collision == pytest.approx(0.06)
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ScalingPoint.model_validate(
+            {
+                "scale": 10,
+                "catalog_id": "cat-10",
+                "pass_rate": 0.8,
+                "delta_vs_baseline": 0.1,
+                "delta_context": 0.04,
+                "probes_executed": 10,
+            }
+        )
 
-    study = ScalingStudy.model_validate(
-        {
-            "is_corpus_sweep": True,
-            "scales": (10,),
-            "points": (point,),
-            "baseline_pass_rate": 0.8,
-            "final_pass_rate": 0.8,
-            "total_delta": 0.1,
-            "total_context_loss": 0.04,
-            "total_shadowing_loss": 0.06,
-        }
-    )
-    assert study.total_abstention_loss == pytest.approx(0.04)
-    assert study.total_collision_loss == pytest.approx(0.06)
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ScalingStudy.model_validate(
+            {
+                "is_corpus_sweep": True,
+                "scales": (10,),
+                "baseline_pass_rate": 0.8,
+                "final_pass_rate": 0.8,
+                "total_delta": 0.1,
+            }
+        )
+
+
+def test_resolve_collision_suspects_out_of_bounds() -> None:
+    """Verify out-of-bounds replicate indices safely resolve to empty suspects."""
+    from reach.sweep import _resolve_collision_suspects
 
     assert _resolve_collision_suspects("q1", "s1", [5, 6], [0], ()) == ()
 
@@ -3444,7 +3484,7 @@ def test_print_sweep_table_standardizes_prec_and_time_headers(
     # Case 2: Corpus sweep with truncation
     corpus_trunc_study = make_scaling_study(
         points=(pt1, pt_trunc),
-        total_truncated_loss=0.05,
+        delta_truncated=0.05,
     )
     buf2 = StringIO()
     print_sweep(Console(file=buf2, force_terminal=False, width=100), corpus_trunc_study)
@@ -3474,7 +3514,7 @@ def test_print_sweep_table_standardizes_prec_and_time_headers(
         is_corpus_sweep=False,
         target_skill="skill-demo",
         points=(pt1, pt_trunc),
-        total_truncated_loss=0.05,
+        delta_truncated=0.05,
     )
     buf4 = StringIO()
     print_sweep(Console(file=buf4, force_terminal=False, width=100), single_study_trunc)

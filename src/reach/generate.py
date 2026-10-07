@@ -625,7 +625,7 @@ def generate_adversarial_for_skill(
             rival_skill = rival_skills[draft.rival_index - 1]
             queries.append(
                 Query(
-                    id=f"adv-{target}-{i}",
+                    query_id=f"adv-{target}-{i}",
                     text=draft.text,
                     kind=QueryKind.NEIGHBOR_NEGATIVE,
                     expected_skill=rival_skill.name,
@@ -638,7 +638,7 @@ def generate_adversarial_for_skill(
         ):
             queries.append(
                 Query(
-                    id=f"adv-{target}-{i}",
+                    query_id=f"adv-{target}-{i}",
                     text=draft.text,
                     kind=QueryKind.OUT_OF_SCOPE,
                     expected_skill=None,
@@ -1070,7 +1070,7 @@ def out_of_scope_from(
     """Convert queries from non-resident skills into OUT_OF_SCOPE negative queries."""
     resident = set(catalog.skills)
     return tuple(
-        Query(id=f"{prefix}-{q.id}", text=q.text, kind=QueryKind.OUT_OF_SCOPE)
+        Query(query_id=f"{prefix}-{q.query_id}", text=q.text, kind=QueryKind.OUT_OF_SCOPE)
         for q in query_set.queries
         if q.expected_skill is not None and q.expected_skill not in resident
     )
@@ -1085,7 +1085,7 @@ def to_queries(
     """Construct labeled Query instances from GeneratedQuery drafts."""
     return tuple(
         Query(
-            id=f"{prefix}-{i}",
+            query_id=f"{prefix}-{i}",
             text=draft.text,
             kind=kind,
             expected_skill=expected_skill,

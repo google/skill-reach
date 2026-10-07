@@ -1392,7 +1392,7 @@ def test_select_triggers_probe_harness_retry_on_429_and_empty_selection(
         cache_outcomes=False,
     )
     catalog = Catalog(id="cat-1", mode=CatalogMode.ALL, skills=("gke-basics",))
-    query = Query(id="q-1", text="create a gke cluster", expected_skill="gke-basics")
+    query = Query(query_id="q-1", text="create a gke cluster", expected_skill="gke-basics")
 
     results = list(harness.run_probes([query], catalog, tmp_path / "work", attempts=1))
     assert len(results) == 1
@@ -1607,7 +1607,7 @@ def test_select_async_hook_rewrites_skill_directory_to_skill_md_for_multi_turn_r
     from reach.models import Catalog, CatalogMode, ProbeResult, Query
 
     query = Query(
-        id="q-1",
+        query_id="q-1",
         text="deploy my model to an endpoint",
         expected_skill="agent-platform-deploy",
     )

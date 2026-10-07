@@ -1176,9 +1176,9 @@ def test_scaling_study_requires_target_skill_when_targeted() -> None:
             points=(),
             baseline_pass_rate=1.0,
             final_pass_rate=1.0,
-            total_delta=0.0,
-            total_abstention_loss=0.0,
-            total_collision_loss=0.0,
+            delta_total=0.0,
+            delta_abstention=0.0,
+            delta_collision=0.0,
         )
 
 

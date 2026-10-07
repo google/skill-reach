@@ -32,7 +32,7 @@ from pydantic import (
     model_validator,
 )
 
-from reach._io import write_model
+from reach._io import read_model, write_model
 from reach.models import Query, QueryKind
 
 if TYPE_CHECKING:
@@ -77,9 +77,9 @@ def _is_generated_for_skill(query: Query, skill_names: frozenset[str]) -> bool:
     """Return True when a positive or adversarial query belongs to one of `skill_names`."""
     if query.expected_skill in skill_names:
         return True
-    if not query.id.startswith("adv-"):
+    if not query.query_id.startswith("adv-"):
         return False
-    remainder = query.id.removeprefix("adv-")
+    remainder = query.query_id.removeprefix("adv-")
     for name in skill_names:
         prefix = f"{name}-"
         if remainder.startswith(prefix) and remainder.removeprefix(prefix).isdigit():
@@ -153,26 +153,12 @@ class QuerySetProvenance(BaseModel):
 class QuerySet(BaseModel):
     """Represent a collection of labeled evaluation queries targeting a catalog."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     catalog_id: str = ""
     notes: str = ""
     provenance: QuerySetProvenance = Field(default_factory=QuerySetProvenance)
     queries: tuple[Query, ...]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _default_missing_query_ids(cls, data: object) -> object:
-        """Assign sequential default IDs to query entries that omit query identifiers."""
-        if isinstance(data, dict) and isinstance(data.get("queries"), (list, tuple)):
-            normalized_queries = [
-                {**q, "query_id": f"q-{idx:03d}"}
-                if isinstance(q, dict) and not str(q.get("query_id") or q.get("id") or "").strip()
-                else q
-                for idx, q in enumerate(data["queries"], start=1)
-            ]
-            return {**data, "queries": normalized_queries}
-        return data
 
     @model_validator(mode="after")
     def _assert_unique_ids(self) -> Self:
@@ -180,9 +166,9 @@ class QuerySet(BaseModel):
         seen: set[str] = set()
         duplicates: set[str] = set()
         for q in self.queries:
-            if q.id in seen:
-                duplicates.add(q.id)
-            seen.add(q.id)
+            if q.query_id in seen:
+                duplicates.add(q.query_id)
+            seen.add(q.query_id)
         if duplicates:
             msg = f"duplicate query ids: {sorted(duplicates)}"
             raise ValueError(msg)
@@ -293,7 +279,7 @@ def load_query_set(
             QuerySet.model_validate(yaml.safe_load(content)), catalog_id
         )
     if suffix == ".json":
-        return _parse_json_query_set(content, catalog_id=catalog_id)
+        return _apply_catalog_id_fallback(read_model(QuerySet, resolved), catalog_id)
     try:
         return _parse_json_query_set(content, catalog_id=catalog_id)
     except (ValueError, ValidationError):
@@ -350,7 +336,7 @@ def _query_rows(query_set: QuerySet) -> list[tuple[str, ...]]:
     rows: list[tuple[str, ...]] = []
     for query in query_set.queries:
         row: tuple[str, ...] = (
-            query.id,
+            query.query_id,
             query.text,
             query.kind or "",
             query.expected_skill or "",

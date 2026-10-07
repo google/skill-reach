@@ -237,7 +237,14 @@ def test_f1_combines_the_two_halves_of_a_skills_score(
 
 def test_f1_is_zero_rather_than_absent_for_a_skill_that_never_fired() -> None:
     """Verify F1 is 0.0 when precision is undefined due to zero invocations."""
-    entry = SkillScore(skill=LIFECYCLE, probes=5, reached=0, recall=0.0)
+    entry = SkillScore(
+        skill=LIFECYCLE,
+        probes=5,
+        reached=0,
+        recall=0.0,
+        trajectory_reached=0,
+        trajectory_recall=0.0,
+    )
 
     assert entry.precision is None
     assert entry.f1 == 0.0
@@ -290,7 +297,7 @@ def test_sample_query_probe_text_is_embedded_rather_than_referenced(
     queries: list[Query],
 ) -> None:
     """Verify query text is embedded in confusion sample queries."""
-    texts = {q.id: q.text for q in queries}
+    texts = {q.query_id: q.text for q in queries}
     misroute = next(p for p in artifact.confusion if p.collisions)
     assert misroute.queries == (
         SampleQuery(query_id="q-retention", text=texts["q-retention"], probes=1),
@@ -309,7 +316,7 @@ def test_sample_queries_are_bounded_and_ordered_by_weight(
     """Verify sample query lists are sorted by descending probe volume and bounded by limit."""
     queries = tuple(
         Query(
-            id=f"q{i}",
+            query_id=f"q{i}",
             text=f"Query number {i}.",
             kind=QueryKind.IMPLICIT,
             expected_skill=RETENTION,
@@ -322,7 +329,7 @@ def test_sample_queries_are_bounded_and_ordered_by_weight(
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     results = [
-        make_result(q.id, BASICS, attempt=attempt)
+        make_result(q.query_id, BASICS, attempt=attempt)
         for i, q in enumerate(queries, start=1)
         for attempt in range(1, i + 1)
     ]
@@ -367,7 +374,7 @@ def test_every_query_is_recorded_with_its_text_verbatim(
 ) -> None:
     """Verify all queries are embedded with verbatim text in the artifact."""
     assert [(r.query_id, r.text) for r in artifact.queries] == [
-        (q.id, q.text) for q in sorted(queries, key=lambda q: q.id)
+        (q.query_id, q.text) for q in sorted(queries, key=lambda q: q.query_id)
     ]
 
 
@@ -396,7 +403,7 @@ def test_a_query_written_in_the_target_vocabulary_ranks_first(
 ) -> None:
     """Verify difficulty rank is 1 when query vocabulary matches target skill description."""
     query = Query(
-        id="q-easy",
+        query_id="q-easy",
         text="Configures object lifecycle rules.",
         kind=QueryKind.IMPLICIT,
         expected_skill=LIFECYCLE,
@@ -423,7 +430,7 @@ def test_a_query_naming_its_own_target_is_flagged(
 ) -> None:
     """Verify queries containing verbatim target skill names are flagged as leaky."""
     query = Query(
-        id="q-leaky",
+        query_id="q-leaky",
         text="Use gcs-lifecycle-rules to tier my objects.",
         kind=QueryKind.IMPLICIT,
         expected_skill=LIFECYCLE,
@@ -458,7 +465,7 @@ def test_an_out_of_scope_query_has_no_leak_to_check(
 ) -> None:
     """Verify out-of-scope queries carry None for leak and difficulty rank."""
     query = Query(
-        id="q-oos",
+        query_id="q-oos",
         text="What is the capital of France?",
         kind=QueryKind.OUT_OF_SCOPE,
     )
@@ -569,7 +576,7 @@ def test_a_query_asked_once_is_uncertain_rather_than_certain(
 ) -> None:
     """Verify single-attempt eval applies Laplace smoothing rather than claiming zero error."""
     artifact = assemble(
-        [make_result(q.id, q.expected_skill) for q in whole_catalog_queries.queries],
+        [make_result(q.query_id, q.expected_skill) for q in whole_catalog_queries.queries],
         whole_catalog_queries,
         whole_catalog,
         corpus,
@@ -591,7 +598,7 @@ def test_a_query_that_never_hit_still_carries_uncertainty(
     """Verify queries with zero hits carry non-zero smoothed standard error."""
     swept = assemble(
         [
-            make_result(q.id, q.expected_skill if hit else BASICS, attempt=i)
+            make_result(q.query_id, q.expected_skill if hit else BASICS, attempt=i)
             for q, hit in zip(whole_catalog_queries.queries, (True, False), strict=True)
             for i in (1, 2, 3)
         ],
@@ -613,8 +620,11 @@ def test_an_errored_attempt_is_not_a_replicate(
 ) -> None:
     """Verify errored attempts are excluded from replicate counts and top1 accuracies."""
     results = [
-        make_result(q.id, q.expected_skill, attempt=1) for q in whole_catalog_queries.queries
-    ] + [make_result(q.id, None, attempt=2, error="timeout") for q in whole_catalog_queries.queries]
+        make_result(q.query_id, q.expected_skill, attempt=1) for q in whole_catalog_queries.queries
+    ] + [
+        make_result(q.query_id, None, attempt=2, error="timeout")
+        for q in whole_catalog_queries.queries
+    ]
     artifact = assemble(
         results,
         whole_catalog_queries,
@@ -653,7 +663,7 @@ def test_the_artifact_names_which_digests_the_rows_corroborated(
     """Verify artifact records which provenance digests were present and corroborated in results."""
     stamped = assemble(
         [
-            make_result(q.id, q.expected_skill, fingerprint=config.fingerprint)
+            make_result(q.query_id, q.expected_skill, fingerprint=config.fingerprint)
             for q in whole_catalog_queries.queries
         ],
         whole_catalog_queries,
@@ -695,7 +705,7 @@ def test_a_skill_that_takes_traffic_it_was_never_asked_for_is_an_attractor(
     """Verify unasked skills that absorb invocations are classified as attractors."""
     artifact = assemble(
         [
-            make_result(q.id, BASICS, attempt=i)
+            make_result(q.query_id, BASICS, attempt=i)
             for q in whole_catalog_queries.queries
             for i in (1, 2, 3)
         ],
@@ -742,7 +752,7 @@ def test_declining_is_reported_apart_from_misrouting(
 ) -> None:
     """Verify abstentions are tracked in abstention metrics rather than misroutes."""
     artifact = assemble(
-        [make_result(q.id, None) for q in whole_catalog_queries.queries],
+        [make_result(q.query_id, None) for q in whole_catalog_queries.queries],
         whole_catalog_queries,
         whole_catalog,
         corpus,
@@ -1259,7 +1269,7 @@ def test_skill_score_and_unreached_respect_multi_turn_trajectory(
     cfg = make_config(catalog={"mode": CatalogMode.ALL}, plan={"attempts": 1})
     qs = QuerySet(
         catalog_id=whole_catalog.id,
-        queries=(Query(id="q-life", text="configure lifecycle", expected_skill=LIFECYCLE),),
+        queries=(Query(query_id="q-life", text="configure lifecycle", expected_skill=LIFECYCLE),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     res = [
@@ -1295,7 +1305,7 @@ def test_confusion_pairs_retains_turn1_collision_on_multi_turn_trajectory_hit(
     cfg = make_config(catalog={"mode": CatalogMode.ALL}, plan={"attempts": 1})
     qs = QuerySet(
         catalog_id=whole_catalog.id,
-        queries=(Query(id="q-life", text="configure lifecycle", expected_skill=LIFECYCLE),),
+        queries=(Query(query_id="q-life", text="configure lifecycle", expected_skill=LIFECYCLE),),
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     res = [

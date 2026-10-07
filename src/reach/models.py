@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
-    AliasChoices,
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -42,6 +42,7 @@ __all__ = [
     "CatalogMode",
     "DisclosureState",
     "InvocationPattern",
+    "NonBlankStr",
     "ProbeResult",
     "Provenance",
     "Query",
@@ -142,17 +143,28 @@ class Skill(BaseModel):
         return value
 
 
+def _validate_not_blank(value: str) -> str:
+    """Validate that string is not empty or purely whitespace."""
+    if not value.strip():
+        msg = "String cannot be empty or whitespace only"
+        raise ValueError(msg)
+    return value
+
+
+type NonBlankStr = Annotated[
+    str, StringConstraints(min_length=1), AfterValidator(_validate_not_blank)
+]
+
+
 class Query(BaseModel):
     """Represent a single evaluation probe query and expected target skill."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    query_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
-        validation_alias=AliasChoices("query_id", "id"),
+    query_id: NonBlankStr = Field(
         description="Unique identifier for the evaluation query.",
     )
-    text: Annotated[str, StringConstraints(min_length=1)] = Field(
-        validation_alias=AliasChoices("text", "query"),
+    text: NonBlankStr = Field(
         description="Realistic user request text presented to the agent.",
     )
     kind: QueryKind | None = Field(
@@ -170,11 +182,6 @@ class Query(BaseModel):
         ),
     )
     notes: str = Field(default="", description="Author notes, rationale, or difficulty context.")
-
-    @property
-    def id(self) -> str:
-        """Return unique query identifier for backward compatibility."""
-        return self.query_id
 
     @model_validator(mode="after")
     def _out_of_scope_is_consistent(self) -> Self:
@@ -386,7 +393,7 @@ class ProbeResult(BaseModel):
             disc_state = DisclosureState.FULL
 
         return cls(
-            query_id=query.id,
+            query_id=query.query_id,
             catalog_id=catalog.id,
             catalog_mode=catalog.mode,
             catalog_size=catalog.size,

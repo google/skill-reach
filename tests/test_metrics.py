@@ -161,7 +161,7 @@ def test_a_tally_over_a_narrowed_query_set_skips_what_it_cannot_label(
     expected,
 ) -> None:
     """Verify confusion and collisions filter out unindexed queries without error."""
-    subset = [q for q in queries if q.id == "q-lifecycle"]
+    subset = [q for q in queries if q.query_id == "q-lifecycle"]
     results = [_result("q-retention", "gke-basics")]
     assert tally(results, subset) == expected
     with pytest.raises(KeyError, match="q-retention"):
@@ -370,7 +370,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
     [
         # Direct Primary Hit: [{deploy}], invoked: [deploy]
         (
-            Query(id="q1", text="deploy", expected_skill="deploy"),
+            Query(query_id="q1", text="deploy", expected_skill="deploy"),
             ("deploy",),
             True,
             True,
@@ -380,7 +380,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Precursor Setup: [{deploy}], invoked: [gcloud, deploy]
         (
-            Query(id="q3", text="deploy", expected_skill="deploy"),
+            Query(query_id="q3", text="deploy", expected_skill="deploy"),
             ("gcloud", "deploy"),
             False,
             True,
@@ -390,7 +390,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Skill Stuffing (Spam): [{deploy}], invoked: [deploy, s2, s3, s4, s5]
         (
-            Query(id="q5", text="deploy", expected_skill="deploy"),
+            Query(query_id="q5", text="deploy", expected_skill="deploy"),
             ("deploy", "s2", "s3", "s4", "s5"),
             True,
             True,
@@ -400,7 +400,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Looping Retry Bloat: [{deploy}], invoked: [deploy, deploy, deploy]
         (
-            Query(id="q6", text="deploy", expected_skill="deploy"),
+            Query(query_id="q6", text="deploy", expected_skill="deploy"),
             ("deploy", "deploy", "deploy"),
             True,
             True,
@@ -410,7 +410,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Out-of-Scope (Abstain): [], invoked: []
         (
-            Query(id="q7", text="hello", kind=QueryKind.OUT_OF_SCOPE),
+            Query(query_id="q7", text="hello", kind=QueryKind.OUT_OF_SCOPE),
             (),
             True,
             True,
@@ -420,7 +420,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Out-of-Scope (Misroute): [], invoked: [deploy]
         (
-            Query(id="q8", text="hello", kind=QueryKind.OUT_OF_SCOPE),
+            Query(query_id="q8", text="hello", kind=QueryKind.OUT_OF_SCOPE),
             ("deploy",),
             False,
             False,
@@ -430,7 +430,7 @@ def test_both_label_surfaces_use_the_same_abstain_token(worked_queries, make_res
         ),
         # Fatal Misroute: [{deploy}], invoked: [wrong]
         (
-            Query(id="q9", text="deploy", expected_skill="deploy"),
+            Query(query_id="q9", text="deploy", expected_skill="deploy"),
             ("wrong",),
             False,
             False,
@@ -467,10 +467,10 @@ def test_score_trajectory_behavior_matrix(
 def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> None:
     """Verify aggregated trajectory metrics and validate Wilson intervals against scipy."""
     queries = (
-        Query(id="q1", text="deploy", expected_skill="deploy"),
-        Query(id="q2", text="scale", expected_skill="scale"),
-        Query(id="q3", text="auth", expected_skill="auth"),
-        Query(id="q4", text="oos", kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="q1", text="deploy", expected_skill="deploy"),
+        Query(query_id="q2", text="scale", expected_skill="scale"),
+        Query(query_id="q3", text="auth", expected_skill="auth"),
+        Query(query_id="q4", text="oos", kind=QueryKind.OUT_OF_SCOPE),
     )
     # q1: precursor setup (entrypoint False, trajectory True, mrr 0.5, f1 0.6667, red 1)
     # q2: direct primary hit (entrypoint True, trajectory True, mrr 1.0, f1 1.0, red 0)
@@ -541,8 +541,8 @@ def test_classification_report_trajectory_aggregates_and_scipy_cross_check() -> 
 def test_classification_report_zero_in_scope_returns_none_efficiency() -> None:
     """Verify classification_report returns None for efficiency metrics when in-scope is 0."""
     queries = (
-        Query(id="q1", text="oos1", kind=QueryKind.OUT_OF_SCOPE),
-        Query(id="q2", text="oos2", kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="q1", text="oos1", kind=QueryKind.OUT_OF_SCOPE),
+        Query(query_id="q2", text="oos2", kind=QueryKind.OUT_OF_SCOPE),
     )
     results = [
         ProbeResult(
@@ -576,8 +576,8 @@ def test_classification_report_cluster_wilson_interval_adjusts_for_attempts() ->
     from reach.uncertainty import cluster_wilson_interval, wilson_interval
 
     queries = (
-        Query(id="q1", text="deploy", expected_skill="deploy"),
-        Query(id="q2", text="scale", expected_skill="scale"),
+        Query(query_id="q1", text="deploy", expected_skill="deploy"),
+        Query(query_id="q2", text="scale", expected_skill="scale"),
     )
     results = [
         ProbeResult(
@@ -671,7 +671,7 @@ def test_acceptable_skills_are_neutral_in_classification_trajectory_and_collisio
 ) -> None:
     """Verify acceptable_skills act as neutral steps (neither TP alone nor FP when followed)."""
     query = Query(
-        id="q-accept",
+        query_id="q-accept",
         text="deploy container to cloud",
         expected_skill="cloud-run-basics",
         acceptable_skills=("gke-basics",),
@@ -724,7 +724,7 @@ def test_class_metrics_rejects_trajectory_tp_below_top1_tp() -> None:
 
 def test_multi_turn_trajectory_hit_preserves_turn1_conservation() -> None:
     """Verify turn-1 metrics preserve FP/FN conservation while trajectory_recall credits turn 2."""
-    query = Query(id="q-deploy", text="deploy my service", expected_skill="deploy-service")
+    query = Query(query_id="q-deploy", text="deploy my service", expected_skill="deploy-service")
     result = ProbeResult(
         query_id="q-deploy",
         catalog_id="c",

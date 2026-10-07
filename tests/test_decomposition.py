@@ -150,7 +150,9 @@ def test_decomposition_bootstrap_matches_scipy_reference(
 
     base_dict = {r.query_id: (r.predicted_label == "skill-a") for r in base}
     scaled_dict = {r.query_id: (r.predicted_label == "skill-a") for r in scaled}
-    deltas = np.array([float(base_dict[q.id]) - float(scaled_dict[q.id]) for q in queries])
+    deltas = np.array(
+        [float(base_dict[q.query_id]) - float(scaled_dict[q.query_id]) for q in queries]
+    )
 
     scipy_res = bootstrap(
         (deltas,),
@@ -172,7 +174,7 @@ def test_decomposition_marginal_attribution_with_baseline_failures() -> None:
     """Verify baseline partial failures do not contaminate marginal scaled failure attribution."""
     from reach.models import CatalogMode, DisclosureState, InvocationPattern, ProbeResult, Query
 
-    q = Query(id="q1", text="test query", expected_skill="skill-a")
+    q = Query(query_id="q1", text="test query", expected_skill="skill-a")
     # Baseline: 3/5 pass, 2/5 fail due to abstention (p_pass=0.6, p_abs=0.4, p_col=0.0)
     base = [
         ProbeResult(

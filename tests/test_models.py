@@ -33,17 +33,17 @@ from reach.runtime import SelectionOutcome
 def test_query_attributes_and_out_of_scope() -> None:
     """Verify Query stores expected_skill, computes properties, and handles out-of-scope."""
     q = Query(
-        id="q1",
+        query_id="q1",
         text="Deploy the app",
         expected_skill="cloud-run-deploy",
     )
-    assert q.id == "q1"
+    assert q.query_id == "q1"
     assert q.text == "Deploy the app"
     assert q.expected_skill == "cloud-run-deploy"
     assert q.truth_label == "cloud-run-deploy"
     assert not q.is_out_of_scope
 
-    q_oos = Query(id="q3", text="What is the weather?", kind=QueryKind.OUT_OF_SCOPE)
+    q_oos = Query(query_id="q3", text="What is the weather?", kind=QueryKind.OUT_OF_SCOPE)
     assert q_oos.is_out_of_scope
     assert q_oos.truth_label == NO_SKILL
 
@@ -82,7 +82,7 @@ def test_probe_result_from_outcome() -> None:
     """Verify ProbeResult.from_outcome converts SelectionOutcome into a ProbeResult."""
     from reach.models import Catalog, Provenance
 
-    q = Query(id="q1", text="Deploy app", expected_skill="deploy")
+    q = Query(query_id="q1", text="Deploy app", expected_skill="deploy")
     cat = Catalog(id="cat1", mode=CatalogMode.ALL, skills=("deploy", "build"))
     outcome = SelectionOutcome(
         invoked_skills=("deploy",),
@@ -145,12 +145,12 @@ def test_skill_requires_non_empty_name_and_description() -> None:
 
 def test_query_acceptable_skills() -> None:
     """Verify Query accepts optional acceptable_skills as sequence of skill names."""
-    q_default = Query(id="q1", text="Deploy app", expected_skill="deploy")
+    q_default = Query(query_id="q1", text="Deploy app", expected_skill="deploy")
     assert q_default.acceptable_skills == ()
 
     q_with_list = Query.model_validate(
         {
-            "id": "q2",
+            "query_id": "q2",
             "text": "Deploy app",
             "expected_skill": "deploy",
             "acceptable_skills": ["cloud-run-deploy", "app-engine-deploy"],

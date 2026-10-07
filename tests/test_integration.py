@@ -544,12 +544,12 @@ def test_multi_step_trajectory_quality_gate(
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         queries=(
             Query(
-                id="q-unmatched-1",
+                query_id="q-unmatched-1",
                 text="A totally unrelated task about astronomy and space telescopes",
                 expected_skill="file-copier",
             ),
             Query(
-                id="q-unmatched-2",
+                query_id="q-unmatched-2",
                 text="Quantum computing entanglement simulations",
                 expected_skill="file-compressor",
             ),
@@ -597,7 +597,7 @@ def test_ci_environment_simulation(
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         queries=(
             Query(
-                id="q-ci-fail",
+                query_id="q-ci-fail",
                 text="Random unmatched prompt text",
                 expected_skill="file-copier",
             ),

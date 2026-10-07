@@ -1022,7 +1022,7 @@ def test_zero_config_corpus_eval_with_skills_or_positional_dir(
             {
                 "queries": [
                     {
-                        "id": "q-1",
+                        "query_id": "q-1",
                         "text": "deploy a container to cloud run",
                         "expected_skill": "gke-basics",
                     }
@@ -1476,9 +1476,11 @@ def test_eval_filters_existing_queries_file_by_skill_flag(
     queries_file = tmp_path / "multi.yaml"
     queries_file.write_text(
         "queries:\n"
-        "  - text: deploy gke cluster\n"
+        "  - query_id: q-1\n"
+        "    text: deploy gke cluster\n"
         "    expected_skill: gke-basics\n"
-        "  - text: run bigquery sql\n"
+        "  - query_id: q-2\n"
+        "    text: run bigquery sql\n"
         "    expected_skill: bigquery-basics\n",
         encoding="utf-8",
     )
@@ -1589,9 +1591,11 @@ def test_filter_queries_by_targets_retains_out_of_scope_queries(tmp_path: Path) 
         catalog_id="cat",
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         queries=(
-            Query(id="q1", text="target 1", expected_skill="s1"),
-            Query(id="q2", text="distractor 1", expected_skill="s2"),
-            Query(id="q3", text="negative 1", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE),
+            Query(query_id="q1", text="target 1", expected_skill="s1"),
+            Query(query_id="q2", text="distractor 1", expected_skill="s2"),
+            Query(
+                query_id="q3", text="negative 1", expected_skill=None, kind=QueryKind.OUT_OF_SCOPE
+            ),
         ),
     )
     save_query_set(qs, queries_path)
@@ -1601,7 +1605,7 @@ def test_filter_queries_by_targets_retains_out_of_scope_queries(tmp_path: Path) 
 
     assert adjusted.study.queries is not None
     filtered_qs = load_query_set(adjusted.study.queries)
-    filtered_ids = [q.id for q in filtered_qs.queries]
+    filtered_ids = [q.query_id for q in filtered_qs.queries]
     assert "q1" in filtered_ids
     assert "q3" in filtered_ids
     assert "q2" not in filtered_ids
@@ -1611,9 +1615,9 @@ def test_filter_queries_by_targets_retains_out_of_scope_queries(tmp_path: Path) 
         catalog_id="cat",
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
         queries=(
-            Query(id="q2", text="distractor 1", expected_skill="s2"),
+            Query(query_id="q2", text="distractor 1", expected_skill="s2"),
             Query(
-                id="q3",
+                query_id="q3",
                 text="negative control",
                 expected_skill=None,
                 kind=QueryKind.OUT_OF_SCOPE,

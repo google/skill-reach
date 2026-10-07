@@ -44,7 +44,7 @@ def catalog() -> Catalog:
 def query() -> Query:
     """Provide a labeled query fixture."""
     return Query(
-        id="q1",
+        query_id="q1",
         text="do a thing",
         kind=QueryKind.IMPLICIT,
         expected_skill="a",

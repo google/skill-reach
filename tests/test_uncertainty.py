@@ -236,11 +236,19 @@ def test_interval_format_percent() -> None:
 
 
 def test_interval_alternative_constructors() -> None:
-    """Verify Interval classmethod constructor from tuple."""
+    """Verify Interval classmethod constructors from tuple and zero/unit factories."""
     iv_tup = Interval.from_tuple((0.2, 0.8))
     assert iv_tup.low == 0.2
     assert iv_tup.high == 0.8
     assert iv_tup.confidence == DEFAULT_CONFIDENCE
+
+    zero = Interval.zero()
+    assert zero.low == 0.0
+    assert zero.high == 0.0
+
+    unit = Interval.unit()
+    assert unit.low == 0.0
+    assert unit.high == 1.0
 
     with pytest.raises(ValueError, match="expected 2 elements"):
         Interval.from_tuple((0.2,))
@@ -251,11 +259,14 @@ def test_interval_strictness() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
         Interval.model_validate({"low": 0.2, "high": 0.8, "unexpected_field": "bogus"})
 
+    with pytest.raises(ValidationError):
+        Interval.model_validate((0.2, 0.8))
 
-def test_interval_to_tuple_and_negative_delta_bounds() -> None:
-    """Verify Interval converts to tuple and accommodates negative bounds for rate deltas."""
+
+def test_interval_negative_delta_bounds() -> None:
+    """Verify Interval accommodates negative bounds for rate deltas."""
     iv = Interval(low=-0.25, high=0.10, confidence=0.95)
-    assert iv.to_tuple() == (-0.25, 0.10)
+    assert (iv.low, iv.high) == (-0.25, 0.10)
     assert iv.width == pytest.approx(0.35)
     assert iv.low == -0.25
     assert iv.high == 0.10

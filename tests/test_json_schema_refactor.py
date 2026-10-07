@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Verify JSON schema semantic tiering, alphabetization, and Pydantic v2 modernization."""
+"""Verify JSON schema semantic tiering, alphabetization, and Pydantic v2 clean-break refactoring."""
 
 from __future__ import annotations
 
@@ -20,12 +20,13 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from reach._io import read_model, write_model
 from reach.artifact import Artifact, SkillScore
 from reach.check import CheckAssertion, CheckOutcome
 from reach.lint import LintIssue, LintReport, Severity
+from reach.metrics import ClassMetrics
 from reach.models import Query
 from reach.optimize import OptimizationReport
 from reach.queries import Origin, QuerySet, QuerySetProvenance
@@ -33,37 +34,54 @@ from reach.sweep import ScalingPoint, ScalingStudy
 from reach.uncertainty import Interval
 
 
-def test_interval_sequence_coercion_and_protocol() -> None:
-    """Verify Interval coerces sequence inputs, supports tuple unpacking and indexing."""
-    # Coercion from tuple and list
-    iv_tuple = Interval.model_validate((0.1, 0.9))
-    assert iv_tuple.low == 0.1
-    assert iv_tuple.high == 0.9
+def test_interval_strict_model_and_factories() -> None:
+    """Verify Interval requires keyword fields and provides standard factories."""
+    iv = Interval(low=0.1, high=0.9)
+    assert iv.low == 0.1
+    assert iv.high == 0.9
 
-    iv_list = Interval.model_validate([-0.5, 0.5])
-    assert iv_list.low == -0.5
-    assert iv_list.high == 0.5
+    zero = Interval.zero()
+    assert zero.low == 0.0
+    assert zero.high == 0.0
 
-    # Sequence protocol
-    assert len(iv_tuple) == 2
-    assert iv_tuple[0] == 0.1
-    assert iv_tuple[1] == 0.9
-    low, high = iv_tuple
-    assert (low, high) == (0.1, 0.9)
+    unit = Interval.unit()
+    assert unit.low == 0.0
+    assert unit.high == 1.0
 
+    from_tup = Interval.from_tuple((0.2, 0.8))
+    assert from_tup.low == 0.2
+    assert from_tup.high == 0.8
 
-def test_query_id_standardization_and_alias() -> None:
-    """Verify Query populates query_id from both 'query_id' and 'id', exposing .id property."""
-    q1 = Query(query_id="qid-1", text="Find files", expected_skill="search")
-    assert q1.query_id == "qid-1"
-    assert q1.id == "qid-1"
-
-    q2 = Query.model_validate({"id": "qid-2", "text": "Deploy app", "expected_skill": "deploy"})
-    assert q2.query_id == "qid-2"
-    assert q2.id == "qid-2"
+    # Rejection of sequence duck-typing and sequence coercion
+    with pytest.raises(ValidationError):
+        Interval.model_validate((0.1, 0.9))
 
     with pytest.raises(ValidationError):
+        Interval.model_validate([-0.5, 0.5])
+
+    with pytest.raises(TypeError):
+        len(iv)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        _ = iv[0]  # type: ignore[index]
+
+
+def test_query_clean_break_schema() -> None:
+    """Verify Query strictly requires query_id and non-blank strings, rejecting id alias."""
+    q = Query(query_id="qid-1", text="Find files", expected_skill="search")
+    assert q.query_id == "qid-1"
+    assert not hasattr(q, "id")
+
+    # Legacy 'id' key is rejected under extra='forbid'
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        Query.model_validate({"id": "qid-2", "text": "Deploy app", "expected_skill": "deploy"})
+
+    # Whitespace-only query_id or text is rejected by NonBlankStr
+    with pytest.raises(ValidationError, match="cannot be empty or whitespace only"):
         Query(query_id="   ", text="Deploy app", expected_skill="deploy")
+
+    with pytest.raises(ValidationError, match="cannot be empty or whitespace only"):
+        Query(query_id="qid-3", text="   \t  ", expected_skill="deploy")
 
 
 def test_queryset_leaf_at_bottom() -> None:
@@ -81,18 +99,18 @@ def test_queryset_leaf_at_bottom() -> None:
 
 
 def test_scaling_point_semantic_tiering_and_intervals() -> None:
-    """Verify ScalingPoint groups metrics, serializes Interval objects, and validates bounds."""
+    """Verify ScalingPoint groups metrics, serializes Interval objects, and forbids extra keys."""
     pt = ScalingPoint(
         scale=10,
         catalog_id="cat-1",
         f1_score=0.9,
-        f1_interval=(0.85, 0.95),
+        f1_interval=Interval(low=0.85, high=0.95),
         pass_rate=0.92,
-        pass_rate_interval=(0.88, 0.96),
+        pass_rate_interval=Interval(low=0.88, high=0.96),
         precision=0.95,
-        precision_interval=(0.9, 1.0),
+        precision_interval=Interval(low=0.9, high=1.0),
         recall=0.88,
-        recall_interval=(0.8, 0.94),
+        recall_interval=Interval(low=0.8, high=0.94),
         delta_vs_baseline=0.0,
         delta_abstention=0.0,
         delta_collision=0.0,
@@ -102,17 +120,25 @@ def test_scaling_point_semantic_tiering_and_intervals() -> None:
     )
     data = json.loads(pt.model_dump_json())
     assert isinstance(data["pass_rate_interval"], dict)
-    assert "low" in data["pass_rate_interval"]
-    assert "high" in data["pass_rate_interval"]
     assert data["pass_rate_interval"]["low"] == 0.88
+    assert data["pass_rate_interval"]["high"] == 0.96
 
-    # Ensure probe accounting validation works
+    # Extra legacy fields are rejected
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ScalingPoint(
+            scale=10,
+            catalog_id="cat-1",
+            delta_context=0.04,  # legacy alias rejected
+            probes_executed=10,
+        )
+
+    # Probe accounting validation
     with pytest.raises(ValidationError, match="probes_errored"):
         ScalingPoint(
             scale=10,
             catalog_id="cat-1",
             pass_rate=1.0,
-            pass_rate_interval=(1.0, 1.0),
+            pass_rate_interval=Interval(low=1.0, high=1.0),
             delta_vs_baseline=0.0,
             delta_abstention=0.0,
             delta_collision=0.0,
@@ -121,13 +147,13 @@ def test_scaling_point_semantic_tiering_and_intervals() -> None:
         )
 
 
-def test_scaling_study_flattening_and_decomposition_property(tmp_path: Path) -> None:
-    """Verify ScalingStudy flattens loss metrics, omits duplicate decomposition in JSON."""
+def test_scaling_study_flattening_and_clean_break(tmp_path: Path) -> None:
+    """Verify ScalingStudy flattens loss metrics and forbids legacy decomposition keys."""
     pt = ScalingPoint(
         scale=10,
         catalog_id="cat-10",
         pass_rate=1.0,
-        pass_rate_interval=(0.9, 1.0),
+        pass_rate_interval=Interval(low=0.9, high=1.0),
         delta_vs_baseline=0.0,
         delta_abstention=0.0,
         delta_collision=0.0,
@@ -144,16 +170,27 @@ def test_scaling_study_flattening_and_decomposition_property(tmp_path: Path) -> 
         delta_collision=0.10,
     )
 
-    # Backward compatible properties
-    assert study.total_delta == 0.15
-    assert study.total_abstention_loss == 0.05
-    assert study.total_collision_loss == 0.10
-    decomp = study.decomposition
-    assert decomp.delta_total == 0.15
-    assert decomp.delta_abstention == 0.05
-    assert decomp.delta_collision == 0.10
+    # Canonical fields only, no legacy properties
+    assert study.delta_total == 0.15
+    assert study.delta_abstention == 0.05
+    assert study.delta_collision == 0.10
+    assert not hasattr(study, "total_delta")
+    assert not hasattr(study, "decomposition")
 
-    # JSON serialization omits decomposition sub-object and places points at the bottom
+    # Extra fields are forbidden
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ScalingStudy.model_validate(
+            {
+                "is_corpus_sweep": True,
+                "scales": (10,),
+                "baseline_pass_rate": 1.0,
+                "final_pass_rate": 0.85,
+                "delta_total": 0.15,
+                "total_delta": 0.15,
+            }
+        )
+
+    # JSON serialization places points at the bottom
     json_path = tmp_path / "sweep.json"
     study.save(json_path)
     data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -163,34 +200,38 @@ def test_scaling_study_flattening_and_decomposition_property(tmp_path: Path) -> 
     # Load roundtrip
     loaded = ScalingStudy.load(json_path)
     assert loaded.delta_total == 0.15
-    assert loaded.total_delta == 0.15
     assert len(loaded.points) == 1
 
 
-def test_skillscore_no_frozen_mutation() -> None:
-    """Verify SkillScore initializes trajectory metrics in before-validator cleanly."""
-    score = SkillScore(
-        skill="gcs-read",
-        probes=20,
-        reached=15,
-        recall=0.75,
-        precision=1.0,
+def test_skillscore_from_class_metrics_and_validation() -> None:
+    """Verify SkillScore constructs cleanly from ClassMetrics and validates bounds."""
+    metrics = ClassMetrics(
+        label="gcs-read",
+        support=20,
+        predicted=15,
+        true_positives=15,
+        false_positives=0,
+        false_negatives=5,
+        trajectory_true_positives=18,
     )
-    assert score.trajectory_reached == 15
-    assert score.trajectory_recall == pytest.approx(0.75)
+    score = SkillScore.from_class_metrics(metrics)
+    assert score.reached == 15
+    assert score.trajectory_reached == 18
+    assert score.trajectory_recall == pytest.approx(0.9)
+    assert score.recall == pytest.approx(0.75)
     assert score.f1 is not None
 
-    # Clamping when trajectory_reached < reached
-    clamped = SkillScore(
-        skill="gcs-write",
-        probes=20,
-        reached=18,
-        trajectory_reached=10,  # lower than reached
-        recall=0.9,
-        precision=1.0,
-    )
-    assert clamped.trajectory_reached == 18
-    assert clamped.trajectory_recall == pytest.approx(0.9)
+    # Inverted trajectory_reached < reached raises ValidationError
+    with pytest.raises(ValidationError, match="trajectory_reached"):
+        SkillScore(
+            skill="gcs-write",
+            probes=20,
+            reached=18,
+            trajectory_reached=10,
+            trajectory_recall=0.5,
+            recall=0.9,
+            precision=1.0,
+        )
 
 
 def test_artifact_semantic_ordering_and_io(artifact: Artifact, tmp_path: Path) -> None:
@@ -214,47 +255,62 @@ def test_artifact_semantic_ordering_and_io(artifact: Artifact, tmp_path: Path) -
     assert len(loaded.queries) == len(artifact.queries)
 
 
-def test_cli_reports_leaf_collections_at_bottom() -> None:
-    """Verify CheckOutcome, OptimizationReport, and LintReport place collections at the bottom."""
-    lint = LintReport(
-        skill_name="test-skill",
-        skills_checked=1,
-        issues=(
-            LintIssue(
-                rule="RULE-1",
-                skill="test-skill",
-                severity=Severity.INFO,
-                message="Sample info",
+@pytest.mark.parametrize(
+    ("model_cls", "leaf_field", "instance"),
+    [
+        (
+            LintReport,
+            "issues",
+            LintReport(
+                skill_name="test-skill",
+                skills_checked=1,
+                issues=(
+                    LintIssue(
+                        rule="RULE-1",
+                        skill="test-skill",
+                        severity=Severity.INFO,
+                        message="Sample info",
+                    ),
+                ),
             ),
         ),
-    )
-    lint_keys = list(json.loads(lint.model_dump_json()).keys())
-    assert lint_keys[-1] == "issues"
-
-    check = CheckOutcome(
-        exit_code=0,
-        lint_report=lint,
-        assertions=(
-            CheckAssertion(
-                name="assert-1",
-                passed=True,
-                observed=1.0,
-                threshold=0.8,
-                comparison=">=",
-                message="Passed assertion",
+        (
+            CheckOutcome,
+            "assertions",
+            CheckOutcome(
+                exit_code=0,
+                lint_report=LintReport(skill_name="test-skill", skills_checked=1, issues=()),
+                assertions=(
+                    CheckAssertion(
+                        name="assert-1",
+                        passed=True,
+                        observed=1.0,
+                        threshold=0.8,
+                        comparison=">=",
+                        message="Passed assertion",
+                    ),
+                ),
             ),
         ),
+        (
+            OptimizationReport,
+            "candidates",
+            OptimizationReport(
+                skill_name="opt-skill",
+                baseline_description="Old description",
+            ),
+        ),
+    ],
+)
+def test_cli_reports_leaf_collections_at_bottom(
+    model_cls: type[BaseModel],
+    leaf_field: str,
+    instance: BaseModel,
+) -> None:
+    """Verify CLI reports place collection fields at the bottom of the schema."""
+    field_keys = list(model_cls.model_fields.keys())
+    assert leaf_field in field_keys[-2:], (
+        f"{leaf_field} should be near the end in {model_cls.__name__}"
     )
-    check_keys = list(json.loads(check.model_dump_json()).keys())
-    assert check_keys[0] == "exit_code"
-    assert check_keys[-1] == "assertions"
-
-    opt = OptimizationReport(
-        skill_name="opt-skill",
-        baseline_description="Old description",
-    )
-    assert list(OptimizationReport.model_fields.keys())[-1] == "candidates"
-    opt_keys = list(json.loads(opt.model_dump_json()).keys())
-    assert opt_keys[0] == "skill_name"
-    assert opt_keys[-2] == "candidates"
-    assert opt_keys[-1] == "has_improvement"
+    data = json.loads(instance.model_dump_json())
+    assert leaf_field in list(data.keys())[-2:], f"{leaf_field} should be serialized near the end"

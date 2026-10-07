@@ -160,9 +160,9 @@ def _compute_paired_delta(
     effective_base = fallback_baseline
     if baseline_hits_by_id:
         paired_pos_ids = [
-            q.id
+            q.query_id
             for q in queries_to_run
-            if q.expected_skill == target_name and q.id in baseline_hits_by_id
+            if q.expected_skill == target_name and q.query_id in baseline_hits_by_id
         ]
         if paired_pos_ids:
             effective_base = sum(1 for q_id in paired_pos_ids if baseline_hits_by_id[q_id]) / len(
@@ -1387,7 +1387,7 @@ def _run_candidate_probes(
         if is_positive:
             positive_queries += 1
 
-        probe_res = results_by_id.get(query.id)
+        probe_res = results_by_id.get(query.query_id)
         invoked = query.effective_invoked_skill(probe_res) if probe_res is not None else None
         scored_seq = (
             query.scored_invocations(probe_res.invoked_skills)
@@ -1721,7 +1721,7 @@ def _bootstrap_queries(
 
     heuristic_queries: list[Query] = [
         Query(
-            id=f"auto-pos-{i}",
+            query_id=f"auto-pos-{i}",
             text=f"Help me with {target_skill.name}: {unclaimed_term} (task #{i})",
             expected_skill=target_skill.name,
             kind=QueryKind.IMPLICIT,
@@ -1733,7 +1733,7 @@ def _bootstrap_queries(
         primary_rival = rival_skills[0].name
         heuristic_queries.extend(
             Query(
-                id=f"auto-adv-{i}",
+                query_id=f"auto-adv-{i}",
                 text=f"Help me with {primary_rival}: {ceded_term} (task #{i})",
                 expected_skill=primary_rival,
                 kind=QueryKind.NEIGHBOR_NEGATIVE,
@@ -2287,12 +2287,12 @@ def _evaluate_baseline_performance(
     failed_texts = set(eval_base.failed_queries)
     failed_traj_texts = set(eval_base.failed_trajectory_queries)
     baseline_hits_by_id = {
-        q.id: (q.text not in failed_texts)
+        q.query_id: (q.text not in failed_texts)
         for q in train_queries[:base_budget]
         if q.expected_skill == target_skill.name
     }
     baseline_traj_hits_by_id = {
-        q.id: (q.text not in failed_traj_texts)
+        q.query_id: (q.text not in failed_traj_texts)
         for q in train_queries[:base_budget]
         if q.expected_skill == target_skill.name
     }

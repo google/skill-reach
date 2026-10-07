@@ -17,9 +17,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from statistics import NormalDist
-from typing import Annotated, Any, Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -87,13 +87,29 @@ class Interval(BaseModel):
     high: Annotated[float, Field(ge=-1.0, le=1.0)]
     confidence: Annotated[float, Field(gt=0.0, lt=1.0)] = DEFAULT_CONFIDENCE
 
-    @model_validator(mode="before")
     @classmethod
-    def _coerce_from_sequence(cls, data: Any) -> Any:  # noqa: ANN401
-        """Coerce a 2-element sequence [low, high] into an Interval dictionary."""
-        if isinstance(data, (tuple, list)) and len(data) == _INTERVAL_BOUNDS_LEN:
-            return {"low": data[0], "high": data[1]}
-        return data
+    def zero(cls, confidence: float = DEFAULT_CONFIDENCE) -> Self:
+        """Return a zero-width interval centered at zero."""
+        return cls(low=0.0, high=0.0, confidence=confidence)
+
+    @classmethod
+    def unit(cls, confidence: float = DEFAULT_CONFIDENCE) -> Self:
+        """Return a unit interval [0.0, 1.0]."""
+        return cls(low=0.0, high=1.0, confidence=confidence)
+
+    @classmethod
+    def from_tuple(
+        cls,
+        bounds: Interval | Sequence[float],
+        confidence: float = DEFAULT_CONFIDENCE,
+    ) -> Self:
+        """Construct an Interval from an existing Interval or a 2-element sequence."""
+        if isinstance(bounds, Interval):
+            return bounds
+        if len(bounds) != _INTERVAL_BOUNDS_LEN:
+            msg = f"expected 2 elements for interval bounds, got {len(bounds)}"
+            raise ValueError(msg)
+        return cls(low=float(bounds[0]), high=float(bounds[1]), confidence=confidence)
 
     @model_validator(mode="after")
     def _bounds_are_ordered(self) -> Self:
@@ -119,42 +135,6 @@ class Interval(BaseModel):
     def format_percent(self, digits: int = 1, separator: str = " - ") -> str:
         """Format the interval as a percentage range string '[low% - high%]'."""
         return f"[{self.low * 100:.{digits}f}%{separator}{self.high * 100:.{digits}f}%]"
-
-    def __iter__(self) -> Iterator[float]:
-        """Yield lower and upper bounds for sequence unpacking."""
-        yield self.low
-        yield self.high
-
-    def __getitem__(self, index: int) -> float:
-        """Allow sequence indexing (0 for low, 1 for high) for backward compatibility."""
-        if index in (0, -2):
-            return self.low
-        if index in (1, -1):
-            return self.high
-        msg = f"Interval index out of range: {index}"
-        raise IndexError(msg)
-
-    def __len__(self) -> int:
-        """Return sequence length (always 2 for [low, high])."""
-        return _INTERVAL_BOUNDS_LEN
-
-    def to_tuple(self) -> tuple[float, float]:
-        """Convert the interval bounds to a 2-element tuple (low, high)."""
-        return (self.low, self.high)
-
-    @classmethod
-    def from_tuple(
-        cls,
-        bounds: Sequence[float] | Interval,
-        confidence: float = DEFAULT_CONFIDENCE,
-    ) -> Self:
-        """Construct an Interval from a 2-element sequence of bounds or return existing Interval."""
-        if isinstance(bounds, cls):
-            return bounds
-        if len(bounds) != _INTERVAL_BOUNDS_LEN:
-            msg = f"expected 2 elements for interval bounds, got {len(bounds)}"
-            raise ValueError(msg)
-        return cls(low=bounds[0], high=bounds[1], confidence=confidence)
 
 
 def _design_effect(attempts: int, intra_cluster_correlation: float) -> float:

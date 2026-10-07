@@ -786,12 +786,12 @@ def print_query_set(
         table.add_column("leak")
         table.add_column("text")
         for query in query_set.queries:
-            rank = ranks.get(query.id)
+            rank = ranks.get(query.query_id)
             table.add_row(
-                _cell(query.id),
+                _cell(query.query_id),
                 _cell(query.truth_label),
                 _cell(str(rank) if rank is not None else ""),
-                _leak(flags.get(query.id)),
+                _leak(flags.get(query.query_id)),
                 _cell(query.text, style="reach.digest"),
             )
         console.print(table)
@@ -820,14 +820,14 @@ def print_query_view(
         table.add_column("citation", overflow="fold")
     table.add_column("text", overflow="fold")
     for query in query_set.queries:
-        rank = ranks.get(query.id)
+        rank = ranks.get(query.query_id)
         row = [
-            _cell(query.id),
+            _cell(query.query_id),
             _cell(query.truth_label),
             _cell(str(rank) if rank is not None else ""),
         ]
         if flags is not None:
-            row.append(_leak(flags.get(query.id), fold=True))
+            row.append(_leak(flags.get(query.query_id), fold=True))
         if citations is not None:
             key = (query.expected_skill or "", query.text)
             row.append(Text(citations.get(key, ""), style="reach.digest", overflow="fold"))
