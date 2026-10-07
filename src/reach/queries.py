@@ -160,6 +160,24 @@ class QuerySet(BaseModel):
     provenance: QuerySetProvenance = Field(default_factory=QuerySetProvenance)
     queries: tuple[Query, ...]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_query_ids(cls, data: object) -> object:
+        """Migrate legacy 'id' keys in query mappings to 'query_id'."""
+        if isinstance(data, Mapping) and isinstance(
+            raw_queries := data.get("queries"), (list, tuple)
+        ):
+            normalized_queries = [
+                (
+                    {"query_id": q["id"], **{k: v for k, v in q.items() if k != "id"}}
+                    if isinstance(q, Mapping) and "id" in q and "query_id" not in q
+                    else q
+                )
+                for q in raw_queries
+            ]
+            return {**data, "queries": normalized_queries}
+        return data
+
     @model_validator(mode="after")
     def _assert_unique_ids(self) -> Self:
         """Validate that all query IDs within the query set are unique."""

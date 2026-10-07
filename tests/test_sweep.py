@@ -1270,34 +1270,11 @@ def test_resolve_anchor_and_target_skills_fuzzy_suggestions(tmp_path: Path) -> N
         )
 
 
-@pytest.mark.parametrize(
-    ("base_workers", "scale", "ref_scale", "expected"),
-    [
-        (1, 128, 25, 1),
-        (16, 12, 25, 16),
-        (16, 25, 25, 16),
-        (16, 50, 25, 8),
-        (16, 90, 25, 4),
-        (16, 128, 25, 3),
-    ],
-)
-def test_scale_adaptive_workers_tapers_concurrency(
-    base_workers: int,
-    scale: int,
-    ref_scale: int,
-    expected: int,
-) -> None:
-    """Verify _scale_adaptive_workers tapers worker concurrency linearly with catalog size K."""
-    from reach.sweep import _scale_adaptive_workers
-
-    assert _scale_adaptive_workers(base_workers, scale, reference_scale=ref_scale) == expected
-
-
-def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
+def test_run_scaling_sweep_invokes_on_scale_complete_and_preserves_workers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify run_scaling_sweep invokes on_scale_complete after each step and tapers workers."""
+    """Verify run_scaling_sweep invokes on_scale_complete after each step and preserves workers."""
     import reach.sweep as sweep_mod
 
     skills = [
@@ -1357,8 +1334,8 @@ def test_run_scaling_sweep_invokes_on_scale_complete_and_tapers_workers(
     assert observed_workers == [
         (12, 16),
         (25, 16),
-        (50, 8),
-        (60, 7),
+        (50, 16),
+        (60, 16),
     ]
 
     # Verify interrupted sweep preserves intermediate .jsonl files in temp workdir

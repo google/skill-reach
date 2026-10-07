@@ -271,7 +271,8 @@ def parse_session_entries(
             current_cost = cost_usd if cost_usd is not None else 0.0
             cost_usd = round(current_cost + cost, 6)
         if toks is not None:
-            prompt_tokens = toks
+            current_tokens = prompt_tokens if prompt_tokens is not None else 0
+            prompt_tokens = current_tokens + toks
 
         m_reasoning, m_tools, m_invoked = _extract_pi_message_content(msg, resident)
         reasoning.extend(m_reasoning)

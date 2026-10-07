@@ -2768,3 +2768,40 @@ def test_antigravity_runtimes_inherit_registry_project_and_location(
     assert rt.options.effective_vertex is True
     assert rt.options.effective_project == "registry-seam-proj"
     assert rt.options.effective_location == "europe-west4"
+
+
+@pytest.mark.parametrize(
+    "arg_key",
+    [
+        "AbsolutePath",
+        "path",
+        "file_path",
+        "filePath",
+        "dir_path",
+        "directory_path",
+        "directoryPath",
+    ],
+)
+def test_normalize_skill_tool_args_resolves_directory_across_path_keys(
+    tmp_path: Path,
+    arg_key: str,
+) -> None:
+    """Verify normalize_skill_tool_args appends SKILL.md for directory paths across keys."""
+    from reach.runtime._fs import TOOL_PATH_KEYS, normalize_skill_tool_args
+
+    assert arg_key in TOOL_PATH_KEYS
+
+    skill_dir = tmp_path / "skill-test"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("---\nname: skill-test\ndescription: Test\n---\n", encoding="utf-8")
+
+    normalized = normalize_skill_tool_args({arg_key: str(skill_dir)})
+    assert normalized == {arg_key: str(skill_md)}
+
+    assert normalize_skill_tool_args({arg_key: str(skill_md)}) is None
+
+    missing_dir = tmp_path / "missing-skill"
+    assert normalize_skill_tool_args({arg_key: str(missing_dir)}, skill="missing-skill") == {
+        arg_key: str(missing_dir / "SKILL.md")
+    }

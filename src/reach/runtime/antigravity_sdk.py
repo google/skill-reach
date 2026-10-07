@@ -622,16 +622,29 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
             )
             enabled_tools = [builtin_by_name.get(t, t) for t in self.allowed_tools]
 
-        skills_paths = [str(self.skills_dir(workdir))]
-        if self.options.use_symlinks and (skills_dir := self.skills_dir(workdir)).is_dir():
-            resolved_targets = {
-                str(resolved)
-                for child in skills_dir.iterdir()
-                if child.is_symlink() and (resolved := child.resolve()).is_dir()
-            }
-            skills_paths.extend(p for p in sorted(resolved_targets) if p not in skills_paths)
-
+        skills_dir = self.skills_dir(workdir)
+        skills_paths = [str(skills_dir)]
+        if skills_dir.is_dir():
+            child_dirs = [
+                str(p) for p in sorted(skills_dir.iterdir()) if p.is_dir() and not p.is_symlink()
+            ]
+            skills_paths.extend(p for p in child_dirs if p not in skills_paths)
+            if self.options.use_symlinks:
+                symlink_targets = {
+                    str(resolved)
+                    for child in skills_dir.iterdir()
+                    if child.is_symlink() and (resolved := child.resolve()).is_dir()
+                }
+                skills_paths.extend(p for p in sorted(symlink_targets) if p not in skills_paths)
         kwargs = self.options.base_config_kwargs(self._model_spec(), self.build_env(workdir))
+        skills_prompt = self.format_available_skills_prompt(workdir)
+        if skills_prompt:
+            base_instructions = kwargs.get("system_instructions", "")
+            kwargs["system_instructions"] = (
+                f"{base_instructions}\n\n{skills_prompt}".strip()
+                if base_instructions
+                else skills_prompt
+            )
         kwargs.update(
             {
                 "workspaces": [str(workdir)],

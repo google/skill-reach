@@ -777,7 +777,6 @@ def _estimate_baseline_skill_icc(
 
 _FUZZY_MATCH_CUTOFF = 0.5
 _MAX_FUZZY_SUGGESTIONS = 3
-_ADAPTIVE_WORKER_REFERENCE_SCALE = 25
 
 
 class _SkillNotFoundError(KeyError, ValueError):
@@ -1352,7 +1351,7 @@ def _prepare_sweep_config(
 ) -> RunConfig:
     """Apply CLI overrides to execution configuration."""
     cfg = config or RunConfig()
-    plan_update = {"attempts": cfg.plan.resolve_sweep_attempts(attempts)}
+    plan_update: dict[str, object] = {"attempts": cfg.plan.resolve_sweep_attempts(attempts)}
     study_update: dict[str, object] = {}
     if bootstrap_iterations is not None:
         study_update["bootstrap_iterations"] = bootstrap_iterations
@@ -1546,17 +1545,6 @@ def _resolve_anchor_skills(
         msg = f"anchor skill(s) not found in corpus: {', '.join(missing)}{hint}"
         raise ValueError(msg)
     return raw_names
-
-
-def _scale_adaptive_workers(
-    base_workers: int,
-    scale: int,
-    reference_scale: int = _ADAPTIVE_WORKER_REFERENCE_SCALE,
-) -> int:
-    """Taper concurrent worker count inversely with catalog size past reference scale."""
-    if base_workers <= 1 or scale <= reference_scale:
-        return max(1, base_workers)
-    return max(1, round(base_workers * (reference_scale / scale)))
 
 
 class _ReplicateSetup(NamedTuple):
@@ -2413,15 +2401,14 @@ def run_scaling_sweep(
         is_corpus=is_corpus,
     )
 
-    reference_scale = max(actual_scales[0], _ADAPTIVE_WORKER_REFERENCE_SCALE)
     total_scales = len(actual_scales)
     shared_outcome_cache: dict[Any, Any] = {}
     scale_query_sums: dict[int, dict[str, _QueryOutcome]] = {}
     replicates_by_scale: dict[int, tuple[_ScaleReplicateRecord, ...]] = {}
     scoped_target = primary_setup.target if not is_corpus else None
+    scale_workers = max(1, workers)
 
     for step_idx, scale in enumerate(actual_scales, start=1):
-        scale_workers = _scale_adaptive_workers(workers, scale, reference_scale=reference_scale)
         (
             combined_results,
             installed_union,
