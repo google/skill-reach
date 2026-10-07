@@ -19,6 +19,7 @@ from __future__ import annotations
 import difflib
 import logging
 import math
+import os
 import random
 import statistics
 import tempfile
@@ -35,6 +36,7 @@ from pydantic import (
     NonNegativeInt,
     PositiveInt,
     StringConstraints,
+    ValidationError,
     model_validator,
 )
 
@@ -251,6 +253,57 @@ class ScalingStudy(BaseModel):
     paired_outcomes: PairedTrialOutcomes | None = None
     skill_icc: UnitInterval | None = None
     replicate_collisions: tuple[ReplicateCollisionDiagnostic, ...] = ()
+
+    @classmethod
+    def load(cls, path: Path | str) -> Self:
+        """Load and deserialize a ScalingStudy from a JSON file.
+
+        Raises:
+            FileNotFoundError: If the target file does not exist.
+            IsADirectoryError: If the target path is a directory.
+            ValueError: If the target path contains invalid study data.
+        """
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            msg = f"Scaling study file not found: {p}"
+            raise FileNotFoundError(msg)
+        if p.is_dir():
+            msg = f"Scaling study path is a directory, not a file: {p}"
+            raise IsADirectoryError(msg)
+        try:
+            content = p.read_text(encoding="utf-8")
+        except OSError as err:
+            msg = f"Failed to read scaling study file at {p}: {err}"
+            raise OSError(msg) from err
+
+        try:
+            return cls.model_validate_json(content)
+        except (ValueError, ValidationError) as err:
+            msg = f"Failed to parse scaling study JSON from {p}: {err}"
+            raise ValueError(msg) from err
+
+    def save(self, path: Path | str) -> Path:
+        """Serialize the scaling study to a formatted JSON file atomically.
+
+        Args:
+            path: Target file path for the serialized JSON output.
+
+        Returns:
+            The resolved Path where the study was written.
+
+        Raises:
+            OSError: If directory creation or file writing fails.
+        """
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_target = target.with_suffix(f"{target.suffix}.tmp.{os.getpid()}")
+        try:
+            tmp_target.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            tmp_target.replace(target)
+        finally:
+            if tmp_target.exists():
+                tmp_target.unlink(missing_ok=True)
+        return target
 
     @model_validator(mode="after")
     def _validate_target_skill_for_mode(self) -> Self:

@@ -32,6 +32,7 @@ from reach.config import (
     RunConfig,
     StudySettings,
     _discover_config_path,
+    _propagate_registry_to_runtime,
 )
 from reach.diff import VaryFactor
 from reach.generate import GeneratorArm
@@ -792,18 +793,9 @@ def build_config(
             raise
         raise ValueError(reason) from error
 
-    if (
-        resolved.runtime.agent == "antigravity-sdk"
-        and resolved.registry.project
-        and not resolved.runtime.options.get("project")
-    ):
-        opts = dict(resolved.runtime.options)
-        opts["project"] = resolved.registry.project
-        if "location" in resolved.registry.model_fields_set and not opts.get("location"):
-            opts["location"] = resolved.registry.location
-        resolved = resolved.model_copy(
-            update={"runtime": resolved.runtime.model_copy(update={"options": opts})}
-        )
+    updated_runtime = _propagate_registry_to_runtime(resolved.runtime, resolved.registry)
+    if updated_runtime is not resolved.runtime:
+        resolved = resolved.model_copy(update={"runtime": updated_runtime})
     return resolved
 
 
@@ -813,18 +805,29 @@ def _opt_error_reason(
     runtime: RuntimeFlags,
 ) -> str | None:
     """Translate Pydantic option validation errors into readable error descriptions."""
-    failures = [f for f in error.errors() if f["loc"] and f["loc"][0] == "runtime"]
+    typed = {pair.partition("=")[0]: pair for pair in runtime.opt}
+    failures = [
+        f
+        for f in error.errors()
+        if f.get("loc")
+        and (
+            f["loc"][0] in ("runtime", "options")
+            or (
+                f["loc"][0] not in type(loaded).model_fields
+                and any(isinstance(part, str) and part in typed for part in f["loc"])
+            )
+        )
+    ]
     if not failures:
         return None
     agent = runtime.agent or loaded.runtime.agent
     model = options_model(agent)
     named = f" ({model.__name__})" if model is not None else ""
-    typed = {pair.partition("=")[0]: pair for pair in runtime.opt}
     lines = [
         (
             f"-O {typed[field]!r}: {failure['msg']}"
-            if (field := str(failure["loc"][-1])) in typed
-            else f"{field}: {failure['msg']}"
+            if (field := next((str(p) for p in reversed(failure["loc"]) if str(p) in typed), None))
+            else f"{failure['loc'][-1]}: {failure['msg']}"
         )
         for failure in failures
     ]

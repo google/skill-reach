@@ -54,6 +54,11 @@ _MIN_DROP_PROB_FOR_GRADUAL_LABEL: float = 0.50
 _MIN_GRADUAL_PROB_DISPLAY: float = 0.01
 
 
+def _format_duration_s(duration_ms: float) -> str:
+    """Format duration in milliseconds as seconds with one decimal place or dash when unset."""
+    return f"{duration_ms / 1000:.1f}s" if duration_ms > 0 else "—"
+
+
 def _format_knee_interval(study: ScalingStudy) -> str:
     """Format bootstrap knee confidence interval with right-censoring indicator when present."""
     if study.knee_scale_interval is None:
@@ -69,15 +74,17 @@ def _format_knee_bootstrap_distribution(study: ScalingStudy) -> str:
         return ""
     pmf_parts = [f"K={k}: {prob * 100:.0f}%" for k, prob in study.knee_scale_pmf.items()]
     extra_probs: list[str] = []
-    if study.cliff_probability is not None and study.cliff_probability > 0:
-        extra_probs.append(f"cliff P(k*=K₀)={study.cliff_probability * 100:.0f}%")
     if study.drop_probability is not None:
         pmf_sum = sum(study.knee_scale_pmf.values())
         gradual_prob = max(0.0, round(study.drop_probability - pmf_sum, 4))
         if gradual_prob >= _MIN_GRADUAL_PROB_DISPLAY:
             extra_probs.append(f"gradual={gradual_prob * 100:.0f}%")
         extra_probs.append(f"drop={study.drop_probability * 100:.0f}%")
-    suffix = f" ({', '.join(extra_probs)})" if extra_probs else ""
+    group_str = ", ".join(extra_probs)
+    if study.cliff_probability is not None and study.cliff_probability > 0:
+        cliff_str = f"first-step cliff={study.cliff_probability * 100:.0f}%"
+        group_str = f"{group_str}; {cliff_str}" if group_str else cliff_str
+    suffix = f" ({group_str})" if group_str else ""
     return f"{', '.join(pmf_parts)}{suffix}"
 
 
@@ -189,6 +196,8 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             f"Δ Collision {study.total_collision_loss * 100:+.1f}% | "
             f"Δ Abstention {study.total_abstention_loss * 100:+.1f}%"
         )
+        if study.total_truncated_loss != 0:
+            loss_text += f" | Δ Truncation {study.total_truncated_loss * 100:+.1f}%"
         decision_lines.append((loss_text, "dim"))
         decision_lines.append(("\n", ""))
 
@@ -208,14 +217,6 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         )
         decision_lines.append(("\n", ""))
 
-    if study.total_truncated_loss > 0:
-        trunc_text = (
-            f"  • Budget Truncation Loss: {study.total_truncated_loss * 100:+.1f}% "
-            "(elided/withheld probes)"
-        )
-        decision_lines.append((trunc_text, "yellow"))
-        decision_lines.append(("\n", ""))
-
     if decision_lines:
         panel = Panel(
             Text.assemble(*decision_lines[:-1]),  # strip trailing newline
@@ -230,7 +231,6 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
     has_negatives = any(pt.negative_probes > 0 for pt in study.points)
     has_truncation = any(pt.disclosure_states.get("name_only_elided", 0) > 0 for pt in study.points)
 
-    compact_cols = has_truncation
     table = Table(
         box=box.SIMPLE,
         show_header=True,
@@ -240,7 +240,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
     )
     table.add_column("Scale", justify="right", no_wrap=True)
     table.add_column("Recall", justify="right", no_wrap=True)
-    table.add_column("Prec" if compact_cols else "Precision", justify="right", no_wrap=True)
+    table.add_column("Prec", justify="right", no_wrap=True)
     if has_negatives:
         table.add_column("Abstain", justify="right", no_wrap=True)
     table.add_column("F1", justify="right", no_wrap=True)
@@ -250,9 +250,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         table.add_column("Trunc", justify="right", style="yellow", no_wrap=True)
     table.add_column("Tokens", justify="right", style="dim", no_wrap=True)
     table.add_column("Probes", justify="right", no_wrap=True)
-    table.add_column(
-        "Time" if compact_cols else "Duration", justify="right", style="dim", no_wrap=True
-    )
+    table.add_column("Time", justify="right", style="dim", no_wrap=True)
 
     for pt in study.points:
         f1_pct = f"{pt.f1_score * 100:.1f}%"
@@ -272,12 +270,7 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             else str(pt.in_scope_probes)
         )
         probes_cell = _format_probes_cell(base_probes_str, pt.probes_errored)
-        if pt.duration_ms_mean <= 0:
-            dur_str = "—"
-        elif compact_cols:
-            dur_str = f"{pt.duration_ms_mean / 1000:.1f}s"
-        else:
-            dur_str = f"{pt.duration_ms_mean:.0f}ms"
+        dur_str = _format_duration_s(pt.duration_ms_mean)
 
         row: list[str | Text] = [
             str(pt.scale),
@@ -405,9 +398,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         "Δ Collide" if compact_cols else "Δ Collision", justify="right", style="red", no_wrap=True
     )
     table.add_column("Probes", justify="right", no_wrap=True)
-    table.add_column(
-        "Time" if compact_cols else "Duration", justify="right", style="dim", no_wrap=True
-    )
+    table.add_column("Time", justify="right", style="dim", no_wrap=True)
 
     for pt in study.points:
         pct = f"{pt.pass_rate * 100:.1f}%"
@@ -425,7 +416,7 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
         col_str = f"{pt.delta_collision * 100:+.1f}%" if pt.delta_collision != 0 else "0.0%"
         probes_str = f"{pt.probes_executed - pt.probes_failed}/{pt.probes_executed}"
         probes_cell = _format_probes_cell(probes_str, pt.probes_errored)
-        dur_str = f"{pt.duration_ms_mean:.0f}ms" if pt.duration_ms_mean > 0 else "—"
+        dur_str = _format_duration_s(pt.duration_ms_mean)
 
         row: list[str | Text] = [
             str(pt.scale),
@@ -477,7 +468,8 @@ def _select_curve_levels(values: Sequence[float]) -> tuple[float, ...]:
     min_v = min(values)
     max_v = max(values)
     if min_v >= _ZOOM_HIGH_THRESHOLD and max_v > min_v:
-        return (1.0, 0.95, 0.90, 0.85, 0.80)
+        ticks = {1.0, 0.95, 0.90, 0.85, 0.80, _ZOOM_HIGH_THRESHOLD}
+        return tuple(sorted(ticks, reverse=True))
     if min_v >= _ZOOM_MID_THRESHOLD and max_v > min_v:
         return (1.0, 0.90, 0.80, 0.70, 0.60)
     return (1.0, 0.75, 0.5, 0.25, 0.0)
