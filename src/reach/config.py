@@ -480,8 +480,9 @@ class RuntimeSettings(BaseModel):
         same_agent = target_agent == self.agent
         model = clean_overrides.pop("model", None)
         base_opts: dict[str, Any] = dict(self.options) if same_agent else {}
-        if "options" in clean_overrides and isinstance(clean_overrides["options"], Mapping):
-            base_opts.update(clean_overrides.pop("options"))
+        options_override = clean_overrides.pop("options", None)
+        if isinstance(options_override, Mapping):
+            base_opts.update(options_override)
         if model is not None:
             base_opts["model"] = model
 
