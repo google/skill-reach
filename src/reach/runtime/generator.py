@@ -23,7 +23,7 @@ import subprocess
 from abc import ABC
 from collections.abc import Mapping
 from math import floor
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from reach.config import DEFAULT_GEMINI_MODEL
 from reach.runtime._env import (
@@ -32,6 +32,9 @@ from reach.runtime._env import (
     sanitize_subprocess_env,
 )
 from reach.runtime.profiles import model_profile
+
+if TYPE_CHECKING:
+    from reach.runtime import AgentOptions
 
 __all__ = [
     "BaseTextGenerator",
@@ -80,7 +83,7 @@ class TextGenerator(Protocol):
         ...
 
 
-class BaseTextGenerator[OptionsT](ABC):
+class BaseTextGenerator[OptionsT: AgentOptions](ABC):
     """Abstract base class providing character budgeting and completion accounting."""
 
     name: str = "generator"
@@ -112,6 +115,16 @@ class BaseTextGenerator[OptionsT](ABC):
         copy_fn = getattr(self.options, "model_copy", None)
         if callable(copy_fn):
             self.options = cast("OptionsT", copy_fn(update={"model": value}))
+
+    @property
+    def effective_effort(self) -> str | None:
+        """Return configured reasoning effort or default from model profile."""
+        if self.options is not None and self.options.effort:
+            return None if self.options.effort.lower() in ("none", "off") else self.options.effort
+        try:
+            return model_profile(self.model).effort
+        except (KeyError, ValueError):
+            return None
 
     def prompt_budget_chars(self) -> int | None:
         """Return maximum character length for prompts, or None if unbounded."""

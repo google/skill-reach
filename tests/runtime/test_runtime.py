@@ -57,6 +57,8 @@ from reach.runtime import (
 )
 from reach.runtime._env import (
     apply_provider_api_key,
+    has_agy_vertex_env,
+    is_truthy_env,
     sanitize_subprocess_env,
     sync_claude_settings_env,
     sync_google_and_gemini_keys,
@@ -1295,6 +1297,9 @@ def test_agent_build_env_honors_custom_blocked_env_vars(
     [
         ("CLAUDE_CODE_USE_VERTEX", "1", True),
         ("GOOGLE_GENAI_USE_ENTERPRISE", "true", True),
+        ("AGY_ADC_AUTH", "true", True),
+        ("AGY_ADC_AUTH", "yes", True),
+        ("GOOGLE_CLOUD_PROJECT", "my-project", True),
         ("CLAUDE_CODE_USE_VERTEX", "0", False),
         ("OTHER_ENV_VAR", "1", False),
     ],
@@ -1315,6 +1320,29 @@ def test_sanitize_subprocess_env_google_application_credentials_exemption(
         assert result.get("GOOGLE_APPLICATION_CREDENTIALS") == "/path/to/sa.json"
     else:
         assert "GOOGLE_APPLICATION_CREDENTIALS" not in result
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"AGY_ADC_AUTH": "1"}, True),
+        ({"AGY_ADC_AUTH": "true"}, True),
+        ({"AGY_ADC_AUTH": "yes"}, True),
+        ({"GOOGLE_CLOUD_PROJECT": "proj"}, True),
+        ({"GOOGLE_CLOUD_PROJECT": "proj", "GEMINI_API_KEY": "key"}, False),
+        ({"GOOGLE_CLOUD_PROJECT": "proj", "GOOGLE_API_KEY": "key"}, False),
+        ({}, False),
+    ],
+)
+def test_has_agy_vertex_env_and_truthy_helper(
+    env: dict[str, str],
+    *,
+    expected: bool,
+) -> None:
+    """Verify has_agy_vertex_env and is_truthy_env handle explicit and implicit Vertex checks."""
+    assert has_agy_vertex_env(env) is expected
+    assert is_truthy_env({"FLAG": "  YES  "}, "FLAG") is True
+    assert is_truthy_env({"FLAG": "false"}, "FLAG") is False
 
 
 def test_sync_claude_settings_env_loads_settings_file(tmp_path: Path) -> None:
@@ -1342,7 +1370,7 @@ def test_sync_claude_settings_env_preserves_google_application_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify sync_claude_settings_env restores credentials when Vertex is enabled."""
+    """Verify sync_claude_settings_env restores credentials unless vertex_override is False."""
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(
@@ -1353,6 +1381,9 @@ def test_sync_claude_settings_env_preserves_google_application_credentials(
     result = sync_claude_settings_env(env, claude_home=tmp_path)
     assert result["GOOGLE_APPLICATION_CREDENTIALS"] == "/path/to/creds.json"
     assert result["CLOUD_ML_REGION"] == "global"
+
+    result_off = sync_claude_settings_env({}, claude_home=tmp_path, vertex_override=False)
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in result_off
 
 
 def test_sync_claude_settings_env_respects_blocked_env_vars(
@@ -1517,10 +1548,11 @@ def test_build_text_generator_options_model_is_respected() -> None:
 
 def test_agent_options_inheritance_hierarchy() -> None:
     """Verify AgentOptions is the root model and all registered agent options subclass it."""
-    from reach.runtime import AgentOptions, AntigravityOptions, CliOptions
+    from reach.runtime import AgentOptions, AntigravityOptions, CliOptions, VertexOptions
 
     assert issubclass(CliOptions, AgentOptions)
-    assert issubclass(AntigravityOptions, AgentOptions)
+    assert issubclass(VertexOptions, AgentOptions)
+    assert issubclass(AntigravityOptions, VertexOptions)
 
     for agent in known_agents():
         opt_cls = options_model(agent)
@@ -1805,12 +1837,10 @@ def test_tool_call_info_path_property_and_coercion() -> None:
 
     call1 = ToolCallInfo(name="view_file", path="/work/skill/SKILL.md")
     assert call1.path == "/work/skill/SKILL.md"
-    assert call1.target_path == "/work/skill/SKILL.md"
     assert call1.parameters == {"path": "/work/skill/SKILL.md"}
 
     call2 = ToolCallInfo(name="view_file", parameters={"AbsolutePath": "/work/abs.md"})
     assert call2.path == "/work/abs.md"
-    assert call2.target_path == "/work/abs.md"
 
 
 def test_agent_runtime_effective_effort_and_resident_paths(tmp_path: Path) -> None:
@@ -2489,53 +2519,52 @@ def test_antigravity_agents_discovery() -> None:
 def test_antigravity_runtime_effective_model_provider(
     agent: str,
     monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
 ) -> None:
-    """Verify effective_model_provider auto-detects gemini across all Antigravity runtimes."""
+    """Verify resolve_model_provider auto-detects gemini across all Antigravity runtimes."""
     # 1. Auto-detect when GEMINI_API_KEY is present
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "gemini-3.7-flash"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert hasattr(rt, "effective_model_provider")
-    assert rt.effective_model_provider == "gemini"
+    assert rt.options.resolve_model_provider(rt.model) == "gemini"
 
     # 2. Auto-detect when GOOGLE_API_KEY is present
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-456")
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "gemini-3.7-flash"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_model_provider == "gemini"
+    assert rt.options.resolve_model_provider(rt.model) == "gemini"
 
-    # 3. Explicit provider overrides auto-detect when supported by options model
-    opt_cls = options_model(agent)
-    if opt_cls is not None and "model_provider" in opt_cls.model_fields:
-        rt = build_runtime(
-            RuntimeSettings(
-                agent=agent,
-                options={"model": "gemini-3.7-flash", "model_provider": "custom-prov"},
-            ),
-        )
-        assert isinstance(rt, AntigravityRuntime)
-        assert rt.effective_model_provider == "custom-prov"
+    # 3. Explicit provider overrides auto-detect
+    rt = build_runtime(
+        RuntimeSettings(
+            agent=agent,
+            options={"model": "gemini-3.7-flash", "provider": "custom-prov"},
+        ),
+    )
+    assert isinstance(rt, AntigravityRuntime)
+    assert rt.options.resolve_model_provider(rt.model) == "custom-prov"
 
     # 4. Non-gemini model does not auto-detect
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "claude-3-opus"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_model_provider is None
+    assert rt.options.resolve_model_provider(rt.model) is None
 
     # 5. No keys present results in None
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "gemini-3.7-flash"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_model_provider is None
+    assert rt.options.resolve_model_provider(rt.model) is None
 
 
 @pytest.mark.parametrize("agent", antigravity_agents())
 def test_antigravity_runtime_effective_api_key_resolution(
     agent: str,
     monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
 ) -> None:
     """Verify effective_api_key resolution hierarchy across Antigravity runtimes."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -2545,14 +2574,14 @@ def test_antigravity_runtime_effective_api_key_resolution(
     monkeypatch.setenv("GEMINI_API_KEY", "env-gemini-key")
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "gemini-3.7-flash"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_api_key == "env-gemini-key"
+    assert rt.options.effective_api_key == "env-gemini-key"
 
     # Fallback to GOOGLE_API_KEY if GEMINI_API_KEY unset
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "env-google-key")
     rt = build_runtime(RuntimeSettings(agent=agent, options={"model": "gemini-3.7-flash"}))
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_api_key == "env-google-key"
+    assert rt.options.effective_api_key == "env-google-key"
 
     # Options api_key takes precedence
     rt = build_runtime(
@@ -2562,7 +2591,7 @@ def test_antigravity_runtime_effective_api_key_resolution(
         ),
     )
     assert isinstance(rt, AntigravityRuntime)
-    assert rt.effective_api_key == "explicit-key"
+    assert rt.options.effective_api_key == "explicit-key"
 
 
 def test_agent_options_accepts_and_validates_blocked_env_vars() -> None:
@@ -2677,3 +2706,65 @@ def test_fake_runtime_multi_turn_sequence_trajectory_tracker(tmp_path: Path) -> 
     assert outcome_max.invoked_skills == ("s1", "s2")
     assert outcome_max.early_exit is True
     assert outcome_max.turns_taken == 2
+
+
+@pytest.mark.parametrize(
+    ("opt_schema", "arg_schema", "expected"),
+    [
+        pytest.param(None, None, None, id="none-returns-none"),
+        pytest.param(None, {"type": "object"}, {"type": "object"}, id="mapping-arg"),
+        pytest.param(None, '{"type": "object"}', {"type": "object"}, id="json-string-arg"),
+        pytest.param('{"type": "string"}', None, {"type": "string"}, id="options-json-schema"),
+    ],
+)
+def test_antigravity_options_resolve_schema_dict_happy_paths(
+    opt_schema: str | None,
+    arg_schema: str | dict[str, Any] | None,
+    expected: dict[str, Any] | None,
+) -> None:
+    """Verify AntigravityOptions.resolve_schema_dict parses mapping, JSON string, and None."""
+    from reach.runtime import AntigravityOptions
+
+    opts = AntigravityOptions(json_schema=opt_schema)
+    assert opts.resolve_schema_dict(arg_schema) == expected
+
+
+@pytest.mark.parametrize(
+    ("bad_schema", "match_pattern"),
+    [
+        pytest.param("{unclosed-json", "Invalid JSON schema", id="malformed-json"),
+        pytest.param("[1, 2, 3]", "Expected JSON schema object, got list", id="non-object-json"),
+    ],
+)
+def test_antigravity_options_resolve_schema_dict_sad_paths(
+    bad_schema: str,
+    match_pattern: str,
+) -> None:
+    """Verify AntigravityOptions.resolve_schema_dict raises ValueError on invalid schemas."""
+    from reach.runtime import AntigravityOptions
+
+    opts = AntigravityOptions()
+    with pytest.raises(ValueError, match=match_pattern):
+        opts.resolve_schema_dict(bad_schema)
+
+
+@pytest.mark.parametrize("agent", antigravity_agents())
+def test_antigravity_runtimes_inherit_registry_project_and_location(
+    agent: str,
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+) -> None:
+    """Verify RunConfig.resolve propagates [registry] project/location to all Antigravity agents."""
+    from reach.config import RegistrySettings, RunConfig
+
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    cfg = RunConfig(
+        runtime=RuntimeSettings(agent=agent),
+        registry=RegistrySettings(project="registry-seam-proj", location="europe-west4"),
+    )
+    resolved_rt = RunConfig.resolve(RuntimeSettings, cfg)
+    rt = build_runtime(resolved_rt)
+    assert isinstance(rt, AntigravityRuntime)
+    assert rt.options.effective_vertex is True
+    assert rt.options.effective_project == "registry-seam-proj"
+    assert rt.options.effective_location == "europe-west4"

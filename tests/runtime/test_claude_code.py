@@ -959,10 +959,15 @@ def test_claude_code_multi_turn_abstention_counts_all_turns(
 
 
 def test_claude_code_build_completion_command(generator: ClaudeGenerator) -> None:
-    """Verify build_completion_command constructs arguments correctly."""
+    """Verify build_completion_command constructs arguments and applies profile effort."""
     cmd = generator.build_completion_command("test prompt")
     assert cmd[:4] == ["claude", "-p", "--model", "claude-sonnet-5"]
     assert "--output-format" in cmd
+    idx = cmd.index("--effort")
+    assert cmd[idx + 1] == "low"
+
+    gen_off = ClaudeGenerator(options=ClaudeCodeOptions(model="claude-sonnet-5", effort="off"))
+    assert "--effort" not in gen_off.build_completion_command("test prompt")
 
 
 def test_select_accepts_error_max_turns_subtype(
@@ -1030,32 +1035,20 @@ def test_claude_generator_build_env_forwards_api_key() -> None:
     assert env["ANTHROPIC_API_KEY"] == "claude-secret-key"
 
 
-def test_claude_code_build_env_applies_region_and_project_options(
-    tmp_path: Path,
+@pytest.mark.parametrize("target_cls", [ClaudeCodeRuntime, ClaudeGenerator])
+def test_claude_build_env_applies_location_and_project_options(
+    target_cls: type[ClaudeCodeRuntime | ClaudeGenerator],
 ) -> None:
-    """Verify ClaudeCodeRuntime build_env respects cloud_ml_region and vertex_project_id options."""
-    rt = ClaudeCodeRuntime(
+    """Verify ClaudeCodeRuntime and ClaudeGenerator build_env apply location and project options."""
+    instance = target_cls(
         options=ClaudeCodeOptions(
-            cloud_ml_region="us-east5",
-            vertex_project_id="custom-proj",
-        )
+            location="us-east5",
+            project="custom-proj",
+        ),
     )
-    env = rt.build_env(tmp_path)
+    env = instance.build_env()
     assert env["CLOUD_ML_REGION"] == "us-east5"
     assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "custom-proj"
-
-
-def test_claude_generator_build_env_applies_region_and_project_options() -> None:
-    """Verify ClaudeGenerator build_env respects cloud_ml_region and vertex_project_id options."""
-    gen = ClaudeGenerator(
-        options=ClaudeCodeOptions(
-            cloud_ml_region="europe-west1",
-            vertex_project_id="gen-proj",
-        )
-    )
-    env = gen.build_env()
-    assert env["CLOUD_ML_REGION"] == "europe-west1"
-    assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "gen-proj"
 
 
 def test_claude_code_parse_stream_extracts_prompt_tokens(
@@ -1321,3 +1314,41 @@ def test_blocked_env_vars_preserves_isolation_vars(tmp_path: Path) -> None:
         assert env.get(var) == "1"
     assert "SECRET_API_TOKEN" not in env
     assert "AWS_ACCESS_KEY_ID" not in env
+
+
+def test_claude_code_options_vertex_project_and_location_aliases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ClaudeCodeOptions supports cross-runtime vertex, project, and location fields."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-anthropic-key")
+    opts = ClaudeCodeOptions(
+        vertex=True,
+        project="  unified-proj  ",
+        location="  us-east5  ",
+    )
+    assert opts.project == "unified-proj"
+    assert opts.location == "us-east5"
+
+    rt = ClaudeCodeRuntime(options=opts)
+    gen = ClaudeGenerator(options=opts)
+    for env in (rt.build_env(tmp_path), gen.build_env()):
+        assert env["CLAUDE_CODE_USE_VERTEX"] == "1"
+        assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "unified-proj"
+        assert env["CLOUD_ML_REGION"] == "us-east5"
+        assert "ANTHROPIC_API_KEY" not in env
+
+    # Explicit vertex=False strips ambient CLAUDE_CODE_USE_VERTEX and GOOGLE_APPLICATION_CREDENTIALS
+    monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
+    claude_home = tmp_path / ".claude"
+    claude_home.mkdir(exist_ok=True)
+    (claude_home / "settings.json").write_text(
+        json.dumps({"env": {"CLAUDE_CODE_USE_VERTEX": "1"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    rt_off = ClaudeCodeRuntime(options=ClaudeCodeOptions(vertex=False))
+    env_off = rt_off.build_env(tmp_path / "work")
+    assert "CLAUDE_CODE_USE_VERTEX" not in env_off
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_off

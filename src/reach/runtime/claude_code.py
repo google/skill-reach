@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_seriali
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import resident_skills
-from reach.config import DEFAULT_CLAUDE_MODEL, RuntimeSettings
+from reach.config import DEFAULT_CLAUDE_MODEL
 from reach.runtime import (
     CatalogFit,
     CliAgentRuntime,
@@ -36,6 +36,7 @@ from reach.runtime import (
     SessionStatus,
     SessionSummary,
     SkillRoot,
+    VertexOptions,
     agent_default_model,
 )
 from reach.runtime._env import sync_claude_settings_env
@@ -165,7 +166,7 @@ DEFAULT_ENABLED_PLUGINS: Mapping[str, bool] = {
 }
 
 
-class ClaudeCodeOptions(CliOptions):
+class ClaudeCodeOptions(VertexOptions, CliOptions):
     """Specify runtime configuration options for the Claude Code CLI agent."""
 
     executable: str = "claude"
@@ -188,8 +189,6 @@ class ClaudeCodeOptions(CliOptions):
     strict_mcp_config: bool = True
     no_session_persistence: bool = True
     config_dir: Path | None = None
-    cloud_ml_region: str | None = None
-    vertex_project_id: str | None = None
     isolation_dir_field: ClassVar[str | None] = "config_dir"
 
     @model_serializer(mode="wrap")
@@ -439,13 +438,23 @@ def _apply_claude_options_env(
     blocked_env_vars: Iterable[str] | None = None,
 ) -> None:
     """Populate Claude Code provider and isolation environment variables from options."""
-    sync_claude_settings_env(env, blocked_env_vars=blocked_env_vars)
-    if options.cloud_ml_region:
-        env["CLOUD_ML_REGION"] = str(options.cloud_ml_region)
-    if options.vertex_project_id:
-        env["ANTHROPIC_VERTEX_PROJECT_ID"] = str(options.vertex_project_id)
+    if options.vertex is True:
+        env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    elif options.vertex is False:
+        env.pop("CLAUDE_CODE_USE_VERTEX", None)
+    sync_claude_settings_env(
+        env,
+        blocked_env_vars=blocked_env_vars,
+        vertex_override=options.vertex,
+    )
+    if options.location:
+        env["CLOUD_ML_REGION"] = str(options.location)
+    if options.project:
+        env["ANTHROPIC_VERTEX_PROJECT_ID"] = str(options.project)
     if options.api_key:
         env["ANTHROPIC_API_KEY"] = str(options.api_key)
+    elif options.vertex is True:
+        env.pop("ANTHROPIC_API_KEY", None)
     if options.disable_bundled_skills:
         for var in DEFAULT_ISOLATION_ENV_VARS:
             env[var] = "1"
@@ -462,21 +471,6 @@ class ClaudeCodeRuntime(CliAgentRuntime[ClaudeCodeOptions]):
     api_key_env_var: str | None = "ANTHROPIC_API_KEY"
     _skills_subpath = ".claude/skills"
     isolation_dir_name: ClassVar[str | None] = ".reach_claude_config"
-
-    def __init__(
-        self,
-        settings: RuntimeSettings | None = None,
-        options: ClaudeCodeOptions | None = None,
-    ) -> None:
-        """Initialize Claude runtime options and settings."""
-        if options is not None:
-            opts_dict = options.model_dump()
-            self.settings = settings or RuntimeSettings(agent=self.name, options=opts_dict)
-        else:
-            self.settings = settings or RuntimeSettings(agent=self.name)
-            options = ClaudeCodeOptions.model_validate(dict(self.settings.options))
-        self.options = options
-        self._resident: tuple[str, ...] = ()
 
     @override
     def skill_roots(self, workdir: Path) -> tuple[SkillRoot, ...]:
@@ -628,7 +622,7 @@ class ClaudeCodeRuntime(CliAgentRuntime[ClaudeCodeOptions]):
         """Assemble process environment with API keys and workspace directory."""
         env = super().build_env(workdir)
         _apply_claude_options_env(env, self.options, blocked_env_vars=self.blocked_env_vars)
-        if workdir is not None and (iso_dir := self.effective_isolation_dir(workdir)) is not None:
+        if (iso_dir := self.effective_isolation_dir(workdir)) is not None:
             config_dir = ensure_private_directory(iso_dir)
             env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         return env
@@ -695,7 +689,7 @@ class ClaudeGenerator(BaseTextGenerator[ClaudeCodeOptions]):
         ]
         if self.options.no_session_persistence:
             command.append("--no-session-persistence")
-        if effort := getattr(self.options, "effort", None):
+        if effort := self.effective_effort:
             command += ["--effort", effort]
         return [*command, *self.options.extra_args]
 

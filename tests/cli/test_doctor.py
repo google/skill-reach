@@ -169,11 +169,40 @@ def test_check_google_adc_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     monkeypatch.delenv("CLOUDSDK_CONFIG", raising=False)
     monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("AGY_ADC_AUTH", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
 
     res = _check_google_adc()
     assert res.status == "warn"
     assert res.detail == "not found"
+
+
+@pytest.mark.parametrize("auth_val", ["true", "1", "yes"])
+def test_check_google_adc_reports_agy_adc_auth_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_val: str,
+) -> None:
+    """Verify _check_google_adc reports active AGY_ADC_AUTH status across truthy values."""
+    monkeypatch.setenv("AGY_ADC_AUTH", auth_val)
+    custom_cred = tmp_path / "creds.json"
+    custom_cred.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(custom_cred))
+
+    res_ok = _check_google_adc()
+    assert res_ok.status == "ok"
+    assert "AGY_ADC_AUTH enabled" in res_ok.detail
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("CLOUDSDK_CONFIG", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
+
+    res_warn = _check_google_adc()
+    assert res_warn.status == "warn"
+    assert "AGY_ADC_AUTH enabled" in res_warn.detail
+    assert res_warn.remedy is not None
+    assert "--project <PROJECT_ID>" in res_warn.remedy
 
 
 @pytest.mark.parametrize(

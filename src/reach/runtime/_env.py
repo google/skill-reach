@@ -53,6 +53,26 @@ DEFAULT_BLOCKED_ENV_VARS: tuple[str, ...] = (
 _DEFAULT_BLOCKED_SET = frozenset(DEFAULT_BLOCKED_ENV_VARS)
 
 
+_AGY_VERTEX_ENV_VARS: tuple[str, ...] = (
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "AGY_ADC_AUTH",
+)
+
+
+def is_truthy_env(env: Mapping[str, str], key: str) -> bool:
+    """Return True if the specified environment variable is set to 'true', '1', or 'yes'."""
+    return env.get(key, "").strip().lower() in ("true", "1", "yes")
+
+
+def has_agy_vertex_env(env: Mapping[str, str]) -> bool:
+    """Return True if any Antigravity Vertex/Enterprise/ADC environment variable is enabled."""
+    if any(is_truthy_env(env, key) for key in _AGY_VERTEX_ENV_VARS):
+        return True
+    has_api_key = bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY"))
+    return bool(env.get("GOOGLE_CLOUD_PROJECT")) and not has_api_key
+
+
 def sanitize_subprocess_env(
     env: dict[str, str],
     *,
@@ -61,11 +81,7 @@ def sanitize_subprocess_env(
 ) -> dict[str, str]:
     """Strip sensitive ambient credentials and tokens from child process environment."""
     keep_set = set(keep)
-    vertex_env_active = (
-        env.get("CLAUDE_CODE_USE_VERTEX") == "1"
-        or env.get("GOOGLE_GENAI_USE_ENTERPRISE", "").lower() in ("true", "1")
-        or env.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1")
-    )
+    vertex_env_active = env.get("CLAUDE_CODE_USE_VERTEX") == "1" or has_agy_vertex_env(env)
     if blocked_env_vars is None and vertex_env_active:
         keep_set.add("GOOGLE_APPLICATION_CREDENTIALS")
 
@@ -89,11 +105,26 @@ def sync_google_and_gemini_keys(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def _read_claude_settings_env(claude_home: Path | None = None) -> dict[str, object]:
+    """Read the env mapping from Claude settings.json if present and valid."""
+    settings_file = (claude_home or (Path.home() / ".claude")) / "settings.json"
+    if not settings_file.is_file():
+        return {}
+    try:
+        data = json.loads(settings_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if isinstance(data, dict) and isinstance(data.get("env"), dict):
+        return data["env"]
+    return {}
+
+
 def sync_claude_settings_env(
     env: dict[str, str],
     claude_home: Path | None = None,
     *,
     blocked_env_vars: Iterable[str] | None = None,
+    vertex_override: bool | None = None,
 ) -> dict[str, str]:
     """Synchronize user Claude Code settings and Vertex defaults into environment dict.
 
@@ -101,6 +132,7 @@ def sync_claude_settings_env(
         env: Active environment variables dictionary to update in-place.
         claude_home: Optional path to Claude home directory (defaults to ~/.claude).
         blocked_env_vars: Sensitive environment variables blocked from being injected.
+        vertex_override: Explicit boolean override for Vertex AI mode (True, False, or None).
 
     Returns:
         Updated environment dictionary.
@@ -108,30 +140,31 @@ def sync_claude_settings_env(
     effective_blocked = (
         set(blocked_env_vars) if blocked_env_vars is not None else _DEFAULT_BLOCKED_SET
     )
-    vertex_enabled = env.get("CLAUDE_CODE_USE_VERTEX") == "1"
+    if vertex_override is True:
+        env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    elif vertex_override is False:
+        env.pop("CLAUDE_CODE_USE_VERTEX", None)
+        if "GOOGLE_APPLICATION_CREDENTIALS" in effective_blocked:
+            env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+
+    settings_env = _read_claude_settings_env(claude_home)
+    vertex_enabled = vertex_override is not False and (
+        env.get("CLAUDE_CODE_USE_VERTEX") == "1"
+        or str(settings_env.get("CLAUDE_CODE_USE_VERTEX", "")) == "1"
+    )
     allow_vertex_creds = blocked_env_vars is None and vertex_enabled
 
-    settings_file = (claude_home or (Path.home() / ".claude")) / "settings.json"
-    if settings_file.is_file():
-        try:
-            data = json.loads(settings_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("env"), dict):
-                if not vertex_enabled and str(data["env"].get("CLAUDE_CODE_USE_VERTEX", "")) == "1":
-                    vertex_enabled = True
-                    allow_vertex_creds = blocked_env_vars is None
+    for key, val in settings_env.items():
+        if vertex_override is False and key == "CLAUDE_CODE_USE_VERTEX":
+            continue
+        if key in effective_blocked and not (
+            key == "GOOGLE_APPLICATION_CREDENTIALS" and allow_vertex_creds
+        ):
+            continue
+        if isinstance(val, (str, int, float)):
+            env[key] = str(val)
 
-                for key, val in data["env"].items():
-                    if key in effective_blocked:
-                        if key == "GOOGLE_APPLICATION_CREDENTIALS" and allow_vertex_creds:
-                            pass
-                        else:
-                            continue
-                    if isinstance(val, (str, int, float)):
-                        env[key] = str(val)
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    if env.get("CLAUDE_CODE_USE_VERTEX") == "1":
+    if vertex_override is not False and env.get("CLAUDE_CODE_USE_VERTEX") == "1":
         if not env.get("CLOUD_ML_REGION"):
             env["CLOUD_ML_REGION"] = "global"
         creds_blocked = (

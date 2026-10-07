@@ -235,6 +235,22 @@ def _load_section[T: BaseModel](
     return model_cls.model_validate(raw) if isinstance(raw, dict) else model_cls()
 
 
+def _env_google_project() -> str | None:
+    """Return Google Cloud project ID from standard environment variables."""
+    if env_proj := (
+        os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT")
+    ):
+        return env_proj.strip() or None
+    return None
+
+
+def _env_google_location() -> str:
+    """Return Google Cloud location from standard environment variable or 'global'."""
+    if env_loc := os.environ.get("GOOGLE_CLOUD_LOCATION"):
+        return env_loc.strip() or "global"
+    return "global"
+
+
 def resolve_registry_project(
     cli_project: str | None = None,
     config_path: Path | str | None = None,
@@ -244,15 +260,13 @@ def resolve_registry_project(
     Precedence:
         1. Explicit CLI argument (--project)
         2. reach.toml [registry] project
-        3. Environment variable ($GOOGLE_CLOUD_PROJECT or $GCP_PROJECT_ID)
+        3. Environment variable ($GOOGLE_CLOUD_PROJECT or $GOOGLE_CLOUD_QUOTA_PROJECT)
     """
     if cli_project:
         return cli_project.strip()
     if from_toml := _load_section("registry", RegistrySettings, config_path).project:
         return from_toml.strip()
-    if env_proj := os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT_ID"):
-        return env_proj.strip()
-    return None
+    return _env_google_project()
 
 
 def resolve_registry_location(
@@ -267,10 +281,7 @@ def resolve_registry_location(
         reg_sec = _load_section("registry", RegistrySettings, target)
         if reg_sec.location:
             return reg_sec.location.strip()
-    env_loc = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("GCP_LOCATION")
-    if env_loc:
-        return env_loc.strip()
-    return "global"
+    return _env_google_location()
 
 
 def agent_profiles(config_path: Path | str | None = None) -> dict[str, AgentProfile]:
@@ -996,7 +1007,7 @@ class RunConfig(BaseModel):
 
         if (
             isinstance(resolved, RuntimeSettings)
-            and resolved.agent == "antigravity-sdk"
+            and resolved.agent in ("antigravity-sdk", "antigravity-cli")
             and config is not None
             and config.registry.project
             and not resolved.options.get("project")
@@ -1020,7 +1031,7 @@ class RunConfig(BaseModel):
         if resolved.project:
             project: str | None = resolved.project.strip()
         elif config is not None:
-            project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT_ID")
+            project = _env_google_project()
         else:
             project = resolve_registry_project(None)
 
@@ -1028,8 +1039,7 @@ class RunConfig(BaseModel):
         if explicit_loc:
             location = explicit_loc.strip()
         elif config is not None:
-            env_loc = os.environ.get("GOOGLE_CLOUD_LOCATION") or os.environ.get("GCP_LOCATION")
-            location = env_loc.strip() if env_loc else "global"
+            location = _env_google_location()
         else:
             location = resolve_registry_location(None)
         return resolved.model_copy(update={"project": project, "location": location})
@@ -1076,7 +1086,7 @@ class RunConfig(BaseModel):
                     sec_dump.pop("agent", None)
                 if section_name == "optimize" and "workers" not in section_model.model_fields_set:
                     sec_dump.pop("workers", None)
-                if section_name == "lint":
+                if isinstance(section_model, LintSettings):
                     if (
                         self.catalog.mode in {CatalogMode.NEIGHBORHOOD, CatalogMode.SINGLETON}
                         and section_model.catalog_budget_chars is None

@@ -22,10 +22,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -152,7 +151,7 @@ def test_pi_options_defaults() -> None:
     assert opts.tools == "read"
     assert opts.model == agent_default_model("pi")
     assert opts.provider == "google"
-    assert opts.thinking is None
+    assert opts.effort is None
     assert opts.use_symlinks is True
     assert opts.no_themes is True
     assert opts.no_extensions is True
@@ -168,7 +167,7 @@ def test_build_command_arguments(tmp_path: Path) -> None:
         options={
             "model": "gemini-3.5-flash",
             "provider": "google",
-            "thinking": "high",
+            "effort": "high",
         },
     )
     rt = PiRuntime(settings)
@@ -678,22 +677,6 @@ def test_pi_select_records_duration_ms(
     assert outcome.duration_ms >= 1
 
 
-@pytest.mark.parametrize(
-    "level",
-    ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-)
-def test_pi_options_thinking_validation(level: str) -> None:
-    """Verify PiOptions accepts valid Pi 1.0 thinking levels."""
-    opts = PiOptions(thinking=cast("Any", level))
-    assert opts.thinking == level
-
-
-def test_pi_options_thinking_invalid() -> None:
-    """Verify PiOptions rejects invalid thinking level with ValidationError."""
-    with pytest.raises(ValidationError):
-        PiOptions(thinking=cast("Any", "extreme"))
-
-
 def test_pi_options_mcp_config_coercion(tmp_path: Path) -> None:
     """Verify PiOptions coerces mcp_config string to canonical absolute Path."""
     mcp_path_str = str(tmp_path / "test_mcp.json")
@@ -823,8 +806,8 @@ def test_build_command_no_extensions_and_mcp_config(tmp_path: Path) -> None:
     [
         ({"effort": "none"}, None),
         ({"effort": "off"}, "off"),
-        ({"thinking": "off"}, "off"),
-        ({"thinking": "low"}, "low"),
+        ({"effort": "low"}, "low"),
+        ({"effort": "high"}, "high"),
     ],
 )
 def test_build_command_thinking_and_effort(
@@ -864,7 +847,7 @@ def test_pi_options_common_cli_args(tmp_path: Path) -> None:
         model="gemini-3.8-flash",
         provider="google",
         api_key="secret-key",
-        thinking="low",
+        effort="low",
         no_extensions=True,
         mcp_config=mcp_file,
     )
@@ -911,7 +894,21 @@ def test_pi_options_resolve_thinking_invalid() -> None:
 
 def test_pi_options_common_cli_args_explicit_thinking() -> None:
     """Verify common_cli_args respects pre-resolved thinking parameter."""
-    opts = PiOptions(thinking="low")
+    opts = PiOptions(effort="low")
     args = opts.common_cli_args(thinking="high")
     assert "--thinking" in args
     assert args[args.index("--thinking") + 1] == "high"
+
+
+@pytest.mark.parametrize("target_cls", [PiRuntime, PiGenerator])
+def test_pi_custom_agent_dir_isolation(
+    tmp_path: Path,
+    target_cls: type[PiRuntime | PiGenerator],
+) -> None:
+    """Verify PiRuntime and PiGenerator accept direct options and honor custom agent_dir."""
+    custom_agent_dir = tmp_path / "pi_isolated_agent"
+    opts = PiOptions(model="gemini-3.8-flash", agent_dir=custom_agent_dir)
+    instance = target_cls(options=opts)
+    assert instance.options == opts
+    env = instance.build_env()
+    assert env["PI_CODING_AGENT_DIR"] == str(custom_agent_dir)

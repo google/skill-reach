@@ -138,9 +138,7 @@ def _can_bypass(
         return True
     if yes or trusted:
         return True
-    return os.environ.get("REACH_YES", "").lower() in ("1", "true", "yes") or os.environ.get(
-        "REACH_FORCE", ""
-    ).lower() in ("1", "true", "yes")
+    return os.environ.get("REACH_YES", "").lower() in ("1", "true", "yes")
 
 
 def confirm_skill_execution(

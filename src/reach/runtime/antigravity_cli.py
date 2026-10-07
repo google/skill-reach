@@ -20,18 +20,22 @@ import atexit
 import contextlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self, override
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 from pydantic import ValidationError as PydanticValidationError
 
-from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings, resolve_path
+from reach.config import (
+    DEFAULT_GEMINI_MODEL,
+    RuntimeSettings,
+    resolve_path,
+)
+from reach.registry import find_adc_path
 from reach.runtime import (
     AntigravityOptions,
     AntigravityRuntime,
@@ -43,7 +47,7 @@ from reach.runtime import (
     agent_default_model,
 )
 from reach.runtime._env import (
-    detect_model_provider,
+    DEFAULT_BLOCKED_ENV_VARS,
     sync_google_and_gemini_keys,
 )
 from reach.runtime._fs import (
@@ -54,7 +58,6 @@ from reach.runtime._subprocess import (
     iter_json_lines,
 )
 from reach.runtime.generator import BaseTextGenerator
-from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -82,24 +85,58 @@ DENIED_PERMISSION_ACTIONS: tuple[str, ...] = (
 EXPECTED_STATUSES = frozenset({SessionStatus.SUCCESS})
 
 
-def normalize_agy_model(model: str) -> str:
-    """Normalize model slug into standard naming expected by agy CLI."""
-    match = re.match(
-        r"^gemini-flash-([0-9.]+)(?:-(low|medium|high))?$",
-        model.strip(),
-        re.IGNORECASE,
-    )
-    if match:
-        version, tier = match.groups()
-        if tier:
-            return f"gemini-{version}-flash-{tier.lower()}"
-        return f"gemini-{version}-flash"
-    return model
-
-
 def _isolated_settings_path(home_dir: Path) -> Path:
     """Return the filesystem location of the settings.json file under home_dir."""
     return home_dir / ".gemini" / "antigravity-cli" / "settings.json"
+
+
+def _isolated_adc_path(home_dir: Path) -> Path:
+    """Return the filesystem location of the ADC credentials file under home_dir."""
+    return resolve_path(home_dir) / ".config" / "gcloud" / "application_default_credentials.json"
+
+
+def _provision_isolated_adc(
+    home_dir: Path,
+    *,
+    project_override: str | None = None,
+) -> Path | None:
+    """Copy host ADC file into isolated home_dir with 0600 permissions, if available."""
+    src = find_adc_path()
+    if src is None or not src.is_file():
+        return None
+    dst = _isolated_adc_path(home_dir)
+    ensure_private_directory(dst.parent)
+    if dst.is_symlink():
+        dst.unlink()
+    if resolve_path(src) != dst or project_override:
+        raw_bytes = src.read_bytes()
+        if project_override:
+            try:
+                payload = json.loads(raw_bytes.decode("utf-8"))
+                if isinstance(payload, dict):
+                    payload["quota_project_id"] = project_override
+                    raw_bytes = json.dumps(payload, indent=2).encode("utf-8")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(dst, flags, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw_bytes)
+    if not dst.is_symlink():
+        dst.chmod(0o600)
+    return dst
+
+
+def _unlink_isolated_adc(home_dir: Path | None) -> None:
+    """Remove isolated ADC file from home_dir if present."""
+    if home_dir is None:
+        return
+    adc_file = _isolated_adc_path(home_dir)
+    with contextlib.suppress(OSError):
+        if adc_file.is_file() or adc_file.is_symlink():
+            adc_file.unlink()
 
 
 def _conversation_state_paths(home_dir: Path) -> tuple[Path, Path]:
@@ -123,7 +160,9 @@ def _ensure_isolated_settings(
     settings: dict[str, Any] = {}
     if path.exists():
         settings = json.loads(path.read_text())
-    permissions: dict[str, Any] = {"deny": list(DENIED_PERMISSION_ACTIONS)}
+    permissions: dict[str, Any] = {
+        "deny": [*DENIED_PERMISSION_ACTIONS, f"read_file({resolved_home / '.config'})"]
+    }
     if allow_read is not None:
         permissions["allow"] = [f"read_file({resolve_path(allow_read)})"]
     settings["permissions"] = permissions
@@ -145,11 +184,76 @@ class AntigravityCliOptions(AntigravityOptions, CliOptions):
     )
     home_dir: Path | None = None
     isolation_dir_field: ClassVar[str | None] = "home_dir"
-    model_provider: str | None = None
     disable_slash_commands: bool = True
     dangerously_skip_permissions: bool = True
     print_timeout: str | None = None
-    go_max_procs: int = 4
+    go_max_procs: PositiveInt = 4
+
+    def common_cli_args(
+        self,
+        *,
+        timeout_s: int | None,
+        effort: str | None,
+        schema: str | None = None,
+    ) -> list[str]:
+        """Assemble shared CLI flags for Antigravity CLI runtime and generator."""
+        args: list[str] = []
+        if self.dangerously_skip_permissions:
+            args.append("--dangerously-skip-permissions")
+        if self.disable_slash_commands:
+            args.append("--disable-slash-commands")
+        effective_timeout = timeout_s or 200
+        timeout_val = self.print_timeout or f"{round(effective_timeout)}s"
+        args += ["--print-timeout", timeout_val]
+        effective_schema = schema if schema is not None else self.json_schema
+        if effective_schema:
+            args += ["--json-schema", effective_schema]
+        if effort:
+            args += ["--effort", effort]
+        return [*args, *self.extra_args]
+
+
+def _apply_agy_cli_env(
+    env: dict[str, str],
+    options: AntigravityCliOptions,
+    home_dir: Path,
+    blocked_env_vars: Iterable[str] | None = None,
+) -> dict[str, str]:
+    """Apply Antigravity CLI environment variables, ADC credentials, and API keys."""
+    env["HOME"] = str(home_dir)
+    explicit_blocked = set(blocked_env_vars or ())
+    if options.effective_vertex:
+        env["AGY_ADC_AUTH"] = "true"
+        if proj := options.effective_project:
+            env["GOOGLE_CLOUD_PROJECT"] = proj
+            env["GOOGLE_CLOUD_QUOTA_PROJECT"] = proj
+        if loc := options.effective_location:
+            env["GOOGLE_CLOUD_LOCATION"] = loc
+        if "GOOGLE_APPLICATION_CREDENTIALS" not in explicit_blocked:
+            isolated_adc = _provision_isolated_adc(
+                home_dir,
+                project_override=options.effective_project,
+            )
+            if isolated_adc is not None:
+                env["GOOGLE_APPLICATION_CREDENTIALS"] = str(isolated_adc)
+        else:
+            env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+        if not options.api_key:
+            env.pop("GEMINI_API_KEY", None)
+            env.pop("GOOGLE_API_KEY", None)
+    else:
+        env.pop("AGY_ADC_AUTH", None)
+        effective_blocked = (
+            explicit_blocked if blocked_env_vars is not None else DEFAULT_BLOCKED_ENV_VARS
+        )
+        if "GOOGLE_APPLICATION_CREDENTIALS" in effective_blocked:
+            env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+    if key := options.effective_api_key:
+        env["GEMINI_API_KEY"] = key
+        env["GOOGLE_API_KEY"] = key
+    sync_google_and_gemini_keys(env)
+    env["GOMAXPROCS"] = str(options.go_max_procs)
+    return env
 
 
 class AntigravityUsage(BaseModel):
@@ -161,11 +265,6 @@ class AntigravityUsage(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
 
-    @property
-    def prompt_tokens(self) -> int | None:
-        """Return input prompt tokens."""
-        return self.input_tokens
-
 
 def _extract_usage_prompt_tokens(usage_obj: object) -> int | None:
     """Extract input prompt tokens from usage object via AntigravityUsage schema."""
@@ -173,47 +272,65 @@ def _extract_usage_prompt_tokens(usage_obj: object) -> int | None:
         return None
     try:
         usage = AntigravityUsage.model_validate(usage_obj)
-        return usage.prompt_tokens
+        return usage.input_tokens
     except PydanticValidationError:
         return None
 
 
-class ToolAttempt(BaseModel):
-    """Record an observed tool invocation attempt during query execution."""
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    path: str | None = None
-
-
-class StreamSummary(SessionSummary):
-    """Aggregate tool attempts and outcome metrics from streaming event logs."""
-
-    @property
-    def tool_attempts(self) -> tuple[ToolAttempt, ...]:
-        """Return tool attempts derived from structured tool calls."""
-        return tuple(ToolAttempt(name=c.name, path=c.target_path) for c in self.tool_calls)
+_SENSITIVE_CREDENTIAL_PATH_PARTS: frozenset[str] = frozenset(
+    {
+        "application_default_credentials.json",
+        ".gcloud",
+        ".config",
+    }
+)
 
 
-def _is_inspection_tool_allowed(attempt: ToolAttempt | ToolCallInfo, workdir: Path | None) -> bool:
+def _is_sensitive_credential_path(
+    path_str: str | None,
+    home_dir: Path | None = None,
+) -> bool:
+    """Return True if a raw or resolved path references sensitive credential locations."""
+    if not path_str:
+        return False
+    raw_path = Path(path_str)
+    resolved = resolve_path(path_str)
+    if home_dir is not None:
+        cfg_root = resolve_path(home_dir) / ".config"
+        if resolved == cfg_root or resolved.is_relative_to(cfg_root):
+            return True
+    raw_parts = set(raw_path.parts)
+    resolved_parts = set(resolved.parts)
+    return bool((raw_parts | resolved_parts) & _SENSITIVE_CREDENTIAL_PATH_PARTS)
+
+
+def _is_inspection_tool_allowed(
+    attempt: ToolCallInfo,
+    workdir: Path | None,
+    home_dir: Path | None = None,
+) -> bool:
     """Determine whether an inspection tool path complies with workspace sandbox."""
     if workdir is None:
         return False
     if attempt.path is None:
         return True
+    if _is_sensitive_credential_path(attempt.path, home_dir=home_dir):
+        return False
     resolved = resolve_path(attempt.path)
     return resolved == workdir or resolved.is_relative_to(workdir)
 
 
 def _is_tool_allowed(
-    attempt: ToolAttempt | ToolCallInfo,
+    attempt: ToolCallInfo,
     resident_bases: Sequence[Path],
     workdir: Path | None,
     allowed_tools: frozenset[str],
+    home_dir: Path | None = None,
 ) -> bool:
     """Determine whether a single tool attempt complies with sandbox policies."""
     if attempt.name not in allowed_tools:
+        return False
+    if _is_sensitive_credential_path(attempt.path, home_dir=home_dir):
         return False
 
     if attempt.name == VIEW_TOOL:
@@ -223,16 +340,17 @@ def _is_tool_allowed(
         return any(resolved.is_relative_to(base) for base in resident_bases)
 
     if attempt.name in INSPECTION_TOOLS:
-        return _is_inspection_tool_allowed(attempt, workdir)
+        return _is_inspection_tool_allowed(attempt, workdir, home_dir=home_dir)
 
     return True
 
 
 def _leaked_tools(
-    attempts: Iterable[ToolAttempt | ToolCallInfo],
+    attempts: Iterable[ToolCallInfo],
     resident_dirs: Iterable[Path | str],
     workdir: Path | str | None = None,
     allowed_tools: Iterable[str] | None = None,
+    home_dir: Path | None = None,
 ) -> tuple[str, ...]:
     """Identify tool calls that violate sandbox isolation boundaries."""
     if allowed_tools is None:
@@ -246,7 +364,13 @@ def _leaked_tools(
     leaked = {
         attempt.name
         for attempt in attempts
-        if not _is_tool_allowed(attempt, resolved_bases, resolved_workdir, allowed_set)
+        if not _is_tool_allowed(
+            attempt,
+            resolved_bases,
+            resolved_workdir,
+            allowed_set,
+            home_dir=home_dir,
+        )
     }
     return tuple(sorted(leaked))
 
@@ -297,19 +421,16 @@ def _extract_step_thought(event: dict[str, Any]) -> str | None:
     return None
 
 
-StrippedStr = Annotated[str, StringConstraints(strip_whitespace=True)]
-
-
 class _AgyResultEvent(BaseModel):
     """Represent parsed outcome metrics and status from a CLI result event."""
 
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="ignore", str_strip_whitespace=True)
 
     status: str = "unknown"
     duration_ms: NonNegativeInt | None = None
     selected_skill: str | None = None
-    reasoning: StrippedStr | None = None
-    error: StrippedStr | None = None
+    reasoning: str | None = None
+    error: str | None = None
     prompt_tokens: NonNegativeInt | None = None
 
 
@@ -367,8 +488,8 @@ def parse_stream(
     lines: Iterable[str],
     resident: Iterable[str] = (),
     early_exit: bool = False,
-) -> StreamSummary:
-    """Parse streaming event lines into a StreamSummary model."""
+) -> SessionSummary:
+    """Parse streaming event lines into a SessionSummary model."""
     attempts: dict[tuple[str, str | None], ToolCallInfo] = {}
     invoked_skills: list[str] = []
     reasoning: list[str] = []
@@ -411,7 +532,7 @@ def parse_stream(
         result_error = None
 
     tool_calls = tuple(attempts.values())
-    return StreamSummary(
+    return SessionSummary(
         tool_calls=tool_calls,
         invoked_skills=tuple(invoked_skills),
         early_exit=early_exit,
@@ -425,7 +546,55 @@ def parse_stream(
     )
 
 
-class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityRuntime):
+class _IsolatedHomeMixin:
+    """Manage an isolated Antigravity CLI home directory and its lifecycle."""
+
+    options: AntigravityCliOptions
+    model: str
+    _owns_home_dir: bool = False
+
+    def _init_isolated_home(self, prefix: str) -> None:
+        """Allocate an isolated home directory if unset and write initial settings.json."""
+        self._owns_home_dir = self.options.home_dir is None
+        if self._owns_home_dir:
+            home_dir = Path(tempfile.mkdtemp(prefix=prefix))
+            self.options = self.options.model_copy(update={"home_dir": home_dir})
+            atexit.register(self.cleanup)
+        _ensure_isolated_settings(
+            self.home_dir,
+            model_provider=self.options.resolve_model_provider(self.model),
+        )
+
+    @property
+    def home_dir(self) -> Path:
+        """Return the guaranteed isolated home directory path."""
+        if self.options.home_dir is None:
+            msg = "Isolated home directory has not been configured"
+            raise ValueError(msg)
+        return self.options.home_dir
+
+    def cleanup(self) -> None:
+        """Remove isolated ADC credentials and temporary home directory if owned."""
+        opts = getattr(self, "options", None)
+        home_dir = opts.home_dir if opts is not None else None
+        _unlink_isolated_adc(home_dir)
+        if getattr(self, "_owns_home_dir", False) and home_dir is not None:
+            if home_dir.is_dir():
+                shutil.rmtree(home_dir, ignore_errors=True)
+            self._owns_home_dir = False
+            with contextlib.suppress(Exception):
+                atexit.unregister(self.cleanup)
+
+    def __del__(self) -> None:
+        """Clean up resources when garbage collected."""
+        self.cleanup()
+
+
+class AntigravityCliRuntime(
+    _IsolatedHomeMixin,
+    CliAgentRuntime[AntigravityCliOptions],
+    AntigravityRuntime[AntigravityCliOptions],
+):
     """Drive Antigravity CLI (agy) subprocess for skill selection probes."""
 
     name = "antigravity-cli"
@@ -439,43 +608,14 @@ class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityR
         options: AntigravityCliOptions | None = None,
     ) -> None:
         """Initialize agent settings and isolated configuration directory."""
-        if options is not None:
-            opts_dict = options.model_dump()
-            self.settings = settings or RuntimeSettings(agent=self.name, options=opts_dict)
-        else:
-            self.settings = settings or RuntimeSettings(agent=self.name)
-            options = AntigravityCliOptions.model_validate(dict(self.settings.options))
-        self._temp_home = False
-        if options.home_dir is None:
-            home_dir = Path(tempfile.mkdtemp(prefix="reach-agy-home-"))
-            options = options.model_copy(update={"home_dir": home_dir})
-            self._temp_home = True
-            atexit.register(self.cleanup)
-        self.options = options
-        self._resident: tuple[str, ...] = ()
-        _ensure_isolated_settings(
-            self.home_dir,
-            model_provider=self.effective_model_provider,
-        )
+        super().__init__(settings=settings, options=options)
+        self._init_isolated_home("reach-agy-home-")
 
     @override
     def clone_isolated(self) -> Self:
         """Create a thread-local isolated clone with a dedicated temporary home directory."""
         cloned_options = self.options.model_copy(update={"home_dir": None})
         return type(self)(settings=self.settings, options=cloned_options)
-
-    def cleanup(self) -> None:
-        """Remove isolated temporary home directory if automatically created."""
-        if getattr(self, "_temp_home", False) and self.options.home_dir is not None:
-            if self.options.home_dir.is_dir():
-                shutil.rmtree(self.options.home_dir, ignore_errors=True)
-            self._temp_home = False
-            with contextlib.suppress(Exception):
-                atexit.unregister(self.cleanup)
-
-    def __del__(self) -> None:
-        """Clean up resources when garbage collected."""
-        self.cleanup()
 
     def __enter__(self) -> Self:
         """Enter runtime context."""
@@ -485,65 +625,47 @@ class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityR
         """Exit runtime context and clean up resources."""
         self.cleanup()
 
-    @property
-    def home_dir(self) -> Path:
-        """Return the guaranteed isolated home directory path."""
-        if self.options.home_dir is None:
-            msg = "Isolated home directory has not been configured"
-            raise ValueError(msg)
-        return self.options.home_dir
-
     @override
     def _post_install(self, workdir: Path) -> None:
         """Grant required filesystem permissions and workspace trusts."""
+        skills_root = resolve_path(self.skills_dir(workdir))
+        resolved_home = resolve_path(self.home_dir)
+        if resolved_home == skills_root or resolved_home.is_relative_to(skills_root):
+            msg = "home_dir must not reside inside workspace skills_dir"
+            raise ValueError(msg)
         _ensure_isolated_settings(
             self.home_dir,
             trust=workdir,
-            allow_read=self.skills_dir(workdir),
-            model_provider=self.effective_model_provider,
+            allow_read=skills_root,
+            model_provider=self.options.resolve_model_provider(self.model),
         )
 
     def clean_conversation_state(self) -> None:
-        """Purge persisted conversation records and SQLite summaries."""
+        """Purge persisted conversation records, SQLite summaries, and isolated ADC file."""
+        _unlink_isolated_adc(self.home_dir)
         conversations, summaries_db = _conversation_state_paths(self.home_dir)
         if conversations.is_dir():
             shutil.rmtree(conversations)
         if summaries_db.exists():
             summaries_db.unlink()
 
-    @property
-    def normalized_model(self) -> str:
-        """Return model identifier normalized for agy CLI compatibility."""
-        return normalize_agy_model(self.options.model)
-
     def build_command(self, query_text: str) -> list[str]:
         """Assemble command-line arguments for executing a probe."""
         options = self.options
-        command = [
+        return [
             options.executable,
             "-p",
             query_text,
             "--model",
-            self.normalized_model,
+            self.model,
             "--output-format",
             "stream-json",
             "--new-project",
+            *options.common_cli_args(
+                timeout_s=self.timeout_s,
+                effort=self.effective_effort,
+            ),
         ]
-        if options.dangerously_skip_permissions:
-            command.append("--dangerously-skip-permissions")
-        if options.disable_slash_commands:
-            command.append("--disable-slash-commands")
-        timeout_s = self.timeout_s or 200
-        timeout_val = options.print_timeout or f"{round(timeout_s)}s"
-        command += ["--print-timeout", timeout_val]
-        if options.json_schema:
-            command += [
-                "--json-schema",
-                options.json_schema,
-            ]
-        if self.effective_effort:
-            command += ["--effort", self.effective_effort]
-        return [*command, *options.extra_args]
 
     @override
     def parse_stream(
@@ -575,15 +697,13 @@ class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityR
 
     @override
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
-        """Assemble process environment with API keys and isolated home directory."""
-        env = super().build_env(workdir)
-        key = self.effective_api_key
-        if key:
-            env["GEMINI_API_KEY"] = key
-            env["GOOGLE_API_KEY"] = key
-        sync_google_and_gemini_keys(env)
-        env["GOMAXPROCS"] = str(self.options.go_max_procs)
-        return env
+        """Assemble process environment with API keys, ADC credentials, and isolated home."""
+        return _apply_agy_cli_env(
+            super().build_env(workdir),
+            self.options,
+            self.home_dir,
+            self.blocked_env_vars,
+        )
 
     @override
     def validate_outcome(
@@ -601,6 +721,7 @@ class AntigravityCliRuntime(CliAgentRuntime[AntigravityCliOptions], AntigravityR
             self.resident_skill_paths(workdir),
             workdir=resolve_path(workdir),
             allowed_tools=allowed,
+            home_dir=self.home_dir,
         )
         if leaked:
             return f"tool leak: {', '.join(leaked)}"
@@ -622,7 +743,7 @@ class _AntigravityCompletion(BaseModel):
     response: str
 
 
-class AntigravityCliGenerator(BaseTextGenerator[AntigravityCliOptions]):
+class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityCliOptions]):
     """Generate text completions using the Antigravity CLI."""
 
     name: str = "antigravity-cli"
@@ -643,72 +764,17 @@ class AntigravityCliGenerator(BaseTextGenerator[AntigravityCliOptions]):
         else:
             opts = AntigravityCliOptions()
         super().__init__(model=opts.model or model, timeout_s=timeout_s, options=opts)
-        self.home_dir = opts.home_dir or Path(tempfile.mkdtemp(prefix="reach-agy-draft-"))
-        self._owns_home_dir = opts.home_dir is None
-        if self._owns_home_dir:
-            atexit.register(self.cleanup)
-        _ensure_isolated_settings(
-            self.home_dir,
-            model_provider=self.effective_model_provider,
-        )
-
-    def cleanup(self) -> None:
-        """Clean temporary home directory if created by this generator instance."""
-        if getattr(self, "_owns_home_dir", False) and self.home_dir.exists():
-            shutil.rmtree(self.home_dir, ignore_errors=True)
-            self._owns_home_dir = False
-            with contextlib.suppress(Exception):
-                atexit.unregister(self.cleanup)
-
-    def __del__(self) -> None:
-        """Clean temporary home directory if created by this generator instance."""
-        self.cleanup()
-
-    @property
-    def effective_model_provider(self) -> str | None:
-        """Return configured model_provider or auto-detect 'gemini' when API keys are present."""
-        return detect_model_provider(
-            self.model,
-            getattr(self.options, "model_provider", None),
-            api_key=self.options.api_key,
-        )
-
-    @property
-    def effective_api_key(self) -> str | None:
-        """Return configured API key or probe environment for fallback."""
-        return (
-            str(self.options.api_key)
-            if self.options.api_key
-            else os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        )
+        self._init_isolated_home("reach-agy-draft-")
 
     @override
     def build_env(self) -> dict[str, str]:
-        """Assemble process environment with API keys and isolated home directory."""
-        env = super().build_env()
-        env["HOME"] = str(self.home_dir)
-        key = self.effective_api_key
-        if key:
-            env["GEMINI_API_KEY"] = key
-            env["GOOGLE_API_KEY"] = key
-        sync_google_and_gemini_keys(env)
-        env["GOMAXPROCS"] = str(self.options.go_max_procs)
-        return env
-
-    @property
-    def normalized_model(self) -> str:
-        """Map canonical models to Antigravity CLI naming conventions."""
-        return normalize_agy_model(self.model)
-
-    @property
-    def effective_effort(self) -> str | None:
-        """Return configured reasoning effort or default from model profile."""
-        if self.options.effort:
-            return None if self.options.effort.lower() in ("none", "off") else self.options.effort
-        try:
-            return model_profile(self.model).effort
-        except (KeyError, ValueError):
-            return None
+        """Assemble process environment with API keys, ADC credentials, and isolated home."""
+        return _apply_agy_cli_env(
+            super().build_env(),
+            self.options,
+            self.home_dir,
+            self.blocked_env_vars,
+        )
 
     def build_completion_command(
         self,
@@ -719,27 +785,19 @@ class AntigravityCliGenerator(BaseTextGenerator[AntigravityCliOptions]):
         """Assemble command-line arguments for raw text completion."""
         del prompt  # Prompt is passed via stdin to avoid Linux MAX_ARG_STRLEN limits
         options = self.options
-        cmd = [
+        return [
             options.executable,
             "--model",
-            self.normalized_model,
+            self.model,
             "--output-format",
             "json",
             "--new-project",
+            *options.common_cli_args(
+                timeout_s=self.timeout_s,
+                effort=self.effective_effort,
+                schema=schema,
+            ),
         ]
-        if options.dangerously_skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
-        if options.disable_slash_commands:
-            cmd.append("--disable-slash-commands")
-        timeout_s = self.timeout_s or 200
-        timeout_val = options.print_timeout or f"{round(timeout_s)}s"
-        cmd += ["--print-timeout", timeout_val]
-        effective_schema = schema if schema is not None else options.json_schema
-        if effective_schema:
-            cmd += ["--json-schema", effective_schema]
-        if self.effective_effort:
-            cmd += ["--effort", self.effective_effort]
-        return [*cmd, *options.extra_args]
 
     @override
     def complete(

@@ -582,3 +582,18 @@ def test_parse_goose_output_prompt_tokens_and_gemini_provider_normalization(
     assert summary.invoked_skills == ("alpha",)
     assert summary.prompt_tokens == 725
     assert summary.cost_usd == pytest.approx(0.00064)
+
+
+@pytest.mark.parametrize("target_cls", [GooseRuntime, GooseGenerator])
+def test_goose_custom_home_dir_isolation(
+    tmp_path: Path,
+    target_cls: type[GooseRuntime | GooseGenerator],
+) -> None:
+    """Verify GooseRuntime and GooseGenerator configure HOME and XDG_* when home_dir is set."""
+    custom_home = tmp_path / "goose_isolated_home"
+    instance = target_cls(options=GooseOptions(home_dir=custom_home))
+    env = instance.build_env()
+    assert env["HOME"] == str(custom_home)
+    assert env["XDG_CONFIG_HOME"] == str(custom_home / ".config")
+    assert env["XDG_DATA_HOME"] == str(custom_home / ".local" / "share")
+    assert env["XDG_STATE_HOME"] == str(custom_home / ".local" / "state")
