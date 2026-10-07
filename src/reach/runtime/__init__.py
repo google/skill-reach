@@ -32,7 +32,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from reach.config import (
     KEYWORD_AGENT,
     RuntimeSettings,
-    StrippedStr,
     agent_default_model,
     agent_profiles,
     resolve_path,
@@ -104,7 +103,7 @@ __all__ = [
 class AgentOptions(BaseModel):
     """Base configuration common to all agent drivers."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     model: str = ""
     effort: str | None = None
@@ -144,8 +143,8 @@ class VertexOptions(AgentOptions):
     """Configure Google Cloud Vertex AI and Application Default Credentials options."""
 
     vertex: bool | None = None
-    project: StrippedStr | None = None
-    location: StrippedStr | None = None
+    project: str | None = None
+    location: str | None = None
 
 
 class AntigravityOptions(VertexOptions):

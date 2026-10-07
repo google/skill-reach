@@ -33,5 +33,4 @@ Configuration models, settings resolution, and path expansions.
         - RetrievalSettings
         - RunConfig
         - RuntimeSettings
-        - StrippedStr
         - StudySettings

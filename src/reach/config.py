@@ -31,7 +31,6 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
-    StringConstraints,
     ValidationError,
     field_validator,
     model_validator,
@@ -39,9 +38,6 @@ from pydantic import (
 
 from reach.models import CatalogMode
 from reach.uncertainty import DEFAULT_CONFIDENCE, DEFAULT_POWER
-
-#: Annotated string type that automatically strips leading and trailing whitespace.
-StrippedStr = Annotated[str, StringConstraints(strip_whitespace=True)]
 
 __all__ = [
     "DEFAULT_CATALOG_BUDGET_CHARS",
@@ -62,7 +58,6 @@ __all__ = [
     "RetrievalSettings",
     "RunConfig",
     "RuntimeSettings",
-    "StrippedStr",
     "StudySettings",
     "agent_default_model",
     "agent_profiles",

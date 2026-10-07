@@ -33,7 +33,6 @@ from pydantic import ValidationError as PydanticValidationError
 from reach.config import (
     DEFAULT_GEMINI_MODEL,
     RuntimeSettings,
-    StrippedStr,
     resolve_path,
 )
 from reach.registry import find_adc_path
@@ -187,7 +186,7 @@ class AntigravityCliOptions(AntigravityOptions, CliOptions):
     isolation_dir_field: ClassVar[str | None] = "home_dir"
     disable_slash_commands: bool = True
     dangerously_skip_permissions: bool = True
-    print_timeout: StrippedStr | None = None
+    print_timeout: str | None = None
     go_max_procs: PositiveInt = 4
 
     def common_cli_args(
@@ -425,13 +424,13 @@ def _extract_step_thought(event: dict[str, Any]) -> str | None:
 class _AgyResultEvent(BaseModel):
     """Represent parsed outcome metrics and status from a CLI result event."""
 
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="ignore", str_strip_whitespace=True)
 
     status: str = "unknown"
     duration_ms: NonNegativeInt | None = None
     selected_skill: str | None = None
-    reasoning: StrippedStr | None = None
-    error: StrippedStr | None = None
+    reasoning: str | None = None
+    error: str | None = None
     prompt_tokens: NonNegativeInt | None = None
 
 
