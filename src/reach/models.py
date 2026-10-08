@@ -41,7 +41,6 @@ __all__ = [
     "CatalogMode",
     "DisclosureState",
     "InvocationPattern",
-    "NonEmptyStr",
     "ProbeResult",
     "Provenance",
     "Query",
@@ -142,7 +141,6 @@ class Skill(BaseModel):
         return value
 
 
-type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 type _NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 

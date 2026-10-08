@@ -34,6 +34,7 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    StringConstraints,
     ValidationError,
     model_validator,
 )
@@ -57,15 +58,7 @@ from reach.metrics import (
     decompose_pass_rate_drop,
     score_trajectory,
 )
-from reach.models import (
-    Catalog,
-    CatalogMode,
-    NonEmptyStr,
-    ProbeResult,
-    Query,
-    QueryKind,
-    Skill,
-)
+from reach.models import Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
@@ -97,6 +90,7 @@ logger = logging.getLogger(__name__)
 
 type UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
 type KneePmf = dict[PositiveInt, UnitInterval]
+type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ReplicateCollisionDiagnostic(BaseModel):
