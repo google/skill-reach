@@ -1051,13 +1051,11 @@ def test_claude_build_env_applies_location_and_project_options(
     assert env["ANTHROPIC_VERTEX_PROJECT_ID"] == "custom-proj"
 
 
-def test_claude_code_parse_stream_extracts_prompt_tokens(
-    runtime: ClaudeCodeRuntime,
-) -> None:
-    """Verify parse_stream extracts prompt_tokens from assistant and result usage fields."""
-    stream = "\n".join(
-        [
-            json.dumps(
+@pytest.mark.parametrize(
+    ("events", "early_exit", "expected_tokens", "expected_skills"),
+    [
+        (
+            [
                 {
                     "type": "assistant",
                     "message": {
@@ -1075,9 +1073,7 @@ def test_claude_code_parse_stream_extracts_prompt_tokens(
                             "output_tokens": 45,
                         },
                     },
-                }
-            ),
-            json.dumps(
+                },
                 {
                     "type": "result",
                     "subtype": "success",
@@ -1088,13 +1084,57 @@ def test_claude_code_parse_stream_extracts_prompt_tokens(
                         "cache_read_input_tokens": 4500,
                         "output_tokens": 80,
                     },
-                }
-            ),
-        ]
-    )
-    summary = runtime.parse_stream(stream.splitlines())
-    assert summary.prompt_tokens == 1250 + 300 + 4500
-    assert summary.invoked_skills == ("bigquery-basics",)
+                },
+            ],
+            False,
+            6050,
+            ("bigquery-basics",),
+        ),
+        (
+            [
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_1",
+                        "content": [],
+                        "usage": {"input_tokens": 900, "cache_read_input_tokens": 500},
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_1",
+                        "content": [],
+                        "usage": {"input_tokens": 1000, "cache_read_input_tokens": 500},
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_2",
+                        "content": [],
+                        "usage": {"input_tokens": 1200, "cache_read_input_tokens": 500},
+                    },
+                },
+            ],
+            True,
+            3200,
+            (),
+        ),
+    ],
+)
+def test_claude_code_parse_stream_extracts_prompt_tokens(
+    runtime: ClaudeCodeRuntime,
+    events: list[dict[str, object]],
+    early_exit: bool,
+    expected_tokens: int,
+    expected_skills: tuple[str, ...],
+) -> None:
+    """Verify parse_stream extracts prompt_tokens from assistant and result usage fields."""
+    stream = [json.dumps(e) for e in events]
+    summary = runtime.parse_stream(stream, early_exit=early_exit)
+    assert summary.prompt_tokens == expected_tokens
+    assert summary.invoked_skills == expected_skills
 
 
 def test_claude_usage_schema_validation_and_token_resolution() -> None:

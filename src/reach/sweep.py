@@ -90,6 +90,7 @@ logger = logging.getLogger(__name__)
 
 type UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
 type KneePmf = dict[PositiveInt, UnitInterval]
+type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ReplicateCollisionDiagnostic(BaseModel):
@@ -97,7 +98,7 @@ class ReplicateCollisionDiagnostic(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    query_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    query_id: NonEmptyStr
     expected_skill: str | None = None
     scale: PositiveInt
     failed_replicates: tuple[NonNegativeInt, ...]
@@ -228,7 +229,9 @@ class ScalingStudy(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # 1. Corpus metadata
+    # 1. Corpus & runtime metadata
+    agent: NonEmptyStr | None = None
+    model: NonEmptyStr | None = None
     target_skill: str | None = None
     is_corpus_sweep: bool = False
     catalog_replicates: PositiveInt = 1
@@ -1378,7 +1381,10 @@ def _prepare_sweep_config(
 
     cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
-        cfg = cfg.model_copy(update={"study": cfg.study.model_copy(update=study_update)})
+        validated_study = StudySettings.model_validate(
+            {**cfg.study.model_dump(mode="python"), **study_update}
+        )
+        cfg = cfg.model_copy(update={"study": validated_study})
     return cfg
 
 
@@ -1412,15 +1418,13 @@ def _build_study_result(
     catalog_replicates: int = 1,
     anchor_skills: Sequence[str] | None = None,
     paired_outcomes: PairedTrialOutcomes | None = None,
-    knee_interval: tuple[int, int] | None = None,
-    knee_scale_pmf: Mapping[int, float] | None = None,
-    knee_upper_censored: bool = False,
-    cliff_probability: float | None = None,
-    drop_probability: float | None = None,
+    boot_summary: _BootstrapKneeSummary | None = None,
     steepest_drop_scales: tuple[int, int] | None = None,
     steepest_drop_delta: float | None = None,
     skill_icc: float | None = None,
     replicate_collisions: Sequence[ReplicateCollisionDiagnostic] = (),
+    agent: str | None = None,
+    model: str | None = None,
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
     b_rate = points[0].pass_rate if points else 0.0
@@ -1441,18 +1445,21 @@ def _build_study_result(
     s_size = decomp.sample_size if decomp else 0
     b_iv = Interval.from_tuple(decomp.baseline_ci) if decomp else Interval.zero()
     s_iv = Interval.from_tuple(decomp.scaled_ci) if decomp else Interval.zero()
+    boot = boot_summary or _BootstrapKneeSummary()
 
     return ScalingStudy(
+        agent=agent,
+        model=model,
         target_skill=target,
         is_corpus_sweep=is_corpus,
         catalog_replicates=max(1, catalog_replicates),
         total_corpus_skills=total_skills,
         scales=tuple(evaluated_scales),
         knee_scale=knee,
-        knee_scale_interval=knee_interval,
-        knee_upper_censored=knee_upper_censored,
-        cliff_probability=cliff_probability,
-        drop_probability=drop_probability,
+        knee_scale_interval=boot.interval,
+        knee_upper_censored=boot.upper_censored,
+        cliff_probability=boot.cliff_probability,
+        drop_probability=boot.drop_probability,
         steepest_drop_scales=steepest_drop_scales,
         steepest_drop_delta=steepest_drop_delta,
         baseline_pass_rate=b_rate,
@@ -1470,7 +1477,7 @@ def _build_study_result(
         baseline_interval=b_iv,
         scaled_interval=s_iv,
         anchor_skills=tuple(anchor_skills) if anchor_skills is not None else None,
-        knee_scale_pmf=dict(knee_scale_pmf) if knee_scale_pmf is not None else None,
+        knee_scale_pmf=dict(boot.pmf) if boot.pmf is not None else None,
         paired_outcomes=paired_outcomes,
         replicate_collisions=tuple(replicate_collisions),
         skill_icc=skill_icc,
@@ -2049,6 +2056,8 @@ def _assemble_scaling_study(
     queries_by_id: Mapping[str, Query] | None = None,
     paired_query_outcomes: Mapping[str, _PairedQueryOutcome] | None = None,
     replicate_collisions: Sequence[ReplicateCollisionDiagnostic] = (),
+    agent: str | None = None,
+    model: str | None = None,
 ) -> ScalingStudy:
     """Compute effective noise floor and knee and construct a ScalingStudy."""
     rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
@@ -2095,6 +2104,8 @@ def _assemble_scaling_study(
     catalog_replicates = study_config.catalog_replicates if study_config is not None else 1
 
     return _build_study_result(
+        agent=agent,
+        model=model,
         target=target,
         is_corpus=is_corpus,
         catalog_replicates=catalog_replicates,
@@ -2106,11 +2117,7 @@ def _assemble_scaling_study(
         decomp=decomp,
         anchor_skills=anchor_skills,
         paired_outcomes=paired_outcomes,
-        knee_interval=boot_summary.interval,
-        knee_scale_pmf=boot_summary.pmf,
-        knee_upper_censored=boot_summary.upper_censored,
-        cliff_probability=boot_summary.cliff_probability,
-        drop_probability=boot_summary.drop_probability,
+        boot_summary=boot_summary,
         steepest_drop_scales=steepest_scales,
         steepest_drop_delta=steepest_delta,
         skill_icc=skill_icc,
@@ -2258,45 +2265,45 @@ def _execute_scale_replicates(
 
 def _snapshot_scaling_study(
     *,
-    target: str | None,
-    is_corpus: bool,
+    ctx: _SweepContext,
+    primary_setup: _ReplicateSetup,
+    agent: str | None = None,
+    model: str | None = None,
     actual_scales: Sequence[int],
     points: Sequence[ScalingPoint],
     noise_floor: float | None,
     baseline_results: Sequence[ProbeResult],
     latest_results: Sequence[ProbeResult],
-    total_skills: int,
     decomp: DecompositionResult | None,
-    anchor_skills: Sequence[str] | None,
-    study_config: StudySettings,
     scale_query_sums: Mapping[int, Mapping[str, _QueryOutcome]],
-    queries_by_id: Mapping[str, Query],
     replicates_by_scale: Mapping[int, Sequence[_ScaleReplicateRecord]],
-    scoped_target: str | None,
 ) -> ScalingStudy:
     """Build a partial or final ScalingStudy from accumulated sweep state."""
+    scoped_target = primary_setup.target if not ctx.is_corpus else None
     paired_by_q = _extract_paired_query_outcomes(
-        baseline_results, latest_results, queries_by_id, target_skill=scoped_target
+        baseline_results, latest_results, ctx.raw_query_map, target_skill=scoped_target
     )
     return _assemble_scaling_study(
-        target=target,
-        is_corpus=is_corpus,
+        agent=agent,
+        model=model,
+        target=primary_setup.target,
+        is_corpus=ctx.is_corpus,
         actual_scales=actual_scales,
         points=points,
         noise_floor=noise_floor,
         baseline_count=len(baseline_results),
-        total_skills=total_skills,
+        total_skills=len(ctx.resolved_skills),
         decomp=decomp,
-        anchor_skills=anchor_skills,
+        anchor_skills=primary_setup.resolved_anchors,
         paired_outcomes=_build_paired_outcomes(paired_by_q),
-        study_config=study_config,
+        study_config=ctx.effective_config.study,
         scale_query_sums=scale_query_sums,
-        queries_by_id=queries_by_id,
+        queries_by_id=ctx.raw_query_map,
         paired_query_outcomes=paired_by_q,
         replicate_collisions=_detect_replicate_collisions(
             actual_scales[: len(points)],
             replicates_by_scale,
-            queries_by_id,
+            ctx.raw_query_map,
         ),
     )
 
@@ -2399,6 +2406,25 @@ def run_scaling_sweep(
     scoped_target = primary_setup.target if not is_corpus else None
     scale_workers = max(1, workers)
 
+    agent_val = (resolved_runtime.name or "").strip() or None
+    model_val = (resolved_runtime.model or "").strip() or None
+
+    def _take_snapshot() -> ScalingStudy:
+        return _snapshot_scaling_study(
+            ctx=ctx,
+            primary_setup=primary_setup,
+            agent=agent_val,
+            model=model_val,
+            actual_scales=actual_scales,
+            points=points,
+            noise_floor=noise_floor,
+            baseline_results=baseline_results,
+            latest_results=latest_results,
+            decomp=final_decomp,
+            scale_query_sums=scale_query_sums,
+            replicates_by_scale=replicates_by_scale,
+        )
+
     for step_idx, scale in enumerate(actual_scales, start=1):
         (
             combined_results,
@@ -2444,45 +2470,12 @@ def run_scaling_sweep(
             final_decomp = decomp
 
         if on_scale_complete is not None:
-            partial_study = _snapshot_scaling_study(
-                target=primary_setup.target,
-                is_corpus=is_corpus,
-                actual_scales=actual_scales,
-                points=points,
-                noise_floor=noise_floor,
-                baseline_results=baseline_results,
-                latest_results=latest_results,
-                total_skills=len(resolved_skills),
-                decomp=final_decomp,
-                anchor_skills=primary_setup.resolved_anchors,
-                study_config=effective_config.study,
-                scale_query_sums=scale_query_sums,
-                queries_by_id=ctx.raw_query_map,
-                replicates_by_scale=replicates_by_scale,
-                scoped_target=scoped_target,
-            )
-            on_scale_complete(step_idx, total_scales, point, partial_study)
+            on_scale_complete(step_idx, total_scales, point, _take_snapshot())
 
         if step_idx == 1 and point.all_probes_errored:
             break
 
-    result = _snapshot_scaling_study(
-        target=primary_setup.target,
-        is_corpus=is_corpus,
-        actual_scales=actual_scales,
-        points=points,
-        noise_floor=noise_floor,
-        baseline_results=baseline_results,
-        latest_results=latest_results,
-        total_skills=len(resolved_skills),
-        decomp=final_decomp,
-        anchor_skills=primary_setup.resolved_anchors,
-        study_config=effective_config.study,
-        scale_query_sums=scale_query_sums,
-        queries_by_id=ctx.raw_query_map,
-        replicates_by_scale=replicates_by_scale,
-        scoped_target=scoped_target,
-    )
+    result = _take_snapshot()
     if temp_dir_obj is not None:
         temp_dir_obj.cleanup()
     return result

@@ -24,7 +24,14 @@ from math import floor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    computed_field,
+    model_serializer,
+)
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import resident_skills
@@ -310,11 +317,11 @@ class ClaudeUsage(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input_tokens: int = Field(default=0, ge=0)
-    cache_creation_input_tokens: int = Field(default=0, ge=0)
-    cache_read_input_tokens: int = Field(default=0, ge=0)
-    prompt_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
+    input_tokens: NonNegativeInt = 0
+    cache_creation_input_tokens: NonNegativeInt = 0
+    cache_read_input_tokens: NonNegativeInt = 0
+    prompt_tokens: NonNegativeInt | None = None
+    output_tokens: NonNegativeInt = 0
 
     @computed_field
     @property
@@ -371,6 +378,7 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
     cost: float | None = None
     duration: int | None = None
     prompt_tokens: int | None = None
+    turn_tokens: dict[str, int] = {}
     subtype: str | None = None
     retries = 0
     assistant_turns = 0
@@ -391,11 +399,21 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
                 msg = event.get("message")
                 usage = msg.get("usage") if isinstance(msg, dict) else event.get("usage")
                 if (toks := _extract_usage_prompt_tokens(usage)) is not None:
-                    prompt_tokens = toks
+                    msg_id = (
+                        str(msg["id"])
+                        if isinstance(msg, dict) and msg.get("id")
+                        else f"turn_{assistant_turns}"
+                    )
+                    turn_tokens[msg_id] = max(turn_tokens.get(msg_id, 0), toks)
             case "result":
                 subtype, cost, duration = _parse_result_event(event)
                 if (toks := _extract_usage_prompt_tokens(event.get("usage"))) is not None:
                     prompt_tokens = toks
+
+    # Cumulative input tokens billed across distinct assistant API turns when terminal result
+    # usage is absent (e.g. early_exit=True), deduplicated by message.id within each turn.
+    if prompt_tokens is None and turn_tokens:
+        prompt_tokens = sum(turn_tokens.values())
 
     status: SessionStatus | str | None = None
     if early_exit:

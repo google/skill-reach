@@ -131,13 +131,34 @@ def test_prompt_tokens_parsed_from_result_usage() -> None:
 
 
 def test_prompt_tokens_parsed_from_step_update_usage() -> None:
-    """Verify parse_stream extracts prompt tokens from step_update usage when result is missing."""
+    """Verify parse_stream deduplicates by step_index and sums across distinct steps."""
     lines = [
         json.dumps({"event": "init", "init": {"model": "gemini-3.8-flash"}}),
         json.dumps(
             {
                 "event": "step_update",
                 "step_update": {
+                    "step_index": 0,
+                    "step_type": "thought",
+                    "usage": {"input_tokens": 5000, "output_tokens": 5},
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_index": 0,
+                    "step_type": "tool_call",
+                    "usage": {"input_tokens": 5200, "output_tokens": 18},
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_index": 1,
                     "step_type": "agent_response",
                     "usage": {"input_tokens": 8400, "output_tokens": 12},
                 },
@@ -145,7 +166,7 @@ def test_prompt_tokens_parsed_from_step_update_usage() -> None:
         ),
     ]
     summary = parse_stream(lines)
-    assert summary.prompt_tokens == 8400
+    assert summary.prompt_tokens == 5200 + 8400
 
 
 @pytest.mark.parametrize(
