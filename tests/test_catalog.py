@@ -1604,3 +1604,38 @@ def test_owen_scrambled_corpus_scaling_plan_preserves_nestedness_and_varies_orde
             assert set(earlier.skills).issubset(set(later.skills))
 
     assert plan_s1.sequence != plan_s2.sequence
+
+
+def test_permute_by_van_der_corput_canonical_seed_zero_order() -> None:
+    """Verify seed=0 Van der Corput sequence produces the canonical unscrambled radical inverse."""
+    from reach.catalog import _permute_by_van_der_corput
+
+    assert _permute_by_van_der_corput([0, 1, 2, 3], seed=0) == [0, 2, 1, 3]
+    assert _permute_by_van_der_corput(list(range(10)), seed=0) == [0, 5, 3, 8, 2, 7, 4, 9, 1, 6]
+
+
+def test_extract_cluster_medoid_indices_scale_invariant_quantile_penalty() -> None:
+    """Verify medoid display quantile penalty is invariant to cluster similarity sum."""
+    from types import SimpleNamespace
+
+    from reach.catalog import _extract_cluster_medoid_indices
+
+    sim = [
+        [2.0, 2.0, 2.0, 2.0, 2.0],
+        [1.92, 1.92, 1.92, 1.92, 1.92],
+        [1.0, 1.0, 1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0, 1.0, 1.0],
+    ]
+    quantiles = {0: 0.0, 1: 0.5, 2: 0.2, 3: 0.8, 4: 1.0}
+    cluster = SimpleNamespace(skills=("s0", "s1", "s2", "s3", "s4"))
+    name_to_idx = {f"s{i}": i for i in range(5)}
+    chosen = _extract_cluster_medoid_indices(
+        [cluster],
+        name_to_idx,
+        sim,
+        display_quantiles=quantiles,
+        near_optimal_ratio=0.90,
+        display_quantile_weight=0.15,
+    )
+    assert chosen == [1]

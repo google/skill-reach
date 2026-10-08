@@ -714,7 +714,7 @@ def _extract_cluster_medoid_indices(
             best_idx = max(
                 candidates,
                 key=lambda i: (
-                    sim_scores[i]
+                    (sim_scores[i] / max_sim)
                     - display_quantile_weight * abs(display_quantiles.get(i, 0.5) - target_q),
                     sim_scores[i],
                     -i,
@@ -808,23 +808,15 @@ def _van_der_corput(n: int, seed: int = 0) -> float:
 
 
 def _permute_by_van_der_corput(candidates: Sequence[int], seed: int = 0) -> list[int]:
-    """Deterministically permute candidate indices via Van der Corput radical inverse."""
+    """Assign candidates to output steps t = 0..m-1 by the quantile rank of phi_2(t)."""
     m = len(candidates)
     if m <= 1:
         return list(candidates)
-    available = list(range(m))
-    ordered: list[int] = []
-    t = 1
-    denom = max(1, m - 1)
-    while available:
-        target = _van_der_corput(t, seed=seed)
-        best_pos = min(
-            range(len(available)),
-            key=lambda idx: (abs(available[idx] / denom - target), available[idx]),
-        )
-        ordered.append(candidates[available.pop(best_pos)])
-        t += 1
-    return ordered
+    steps_by_quantile = sorted(range(m), key=lambda t: (_van_der_corput(t, seed=seed), t))
+    out = [0] * m
+    for candidate_idx, step in enumerate(steps_by_quantile):
+        out[step] = candidates[candidate_idx]
+    return out
 
 
 def _round_robin_drain(

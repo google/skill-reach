@@ -53,11 +53,12 @@ from reach.metrics import (
     DecompositionResult,
     _build_query_strata,
     _draw_stratified_qids,
+    _rao_wu_rescale,
     compute_f1,
     decompose_pass_rate_drop,
     score_trajectory,
 )
-from reach.models import NO_SKILL, Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
+from reach.models import Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
@@ -136,10 +137,7 @@ class PairedTrialOutcomes(BaseModel):
     ]
     effective_paired: Annotated[
         NonNegativeInt | None,
-        Field(
-            default=None,
-            description="Effective sample size adjusting for repeated attempts",
-        ),
+        Field(description="Effective sample size adjusting for repeated attempts"),
     ] = None
 
     @model_validator(mode="after")
@@ -467,7 +465,10 @@ def _compute_mcnemar_noise_floor(
     var_num = max(0.0, float(n10 + n01) - ((float(n10 - n01) ** 2) / n_raw))
     var_paired = var_num / (float(n_raw) * n_eff)
     se_paired = math.sqrt(var_paired)
-    floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, noise_inflation)
+    eff_inflation = (
+        1.0 if effective_paired is not None and effective_paired < n_raw else noise_inflation
+    )
+    floor = diff_noise_floor(se_paired / 2.0, se_paired / 2.0, confidence, eff_inflation)
     return max(_MIN_NOISE_FLOOR, floor)
 
 
@@ -571,10 +572,12 @@ def find_kneedle_knee(
 
     y0 = norm_y[0]
     y_end = norm_y[-1]
+    steepest_idx = max(range(1, len(y_vals)), key=lambda i: y_vals[i - 1] - y_vals[i])
     diffs_below = [(y0 + x * (y_end - y0)) - y for x, y in zip(norm_x, norm_y, strict=True)]
     diffs_above = [y - (y0 + x * (y_end - y0)) for x, y in zip(norm_x, norm_y, strict=True)]
 
-    max_below = max(diffs_below[1:-1])
+    below_window = diffs_below[1 : min(len(diffs_below) - 1, steepest_idx + 2)]
+    max_below = max(below_window) if below_window else 0.0
     max_above = max(diffs_above[1:-1])
     min_prominence = max(0.05, (noise_floor * 0.5) / y_range)
 
@@ -585,6 +588,20 @@ def find_kneedle_knee(
         knee_idx = 1 + diffs_below[1:-1].index(max_below)
         return k_vals[knee_idx]
     return None
+
+
+def _invoked_in_scope(
+    scored_seq: Sequence[str],
+    targets: set[str] | frozenset[str],
+    *,
+    trajectory: bool,
+) -> bool:
+    """Check whether scored_seq invokes any skill in targets under the trajectory mode."""
+    return (
+        any(s in targets for s in scored_seq)
+        if trajectory
+        else (bool(scored_seq) and scored_seq[0] in targets)
+    )
 
 
 def _evaluate_probe_trajectory(
@@ -609,9 +626,7 @@ def _evaluate_probe_trajectory(
     scored_seq = raw_seq
     if expected is None:
         return (not result.error and len(scored_seq) == 0), scored_seq
-    hit = (
-        (expected in scored_seq) if trajectory else (bool(scored_seq) and scored_seq[0] == expected)
-    )
+    hit = _invoked_in_scope(scored_seq, {expected}, trajectory=trajectory)
     return (not result.error and hit), scored_seq
 
 
@@ -629,18 +644,14 @@ def _classify_probe_outcome(
     if target_skill is not None:
         is_tp = expected == target_skill and hit
         is_fn = expected == target_skill and not is_tp
-        invoked_target = (
-            (target_skill in scored_seq)
-            if trajectory
-            else (bool(scored_seq) and scored_seq[0] == target_skill)
-        )
+        invoked_target = _invoked_in_scope(scored_seq, {target_skill}, trajectory=trajectory)
         is_fp = not result.error and invoked_target and expected != target_skill
         return is_tp, is_fp, is_fn
 
     is_tp = expected is not None and hit
     is_fn = expected is not None and not is_tp
-    first_invoked = scored_seq[0] if scored_seq else NO_SKILL
-    is_fp = not result.error and not hit and first_invoked in installed_skills
+    invoked_installed = _invoked_in_scope(scored_seq, installed_skills, trajectory=trajectory)
+    is_fp = not result.error and not hit and invoked_installed
     return is_tp, is_fp, is_fn
 
 
@@ -751,11 +762,10 @@ def bootstrap_f1_ci(
         denom = 2 * tp_s + fp_s + fn_s
         f1_boots.append(2.0 * tp_s / denom if denom > 0 else 0.0)
 
-    f1_boots.sort()
     q_low, q_high = bootstrap_quantiles()
     low_idx = max(0, int(iterations * q_low))
     high_idx = min(int(iterations * q_high), iterations - 1)
-    return (round(f1_boots[low_idx], 4), round(f1_boots[high_idx], 4))
+    return _rao_wu_rescale(f1_boots, strata, low_idx, high_idx, min_val=0.0, max_val=1.0)
 
 
 def _estimate_baseline_skill_icc(
@@ -933,29 +943,35 @@ def _calculate_scale_pass_rate(
 ) -> _ScalePassRate:
     """Calculate overall pass rate, failure count, and Wilson confidence interval."""
     valid_results = [r for r in results if not r.error]
-    hits = 0
-    scored_count = 0
-    for r in valid_results:
-        q = queries_by_id.get(r.query_id)
-        exp = q.expected_skill if q is not None else None
-        if target_skill is not None:
-            if exp != target_skill and exp is not None:
-                continue
-            scored_count += 1
-            is_tp, is_fp, _ = _classify_probe_outcome(
-                r, exp, set(), target_skill, query=q, trajectory=trajectory
-            )
-            if (exp == target_skill and is_tp) or (exp is None and not is_fp):
-                hits += 1
-        else:
-            scored_count += 1
-            hit, _ = _evaluate_probe_trajectory(r, exp, q, trajectory=trajectory)
-            if hit:
-                hits += 1
+    outcomes = _extract_query_outcomes(
+        valid_results,
+        {},
+        set(),
+        target_skill=target_skill,
+        queries_by_id=queries_by_id,
+        trajectory=trajectory,
+    )
+    hits = sum(o.hits for o in outcomes.values())
+    scored_count = sum(o.total for o in outcomes.values())
     fails = scored_count - hits
     pass_rate = hits / scored_count if scored_count else 0.0
     attempts = _estimate_query_attempts(valid_results)
-    interval_obj = cluster_wilson_interval(hits, scored_count, attempts=attempts)
+    s_icc = _estimate_baseline_skill_icc(outcomes, queries_by_id) if target_skill is None else None
+    skills_n = len(
+        {
+            queries_by_id[q].expected_skill
+            for q in outcomes
+            if q in queries_by_id and queries_by_id[q].expected_skill is not None
+        }
+    )
+    q_per_skill = len(outcomes) / skills_n if s_icc and skills_n > 0 else 1.0
+    interval_obj = cluster_wilson_interval(
+        hits,
+        scored_count,
+        attempts=attempts,
+        queries_per_skill=q_per_skill,
+        skill_icc=s_icc or 0.0,
+    )
     pass_interval = (interval_obj.low, interval_obj.high) if interval_obj else (0.0, 1.0)
     return _ScalePassRate(
         executed=scored_count,
@@ -1646,64 +1662,39 @@ def _extract_paired_query_outcomes(
     """Extract discordant pair counts grouped by query_id between baseline and final scales."""
     if not baseline_results or not final_results:
         return {}
-
-    def probe_hit(r: ProbeResult) -> bool:
-        if r.error:
-            return False
-        q = queries_by_id.get(r.query_id)
-        exp = q.expected_skill if q is not None else None
-        if target_skill is not None:
-            if exp != target_skill and exp is not None:
-                return False
-            is_tp, is_fp, _ = _classify_probe_outcome(
-                r, exp, set(), target_skill, query=q, trajectory=True
-            )
-            return (exp == target_skill and is_tp) or (exp is None and not is_fp)
-        hit, _ = _evaluate_probe_trajectory(r, exp, q, trajectory=True)
-        return hit
-
-    def is_scoped(r: ProbeResult) -> bool:
-        if r.error:
-            return False
-        if target_skill is None:
-            return True
-        q = queries_by_id.get(r.query_id)
-        exp = q.expected_skill if q is not None else None
-        return exp == target_skill or exp is None
-
-    base_map = {(r.query_id, r.attempt): probe_hit(r) for r in baseline_results if is_scoped(r)}
-    final_map = {(r.query_id, r.attempt): probe_hit(r) for r in final_results if is_scoped(r)}
-    common_keys = set(base_map.keys()) & set(final_map.keys())
-    if not common_keys:
-        return {}
-
-    counts_by_qid: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
-    for key in common_keys:
-        qid = key[0]
-        b_hit = base_map[key]
-        f_hit = final_map[key]
-        counts = counts_by_qid[qid]
-        if b_hit and not f_hit:
-            counts[0] += 1
-        elif not b_hit and f_hit:
-            counts[1] += 1
-        counts[2] += 1
-
-    return {
-        qid: _PairedQueryOutcome(n10=vals[0], n01=vals[1], total_paired=vals[2])
-        for qid, vals in counts_by_qid.items()
-    }
+    base_out = _extract_query_outcomes(
+        baseline_results, {}, set(), target_skill=target_skill, queries_by_id=queries_by_id
+    )
+    final_out = _extract_query_outcomes(
+        final_results, {}, set(), target_skill=target_skill, queries_by_id=queries_by_id
+    )
+    paired: dict[str, _PairedQueryOutcome] = {}
+    for qid in sorted(base_out.keys() & final_out.keys()):
+        b, f = base_out[qid], final_out[qid]
+        n_q = min(b.total, f.total)
+        if n_q <= 0:
+            continue
+        p_b = b.hits / b.total
+        p_f = f.hits / f.total
+        n10 = min(n_q, int(n_q * p_b * (1.0 - p_f) + 0.5))
+        n01 = min(n_q - n10, int(n_q * (1.0 - p_b) * p_f + 0.5))
+        paired[qid] = _PairedQueryOutcome(
+            n10=n10,
+            n01=n01,
+            total_paired=n_q,
+        )
+    return paired
 
 
 def _aggregate_paired_counts(
     outcomes: Sequence[_PairedQueryOutcome],
-) -> tuple[int, int, int, float]:
+) -> tuple[int, int, int, int]:
     """Aggregate discordant pair counts and cluster-adjusted effective sample size."""
     n10 = sum(v.n10 for v in outcomes)
     n01 = sum(v.n01 for v in outcomes)
     total_paired = sum(v.total_paired for v in outcomes)
     attempts = max(1, round(total_paired / max(1, len(outcomes))))
-    neff = float(effective_sample_size(total_paired, attempts=attempts))
+    neff = effective_sample_size(total_paired, attempts=attempts)
     return n10, n01, total_paired, neff
 
 

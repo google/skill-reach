@@ -675,6 +675,17 @@ def test_effective_sample_size_calculation() -> None:
     assert effective_sample_size(100, attempts=5, intra_cluster_correlation=1.0) == 20
     # DEFF = 1 + (5 - 1) * 0.6 = 3.4; 100 / 3.4 = 29.41 -> 29
     assert effective_sample_size(100, attempts=5, intra_cluster_correlation=0.6) == 29
+    # Two-stage DEFF = (1 + (2 - 1) * 0.5) * (1 + (3 - 1) * 0.5) = 1.5 * 2.0 = 3.0; 100 / 3 = 33
+    assert (
+        effective_sample_size(
+            100,
+            attempts=2,
+            intra_cluster_correlation=0.5,
+            queries_per_skill=3.0,
+            skill_icc=0.5,
+        )
+        == 33
+    )
     assert effective_sample_size(0, attempts=5) == 0
     assert effective_sample_size(-10, attempts=5) == 0
 
@@ -694,6 +705,17 @@ def test_cluster_wilson_interval_widens_with_attempts() -> None:
     assert clustered_int.width > std_int.width
     assert clustered_int.low < std_int.low
     assert clustered_int.high > std_int.high
+
+    two_stage_int = cluster_wilson_interval(
+        80,
+        100,
+        attempts=5,
+        intra_cluster_correlation=0.6,
+        queries_per_skill=3.0,
+        skill_icc=0.4,
+    )
+    assert two_stage_int is not None
+    assert two_stage_int.width > clustered_int.width
     assert cluster_wilson_interval(0, 0) is None
 
 

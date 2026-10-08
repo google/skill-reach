@@ -139,12 +139,23 @@ class Interval(BaseModel):
         return f"[{self.low * 100:.{digits}f}%{separator}{self.high * 100:.{digits}f}%]"
 
 
-def _design_effect(attempts: int, intra_cluster_correlation: float) -> float:
-    """Compute survey cluster design effect for repeated attempts."""
-    if attempts <= 1:
+def _stage_deff(cluster_size: float, icc: float) -> float:
+    """Compute single-stage Kish cluster design effect 1 + (m - 1) * rho."""
+    if cluster_size <= 1.0:
         return 1.0
-    icc = max(0.0, min(1.0, intra_cluster_correlation))
-    return 1.0 + (attempts - 1) * icc
+    return 1.0 + (cluster_size - 1.0) * max(0.0, min(1.0, icc))
+
+
+def _design_effect(
+    attempts: int,
+    intra_cluster_correlation: float,
+    queries_per_skill: float = 1.0,
+    skill_icc: float = 0.0,
+) -> float:
+    """Compute two-stage survey cluster design effect across attempts and skills."""
+    return _stage_deff(float(attempts), intra_cluster_correlation) * _stage_deff(
+        queries_per_skill, skill_icc
+    )
 
 
 def _wilson_from_counts(
@@ -190,11 +201,15 @@ def effective_sample_size(
     sample_size: int,
     attempts: int = 1,
     intra_cluster_correlation: float = 0.6,
+    *,
+    queries_per_skill: float = 1.0,
+    skill_icc: float = 0.0,
 ) -> int:
-    """Calculate survey-style effective sample size adjusting for repeated attempts."""
+    """Calculate survey-style effective sample size adjusting for cluster correlation."""
     if sample_size <= 0:
         return 0
-    return max(1, round(sample_size / _design_effect(attempts, intra_cluster_correlation)))
+    deff = _design_effect(attempts, intra_cluster_correlation, queries_per_skill, skill_icc)
+    return max(1, round(sample_size / deff))
 
 
 def cluster_wilson_interval(
@@ -203,11 +218,14 @@ def cluster_wilson_interval(
     attempts: int = 1,
     confidence: float = DEFAULT_CONFIDENCE,
     intra_cluster_correlation: float = 0.6,
+    *,
+    queries_per_skill: float = 1.0,
+    skill_icc: float = 0.0,
 ) -> Interval | None:
     """Calculate Wilson score confidence interval adjusted for cluster design effect."""
-    if attempts <= 1:
+    deff = _design_effect(attempts, intra_cluster_correlation, queries_per_skill, skill_icc)
+    if deff <= 1.0:
         return wilson_interval(hits, probes, confidence=confidence)
-    deff = _design_effect(attempts, intra_cluster_correlation)
     return _wilson_from_counts(hits, probes, max(1.0, probes / deff), confidence)
 
 

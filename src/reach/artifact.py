@@ -302,7 +302,7 @@ class Spread(BaseModel):
     top1_by_attempt: tuple[float, ...] = ()
     mean: float | None = None
     repeated_queries: int = Field(default=0, ge=0)
-    standard_error: float | None = None
+    standard_error: Annotated[float, Field(ge=0.0)] | None = None
     skill_icc: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
 
     @model_validator(mode="after")
@@ -863,10 +863,10 @@ def _confusion_pairs(
     )
 
 
-def _query_variance(record: QueryRecord) -> float:
-    """Compute the variance contribution for a single query record."""
-    rate = (record.hits + 0.5) / (record.probes + 1)
-    return record.probes * rate * (1 - rate)
+def _jeffreys_variance(hits: int, probes: int) -> float:
+    """Compute binomial variance contribution under a Jeffreys Beta(0.5, 0.5) prior."""
+    rate = (hits + 0.5) / (probes + 1)
+    return probes * rate * (1.0 - rate)
 
 
 def _standard_error(records: Sequence[QueryRecord]) -> float | None:
@@ -874,7 +874,9 @@ def _standard_error(records: Sequence[QueryRecord]) -> float | None:
     probes = sum(record.probes for record in records)
     if not probes:
         return None
-    return math.sqrt(sum(_query_variance(record) for record in records)) / probes
+    if all(record.probes <= 1 for record in records):
+        return math.sqrt(_jeffreys_variance(sum(r.hits for r in records), probes)) / probes
+    return math.sqrt(sum(_jeffreys_variance(r.hits, r.probes) for r in records)) / probes
 
 
 def _spread(
