@@ -808,15 +808,15 @@ def _van_der_corput(n: int, seed: int = 0) -> float:
 
 
 def _permute_by_van_der_corput(candidates: Sequence[int], seed: int = 0) -> list[int]:
-    """Deterministically permute candidate indices via Van der Corput radical inverse."""
+    """Assign candidates to output steps t = 0..m-1 by the quantile rank of phi_2(t)."""
     m = len(candidates)
     if m <= 1:
         return list(candidates)
-    order = sorted(range(m), key=lambda idx: (_van_der_corput(idx, seed=seed), idx))
-    ranks = [0] * m
-    for rank, idx in enumerate(order):
-        ranks[idx] = rank
-    return [candidates[r] for r in ranks]
+    steps_by_quantile = sorted(range(m), key=lambda t: (_van_der_corput(t, seed=seed), t))
+    out = [0] * m
+    for candidate_idx, step in enumerate(steps_by_quantile):
+        out[step] = candidates[candidate_idx]
+    return out
 
 
 def _round_robin_drain(

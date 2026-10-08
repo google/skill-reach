@@ -576,7 +576,7 @@ def find_kneedle_knee(
     diffs_below = [(y0 + x * (y_end - y0)) - y for x, y in zip(norm_x, norm_y, strict=True)]
     diffs_above = [y - (y0 + x * (y_end - y0)) for x, y in zip(norm_x, norm_y, strict=True)]
 
-    below_window = diffs_below[1 : min(len(diffs_below) - 1, steepest_idx + 1)]
+    below_window = diffs_below[1 : min(len(diffs_below) - 1, steepest_idx + 2)]
     max_below = max(below_window) if below_window else 0.0
     max_above = max(diffs_above[1:-1])
     min_prominence = max(0.05, (noise_floor * 0.5) / y_range)
@@ -596,7 +596,7 @@ def _invoked_in_scope(
     *,
     trajectory: bool,
 ) -> bool:
-    """Return True if scored_seq invokes any skill in targets under the trajectory mode."""
+    """Check whether scored_seq invokes any skill in targets under the trajectory mode."""
     return (
         any(s in targets for s in scored_seq)
         if trajectory
@@ -1676,9 +1676,11 @@ def _extract_paired_query_outcomes(
             continue
         p_b = b.hits / b.total
         p_f = f.hits / f.total
+        n10 = min(n_q, int(n_q * p_b * (1.0 - p_f) + 0.5))
+        n01 = min(n_q - n10, int(n_q * (1.0 - p_b) * p_f + 0.5))
         paired[qid] = _PairedQueryOutcome(
-            n10=int(n_q * p_b * (1.0 - p_f) + 0.5),
-            n01=int(n_q * (1.0 - p_b) * p_f + 0.5),
+            n10=n10,
+            n01=n01,
             total_paired=n_q,
         )
     return paired

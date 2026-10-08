@@ -302,8 +302,8 @@ class Spread(BaseModel):
     top1_by_attempt: tuple[float, ...] = ()
     mean: float | None = None
     repeated_queries: int = Field(default=0, ge=0)
-    standard_error: Annotated[float | None, Field(ge=0.0)] = None
-    skill_icc: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
+    standard_error: Annotated[float, Field(ge=0.0)] | None = None
+    skill_icc: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
 
     @model_validator(mode="after")
     def _figures_match_what_was_observed(self) -> Self:

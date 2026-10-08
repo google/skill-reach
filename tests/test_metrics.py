@@ -801,4 +801,3 @@ def test_decompose_pass_rate_drop_stratum_rescaling(
     assert decomp.delta_total == 0.5
     assert decomp.delta_total_ci[0] < decomp.delta_total_ci[1]
     assert decomp.delta_total_ci[0] <= 0.5 <= decomp.delta_total_ci[1]
-

@@ -648,11 +648,7 @@ def _rao_wu_rescale[T](
     series.sort()
     n_multi = sum(len(g) for g in strata if len(g) >= _MIN_STRATUM_SIZE)
     s_multi = sum(1 for g in strata if len(g) >= _MIN_STRATUM_SIZE)
-    rw_scale = (
-        (n_multi / (n_multi - s_multi)) ** 0.5
-        if s_multi >= 1 and n_multi > s_multi
-        else 1.0
-    )
+    rw_scale = (n_multi / (n_multi - s_multi)) ** 0.5 if s_multi >= 1 and n_multi > s_multi else 1.0
     center = statistics.fmean(series)
     low = max(min_val, min(max_val, center + rw_scale * (series[low_idx] - center)))
     high = max(min_val, min(max_val, center + rw_scale * (series[high_idx] - center)))

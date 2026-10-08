@@ -1639,4 +1639,3 @@ def test_extract_cluster_medoid_indices_scale_invariant_quantile_penalty() -> No
         display_quantile_weight=0.15,
     )
     assert chosen == [1]
-
