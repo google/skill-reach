@@ -496,6 +496,7 @@ def parse_stream(
     resolved_model = ""
     duration_ms: int | None = None
     prompt_tokens: int | None = None
+    step_tokens: dict[int | str, int] = {}
     status: str | None = None
     result_error: str | None = None
     step_turns = 0
@@ -512,7 +513,14 @@ def parse_stream(
                         event, attempts, invoked_skills, reasoning, resident
                     )
                 ) is not None:
-                    prompt_tokens = (prompt_tokens or 0) + toks
+                    step_obj = event.get("step_update")
+                    raw_idx = step_obj.get("step_index") if isinstance(step_obj, dict) else None
+                    step_key: int | str = (
+                        raw_idx
+                        if isinstance(raw_idx, int) and not isinstance(raw_idx, bool)
+                        else f"step_{step_turns}"
+                    )
+                    step_tokens[step_key] = max(step_tokens.get(step_key, 0), toks)
             case "result":
                 res_event = _extract_result_event(event)
                 status = res_event.status
@@ -526,6 +534,11 @@ def parse_stream(
                     invoked_skills.append(res_event.selected_skill)
                 if res_event.reasoning and res_event.reasoning not in reasoning:
                     reasoning.append(res_event.reasoning)
+
+    # Cumulative input tokens billed across distinct planner steps when terminal result
+    # usage is absent (e.g. early_exit=True), matching antigravity_sdk._extract_prompt_tokens.
+    if prompt_tokens is None and step_tokens:
+        prompt_tokens = sum(step_tokens.values())
 
     if early_exit:
         status = SessionStatus.SUCCESS

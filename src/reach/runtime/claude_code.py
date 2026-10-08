@@ -378,6 +378,7 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
     cost: float | None = None
     duration: int | None = None
     prompt_tokens: int | None = None
+    turn_tokens: dict[str, int] = {}
     subtype: str | None = None
     retries = 0
     assistant_turns = 0
@@ -398,11 +399,21 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
                 msg = event.get("message")
                 usage = msg.get("usage") if isinstance(msg, dict) else event.get("usage")
                 if (toks := _extract_usage_prompt_tokens(usage)) is not None:
-                    prompt_tokens = (prompt_tokens or 0) + toks
+                    msg_id = (
+                        str(msg["id"])
+                        if isinstance(msg, dict) and msg.get("id")
+                        else f"turn_{assistant_turns}"
+                    )
+                    turn_tokens[msg_id] = max(turn_tokens.get(msg_id, 0), toks)
             case "result":
                 subtype, cost, duration = _parse_result_event(event)
                 if (toks := _extract_usage_prompt_tokens(event.get("usage"))) is not None:
                     prompt_tokens = toks
+
+    # Cumulative input tokens billed across distinct assistant API turns when terminal result
+    # usage is absent (e.g. early_exit=True), deduplicated by message.id within each turn.
+    if prompt_tokens is None and turn_tokens:
+        prompt_tokens = sum(turn_tokens.values())
 
     status: SessionStatus | str | None = None
     if early_exit:

@@ -1095,6 +1095,15 @@ def test_claude_build_env_applies_location_and_project_options(
                 {
                     "type": "assistant",
                     "message": {
+                        "id": "msg_1",
+                        "content": [],
+                        "usage": {"input_tokens": 900, "cache_read_input_tokens": 500},
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_1",
                         "content": [],
                         "usage": {"input_tokens": 1000, "cache_read_input_tokens": 500},
                     },
@@ -1102,6 +1111,7 @@ def test_claude_build_env_applies_location_and_project_options(
                 {
                     "type": "assistant",
                     "message": {
+                        "id": "msg_2",
                         "content": [],
                         "usage": {"input_tokens": 1200, "cache_read_input_tokens": 500},
                     },

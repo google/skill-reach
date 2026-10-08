@@ -34,7 +34,6 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
-    StringConstraints,
     ValidationError,
     model_validator,
 )
@@ -58,7 +57,15 @@ from reach.metrics import (
     decompose_pass_rate_drop,
     score_trajectory,
 )
-from reach.models import Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
+from reach.models import (
+    Catalog,
+    CatalogMode,
+    NonEmptyStr,
+    ProbeResult,
+    Query,
+    QueryKind,
+    Skill,
+)
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
@@ -90,7 +97,6 @@ logger = logging.getLogger(__name__)
 
 type UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
 type KneePmf = dict[PositiveInt, UnitInterval]
-type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ReplicateCollisionDiagnostic(BaseModel):
@@ -1381,7 +1387,9 @@ def _prepare_sweep_config(
 
     cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
-        validated_study = StudySettings.model_validate({**cfg.study.model_dump(), **study_update})
+        validated_study = StudySettings.model_validate(
+            {**cfg.study.model_dump(mode="python"), **study_update}
+        )
         cfg = cfg.model_copy(update={"study": validated_study})
     return cfg
 
@@ -2404,12 +2412,15 @@ def run_scaling_sweep(
     scoped_target = primary_setup.target if not is_corpus else None
     scale_workers = max(1, workers)
 
+    agent_val = (resolved_runtime.name or "").strip() or None
+    model_val = (resolved_runtime.model or "").strip() or None
+
     def _take_snapshot() -> ScalingStudy:
         return _snapshot_scaling_study(
             ctx=ctx,
             primary_setup=primary_setup,
-            agent=resolved_runtime.name or None,
-            model=resolved_runtime.model or None,
+            agent=agent_val,
+            model=model_val,
             actual_scales=actual_scales,
             points=points,
             noise_floor=noise_floor,
