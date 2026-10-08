@@ -24,7 +24,14 @@ from math import floor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    computed_field,
+    model_serializer,
+)
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import resident_skills
@@ -310,11 +317,11 @@ class ClaudeUsage(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input_tokens: int = Field(default=0, ge=0)
-    cache_creation_input_tokens: int = Field(default=0, ge=0)
-    cache_read_input_tokens: int = Field(default=0, ge=0)
-    prompt_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
+    input_tokens: NonNegativeInt = 0
+    cache_creation_input_tokens: NonNegativeInt = 0
+    cache_read_input_tokens: NonNegativeInt = 0
+    prompt_tokens: NonNegativeInt | None = None
+    output_tokens: NonNegativeInt = 0
 
     @computed_field
     @property
@@ -391,7 +398,7 @@ def parse_stream(lines: Iterable[str], early_exit: bool = False) -> StreamSummar
                 msg = event.get("message")
                 usage = msg.get("usage") if isinstance(msg, dict) else event.get("usage")
                 if (toks := _extract_usage_prompt_tokens(usage)) is not None:
-                    prompt_tokens = toks
+                    prompt_tokens = (prompt_tokens or 0) + toks
             case "result":
                 subtype, cost, duration = _parse_result_event(event)
                 if (toks := _extract_usage_prompt_tokens(event.get("usage"))) is not None:

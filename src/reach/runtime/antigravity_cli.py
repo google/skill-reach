@@ -261,9 +261,9 @@ class AntigravityUsage(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    input_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int | None = Field(default=None, ge=0)
-    total_tokens: int | None = Field(default=None, ge=0)
+    input_tokens: NonNegativeInt | None = None
+    output_tokens: NonNegativeInt | None = None
+    total_tokens: NonNegativeInt | None = None
 
 
 def _extract_usage_prompt_tokens(usage_obj: object) -> int | None:
@@ -512,7 +512,7 @@ def parse_stream(
                         event, attempts, invoked_skills, reasoning, resident
                     )
                 ) is not None:
-                    prompt_tokens = toks
+                    prompt_tokens = (prompt_tokens or 0) + toks
             case "result":
                 res_event = _extract_result_event(event)
                 status = res_event.status

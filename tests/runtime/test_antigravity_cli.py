@@ -131,9 +131,18 @@ def test_prompt_tokens_parsed_from_result_usage() -> None:
 
 
 def test_prompt_tokens_parsed_from_step_update_usage() -> None:
-    """Verify parse_stream extracts prompt tokens from step_update usage when result is missing."""
+    """Verify parse_stream accumulates prompt tokens across step_update events without result."""
     lines = [
         json.dumps({"event": "init", "init": {"model": "gemini-3.8-flash"}}),
+        json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {
+                    "step_type": "tool_call",
+                    "usage": {"input_tokens": 5200, "output_tokens": 18},
+                },
+            }
+        ),
         json.dumps(
             {
                 "event": "step_update",
@@ -145,7 +154,7 @@ def test_prompt_tokens_parsed_from_step_update_usage() -> None:
         ),
     ]
     summary = parse_stream(lines)
-    assert summary.prompt_tokens == 8400
+    assert summary.prompt_tokens == 5200 + 8400
 
 
 @pytest.mark.parametrize(

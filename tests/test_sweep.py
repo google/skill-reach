@@ -407,14 +407,20 @@ def test_scaling_sweep_happy_path(tmp_path: Path) -> None:
     }
     runtime = FakeRuntime(selections, model="mock-model")
 
+    partial_studies: list[ScalingStudy] = []
     study = run_scaling_sweep(
         config=config,
         target_skill="skill-00",
         scales=(1, 5, 10, 20),
         runtime=runtime,
+        on_scale_complete=lambda _idx, _tot, _pt, s: partial_studies.append(s),
     )
 
     assert isinstance(study, ScalingStudy)
+    assert study.agent == "fake"
+    assert study.model == "mock-model"
+    assert len(partial_studies) == 4
+    assert all(s.agent == "fake" and s.model == "mock-model" for s in partial_studies)
     assert study.target_skill == "skill-00"
     assert study.scales == (1, 5, 10, 20)
     assert len(study.points) == 4
@@ -3185,6 +3191,23 @@ def test_scaling_study_pydantic_statistical_validators(
         ReplicateCollisionDiagnostic(
             query_id="q1", scale=25, failed_replicates=(0,), passed_replicates=(0, 1)
         )
+
+    # agent and model strip whitespace and reject empty/whitespace-only strings
+    trimmed_study = make_scaling_study(agent="  pi  ", model="  gemini-3-flash-preview  ")
+    assert trimmed_study.agent == "pi"
+    assert trimmed_study.model == "gemini-3-flash-preview"
+    with pytest.raises(ValidationError):
+        make_scaling_study(agent="   ")
+    with pytest.raises(ValidationError):
+        make_scaling_study(model="")
+
+    # _prepare_sweep_config validates StudySettings overrides
+    from reach.sweep import _prepare_sweep_config
+
+    with pytest.raises(ValidationError):
+        _prepare_sweep_config(None, None, catalog_replicates=0)
+    with pytest.raises(ValidationError):
+        _prepare_sweep_config(None, None, bootstrap_iterations=-1)
 
 
 def test_detect_replicate_collisions_identifies_flipped_queries_and_suspect_distractors(
