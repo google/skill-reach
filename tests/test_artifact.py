@@ -574,7 +574,7 @@ def test_a_query_asked_once_is_uncertain_rather_than_certain(
     make_config,
     make_result,
 ) -> None:
-    """Verify single-attempt eval applies Laplace smoothing rather than claiming zero error."""
+    """Verify single-attempt eval applies pooled Jeffreys smoothing and varies with accuracy."""
     artifact = assemble(
         [make_result(q.query_id, q.expected_skill) for q in whole_catalog_queries.queries],
         whole_catalog_queries,
@@ -585,7 +585,23 @@ def test_a_query_asked_once_is_uncertain_rather_than_certain(
     assert artifact.spread.replicates == 1
     assert artifact.spread.repeated_queries == 0
     assert artifact.scores.top1_accuracy == 1.0
-    assert artifact.spread.standard_error == pytest.approx((0.375**0.5) / 2)
+    # Pooled Jeffreys rate = (2 + 0.5) / (2 + 1) = 5/6 -> Var = (5/36) / 2
+    assert artifact.spread.standard_error == pytest.approx(((5 / 36) / 2) ** 0.5)
+
+    split_artifact = assemble(
+        [
+            make_result(q.query_id, q.expected_skill if idx == 0 else BASICS)
+            for idx, q in enumerate(whole_catalog_queries.queries)
+        ],
+        whole_catalog_queries,
+        whole_catalog,
+        corpus,
+        make_config(catalog={"mode": CatalogMode.ALL}),
+    )
+    assert artifact.spread.standard_error is not None
+    assert split_artifact.spread.standard_error is not None
+    assert split_artifact.spread.standard_error == pytest.approx((0.25 / 2) ** 0.5)
+    assert split_artifact.spread.standard_error > artifact.spread.standard_error
 
 
 def test_a_query_that_never_hit_still_carries_uncertainty(

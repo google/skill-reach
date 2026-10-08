@@ -617,7 +617,8 @@ def _build_query_strata(
         q = queries_by_id.get(qid) if queries_by_id is not None else None
         exp = q.expected_skill if q is not None else (truth.get(qid) if truth is not None else None)
         by_skill[exp].append(qid)
-    return tuple(tuple(group) for group in by_skill.values() if group)
+    groups = tuple(tuple(group) for group in by_skill.values() if group)
+    return (tuple(qids),) if (len(groups) > 1 and all(len(g) <= 1 for g in groups)) else groups
 
 
 def _draw_stratified_qids[T](
@@ -629,6 +630,33 @@ def _draw_stratified_qids[T](
     for group in strata:
         sampled.extend(rng.choices(group, k=len(group)))
     return sampled
+
+
+_MIN_STRATUM_SIZE: int = 2
+
+
+def _rao_wu_rescale[T](
+    series: list[float],
+    strata: Sequence[Sequence[T]],
+    low_idx: int,
+    high_idx: int,
+    *,
+    min_val: float = -1.0,
+    max_val: float = 1.0,
+) -> tuple[float, float]:
+    """Rescale bootstrap quantile deviations by the Rao-Wu finite-stratum factor."""
+    series.sort()
+    n_multi = sum(len(g) for g in strata if len(g) >= _MIN_STRATUM_SIZE)
+    s_multi = sum(1 for g in strata if len(g) >= _MIN_STRATUM_SIZE)
+    rw_scale = (
+        (n_multi / (n_multi - s_multi)) ** 0.5
+        if s_multi >= 1 and n_multi > s_multi
+        else 1.0
+    )
+    center = statistics.fmean(series)
+    low = max(min_val, min(max_val, center + rw_scale * (series[low_idx] - center)))
+    high = max(min_val, min(max_val, center + rw_scale * (series[high_idx] - center)))
+    return (round(low, 4), round(high, 4))
 
 
 def _bootstrap_decomposition_ci(
@@ -663,19 +691,16 @@ def _bootstrap_decomposition_ci(
         boot_col.append(statistics.fmean([drops[i].delta_collision for i in sample_idx]))
         boot_trunc.append(statistics.fmean([drops[i].delta_truncated for i in sample_idx]))
 
-    boot_deltas.sort()
-    boot_abs.sort()
-    boot_col.sort()
-    boot_trunc.sort()
-
     q_low, q_high = bootstrap_quantiles(confidence)
     low_idx = max(0, int(iterations * q_low))
     high_idx = min(int(iterations * q_high), iterations - 1)
-    delta_ci = (round(boot_deltas[low_idx], 4), round(boot_deltas[high_idx], 4))
-    abs_ci = (round(boot_abs[low_idx], 4), round(boot_abs[high_idx], 4))
-    col_ci = (round(boot_col[low_idx], 4), round(boot_col[high_idx], 4))
-    trunc_ci = (round(boot_trunc[low_idx], 4), round(boot_trunc[high_idx], 4))
-    return delta_ci, abs_ci, col_ci, trunc_ci
+
+    return (
+        _rao_wu_rescale(boot_deltas, effective_strata, low_idx, high_idx),
+        _rao_wu_rescale(boot_abs, effective_strata, low_idx, high_idx),
+        _rao_wu_rescale(boot_col, effective_strata, low_idx, high_idx),
+        _rao_wu_rescale(boot_trunc, effective_strata, low_idx, high_idx),
+    )
 
 
 def _group_valid_results_by_query(

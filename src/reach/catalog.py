@@ -714,7 +714,7 @@ def _extract_cluster_medoid_indices(
             best_idx = max(
                 candidates,
                 key=lambda i: (
-                    sim_scores[i]
+                    (sim_scores[i] / max_sim)
                     - display_quantile_weight * abs(display_quantiles.get(i, 0.5) - target_q),
                     sim_scores[i],
                     -i,
@@ -812,19 +812,11 @@ def _permute_by_van_der_corput(candidates: Sequence[int], seed: int = 0) -> list
     m = len(candidates)
     if m <= 1:
         return list(candidates)
-    available = list(range(m))
-    ordered: list[int] = []
-    t = 1
-    denom = max(1, m - 1)
-    while available:
-        target = _van_der_corput(t, seed=seed)
-        best_pos = min(
-            range(len(available)),
-            key=lambda idx: (abs(available[idx] / denom - target), available[idx]),
-        )
-        ordered.append(candidates[available.pop(best_pos)])
-        t += 1
-    return ordered
+    order = sorted(range(m), key=lambda idx: (_van_der_corput(idx, seed=seed), idx))
+    ranks = [0] * m
+    for rank, idx in enumerate(order):
+        ranks[idx] = rank
+    return [candidates[r] for r in ranks]
 
 
 def _round_robin_drain(

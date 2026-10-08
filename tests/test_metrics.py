@@ -753,3 +753,52 @@ def test_multi_turn_trajectory_hit_preserves_turn1_conservation() -> None:
     conf = confusion([result], [query])
     assert conf[("deploy-service", "gcloud-auth")] == 1
     assert sum(conf.values()) == report.scored
+
+
+@pytest.mark.parametrize(
+    "skill_assignments",
+    [
+        ("s1", "s2", "s3", "s4"),
+        ("s1", "s1", "s2", "s2"),
+    ],
+    ids=["singleton-strata-pooled", "multi-skill-strata-rao-wu"],
+)
+def test_decompose_pass_rate_drop_stratum_rescaling(
+    skill_assignments: tuple[str, ...],
+) -> None:
+    """Verify singleton and multi-skill strata produce non-zero, Rao-Wu rescaled CIs."""
+    from reach.metrics import decompose_pass_rate_drop
+
+    queries = [
+        Query(query_id=f"q{idx + 1}", text=f"t{idx + 1}", expected_skill=skill)
+        for idx, skill in enumerate(skill_assignments)
+    ]
+    baseline = [
+        ProbeResult(
+            query_id=q.query_id,
+            catalog_id="c0",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=4,
+            model="m",
+            runtime="fake",
+            invoked_skills=(q.expected_skill or "",),
+        )
+        for q in queries
+    ]
+    scaled = [
+        ProbeResult(
+            query_id=q.query_id,
+            catalog_id="c1",
+            catalog_mode=CatalogMode.ALL,
+            catalog_size=20,
+            model="m",
+            runtime="fake",
+            invoked_skills=((q.expected_skill or "",) if idx % 2 == 0 else ()),
+        )
+        for idx, q in enumerate(queries)
+    ]
+    decomp = decompose_pass_rate_drop(baseline, scaled, queries=queries, iterations=200, seed=42)
+    assert decomp.delta_total == 0.5
+    assert decomp.delta_total_ci[0] < decomp.delta_total_ci[1]
+    assert decomp.delta_total_ci[0] <= 0.5 <= decomp.delta_total_ci[1]
+

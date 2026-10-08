@@ -2226,6 +2226,80 @@ def test_paired_trial_outcomes_calculates_effective_paired(
     assert paired.effective_paired >= 2
 
 
+def test_paired_outcomes_preserves_catalog_replicates(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify paired outcomes preserve catalog_replicates with identical attempt numbers."""
+    from reach.models import Query, QueryKind
+    from reach.sweep import _calculate_paired_outcomes
+
+    queries = {
+        "q1": Query(query_id="q1", text="t1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+    }
+    base_reps = [
+        make_probe_result(query_id="q1", catalog_id=f"c0-{r}", invoked="s1", attempt=1)
+        for r in range(3)
+    ]
+    final_reps = [
+        make_probe_result(query_id="q1", catalog_id=f"c1-{r}", invoked_skills=(), attempt=1)
+        for r in range(3)
+    ]
+    rep_paired = _calculate_paired_outcomes(base_reps, final_reps, queries)
+    assert rep_paired is not None
+    assert rep_paired.total_paired == 3
+    assert rep_paired.n10 == 3
+
+
+def test_paired_outcomes_attempt_exchangeability_and_within_query_variance(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify exchangeable attempts yield zero net delta and preserve discordant variance."""
+    from reach.models import Query, QueryKind
+    from reach.sweep import _calculate_paired_outcomes
+
+    queries = {
+        "q1": Query(query_id="q1", text="t1", expected_skill="s1", kind=QueryKind.IMPLICIT),
+    }
+    base_exch = [
+        make_probe_result(query_id="q1", catalog_id="c0", invoked="s1", attempt=1),
+        make_probe_result(query_id="q1", catalog_id="c0", invoked_skills=(), attempt=2),
+    ]
+    final_exch = [
+        make_probe_result(query_id="q1", catalog_id="c1", invoked_skills=(), attempt=1),
+        make_probe_result(query_id="q1", catalog_id="c1", invoked="s1", attempt=2),
+    ]
+    exch_paired = _calculate_paired_outcomes(base_exch, final_exch, queries)
+    assert exch_paired is not None
+    assert exch_paired.n10 - exch_paired.n01 == 0
+    assert (exch_paired.n10, exch_paired.n01, exch_paired.total_paired) == (1, 1, 2)
+
+
+def test_mcnemar_noise_floor_single_deff_application() -> None:
+    """Verify McNemar noise floor applies DEFF once when effective_paired < total_paired."""
+    from reach.sweep import PairedTrialOutcomes
+    from reach.uncertainty import critical_value
+
+    clustered = PairedTrialOutcomes(n10=16, n01=0, total_paired=100, effective_paired=25)
+    floor = compute_scaling_noise_floor(0.96, 0.80, sample_size=100, paired_outcomes=clustered)
+    expected_se = ((16.0 - 256.0 / 100.0) / (100.0 * 25.0)) ** 0.5
+    assert floor == pytest.approx(critical_value(0.95) * expected_se)
+
+
+def test_classify_probe_outcome_corpus_trajectory_fp(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify corpus trajectory FP classification inspects the full invocation sequence."""
+    from reach.sweep import _classify_probe_outcome
+
+    oos_probe = make_probe_result(
+        query_id="q-oos",
+        catalog_id="c1",
+        invoked_skills=("uninstalled-helper", "s1"),
+    )
+    _, is_fp, _ = _classify_probe_outcome(oos_probe, None, {"s1"}, trajectory=True)
+    assert is_fp is True
+
+
 @pytest.mark.parametrize(
     ("target_skill", "is_corpus_sweep"),
     [
