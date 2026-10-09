@@ -1074,19 +1074,23 @@ class RunConfig(BaseModel):
         resolved = (
             _discover_config_path(None)[0] if path is None else Path(path).expanduser().resolve()
         )
-        payload = (
-            tomllib.loads(resolved.read_text(encoding="utf-8"))
-            if resolved is not None
-            else load_config(None)
-        )
-        base_dir = resolved.parent if resolved is not None else Path.cwd()
+        if resolved is None:
+            config = cls()
+            if skills is not None:
+                resolved_skills = expand_path(skills, base=Path.cwd())
+                config = config.model_copy(
+                    update={"study": config.study.model_copy(update={"skills": resolved_skills})}
+                )
+            return config
+
+        payload = tomllib.loads(resolved.read_text(encoding="utf-8"))
         study = dict(payload.get("study", {}))
         if skills is not None:
             study["skills"] = skills
         for key in ("skills", "queries", "workdir", "out"):
             raw = study.get(key)
             if raw is not None:
-                study[key] = expand_path(raw, base=base_dir)
+                study[key] = expand_path(raw, base=resolved.parent)
         payload["study"] = study
         return cls.model_validate(payload)
 

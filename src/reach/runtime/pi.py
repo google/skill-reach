@@ -32,14 +32,13 @@ from pydantic import (
     field_validator,
 )
 
-from reach.config import DEFAULT_GEMINI_MODEL, resolve_path
+from reach.config import DEFAULT_GEMINI_MODEL, agent_default_model, resolve_path
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
     SelectionOutcome,
     SessionStatus,
     SessionSummary,
-    agent_default_model,
 )
 from reach.runtime._env import (
     apply_provider_api_key,

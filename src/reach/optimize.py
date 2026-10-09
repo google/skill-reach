@@ -54,7 +54,8 @@ from reach.overlap import rank_corpus
 from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set
 from reach.review import launch_query_review
 from reach.rewrite import skill_body, suggest_rewrite
-from reach.runtime import FAKE_AGENT, TextGenerator, build_runtime, build_text_generator
+from reach.runtime import FAKE_AGENT, build_runtime
+from reach.runtime.generator import TextGenerator, build_text_generator
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

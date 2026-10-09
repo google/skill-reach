@@ -33,6 +33,7 @@ from pydantic import ValidationError as PydanticValidationError
 from reach.config import (
     DEFAULT_GEMINI_MODEL,
     RuntimeSettings,
+    agent_default_model,
     resolve_path,
 )
 from reach.registry import find_adc_path
@@ -44,7 +45,6 @@ from reach.runtime import (
     SessionStatus,
     SessionSummary,
     ToolCallInfo,
-    agent_default_model,
 )
 from reach.runtime._env import (
     DEFAULT_BLOCKED_ENV_VARS,

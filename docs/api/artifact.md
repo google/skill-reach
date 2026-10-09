@@ -12,6 +12,7 @@ Data structures representing evaluation outcomes, confusion matrices, and serial
         - ConfusionPair
         - ContestedSkill
         - Leak
+        - LexicalRankLike
         - NotHeadline
         - QueryRecord
         - read_artifact

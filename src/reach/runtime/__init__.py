@@ -32,17 +32,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from reach.catalog import load_skills
 from reach.config import (
-    KEYWORD_AGENT as KEYWORD_AGENT,
-)
-from reach.config import (
     RuntimeSettings,
     agent_profiles,
     resolve_path,
     resolve_registry_location,
     resolve_registry_project,
-)
-from reach.config import (
-    agent_default_model as agent_default_model,
 )
 from reach.runtime._env import (
     detect_model_provider,
@@ -61,20 +55,10 @@ from reach.runtime._subprocess import (
     process_failure_reason,
     run_subprocess_probe,
 )
-from reach.runtime.generator import (
-    BaseTextGenerator as BaseTextGenerator,
-)
-from reach.runtime.generator import (
-    TextGenerator as TextGenerator,
-)
-from reach.runtime.generator import (
-    build_text_generator as build_text_generator,
-)
 from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
     from reach.models import Catalog, Skill
-    from reach.runtime.retriever import TwoStageRetrieverRuntime as TwoStageRetrieverRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -361,13 +345,19 @@ class SessionSummary(_ProbeTelemetry):
         """Return True if stream contained a terminal result event or early exit."""
         return self.status is not None or self.early_exit
 
-    @model_validator(mode="after")
-    def _derive_observed_tools(self) -> Self:
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_observed_tools(cls, data: Any) -> Any:  # noqa: ANN401
         """Populate observed tools from tool calls if not explicitly provided."""
-        if self.tool_calls and not self.observed_tools:
-            names = tuple(sorted({c.name for c in self.tool_calls if c.name}))
-            object.__setattr__(self, "observed_tools", names)
-        return self
+        if isinstance(data, dict):
+            calls = data.get("tool_calls")
+            if calls and not data.get("observed_tools"):
+                names = sorted(
+                    {c.name if hasattr(c, "name") else c.get("name") for c in calls if c}
+                )
+                data = dict(data)
+                data["observed_tools"] = tuple(n for n in names if n)
+        return data
 
     def to_outcome(
         self,
@@ -399,16 +389,17 @@ class SessionSummary(_ProbeTelemetry):
 class SelectionOutcome(_ProbeTelemetry):
     """Represent the observable result of probing an agent runtime with a query."""
 
-    @model_validator(mode="after")
-    def _enforce_early_exit_invariants(self) -> Self:
+    @model_validator(mode="before")
+    @classmethod
+    def _enforce_early_exit_invariants(cls, data: Any) -> Any:  # noqa: ANN401
         """Ensure process cancellation artifacts are never reported as probe errors."""
-        if (
-            self.early_exit
-            and self.error
-            and not self.error.startswith(("tool leak", "residency leak"))
-        ):
-            object.__setattr__(self, "error", None)
-        return self
+        if isinstance(data, dict):
+            early = data.get("early_exit", False)
+            err = data.get("error")
+            if early and err and not str(err).startswith(("tool leak", "residency leak")):
+                data = dict(data)
+                data["error"] = None
+        return data
 
 
 class TrajectoryTracker:

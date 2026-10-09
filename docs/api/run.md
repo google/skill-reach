@@ -16,5 +16,6 @@ Orchestration engine for conducting evaluation runs, assembling catalogs, and ex
         - Plan
         - plan_only
         - ProbeHarness
+        - ProbeOutcomeCacheKey
         - RunOutcome
         - write_results

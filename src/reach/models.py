@@ -50,7 +50,13 @@ __all__ = [
 #: Sentinel label representing abstention (no skill invoked).
 NO_SKILL = "(no skill)"
 
+# NonEmptyStr strips surrounding whitespace and requires >= 1 character.
+# Used for identifiers (like skill names) where leading/trailing whitespace is invalid.
 type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# NonBlankStr requires >= 1 non-whitespace character without stripping whitespace.
+# Used for descriptive prose and markdown bodies where surrounding indentation or formatting
+# must be preserved.
 type NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 

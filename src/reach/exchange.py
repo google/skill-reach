@@ -137,7 +137,7 @@ def infer_format(path: Path | str) -> Exchange:
     return SUFFIXES[suffix]
 
 
-def _resolve_field_map(mapping: FieldMap | Mapping[str, Any] | None) -> FieldMap:
+def _resolve_field_map(mapping: FieldMap | Mapping[str, str] | None) -> FieldMap:
     """Resolve an optional FieldMap or raw dictionary into a validated FieldMap."""
     if mapping is None:
         return FieldMap()
@@ -149,7 +149,7 @@ def _resolve_field_map(mapping: FieldMap | Mapping[str, Any] | None) -> FieldMap
 def export_query_set(
     query_set: QuerySet,
     fmt: Exchange,
-    mapping: FieldMap | Mapping[str, Any] | None = None,
+    mapping: FieldMap | Mapping[str, str] | None = None,
 ) -> str:
     """Serialize a QuerySet into CSV or JSONL format using the given field mapping."""
     resolved_map = _resolve_field_map(mapping)
@@ -188,7 +188,7 @@ def import_query_set(
     fmt: Exchange,
     *,
     catalog_id: str,
-    mapping: FieldMap | Mapping[str, Any] | None = None,
+    mapping: FieldMap | Mapping[str, str] | None = None,
     notes: str = "",
     source: str = "",
 ) -> QuerySet:

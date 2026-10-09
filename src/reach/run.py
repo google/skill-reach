@@ -51,6 +51,7 @@ __all__ = [
     "Composition",
     "Plan",
     "ProbeHarness",
+    "ProbeOutcomeCacheKey",
     "RunOutcome",
     "compose",
     "conduct",
@@ -558,7 +559,7 @@ class ProbeHarness:
         pause_s: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
         cache_outcomes: bool = True,
-        outcome_cache: dict[Any, Any] | None = None,
+        outcome_cache: dict[ProbeOutcomeCacheKey, ProbeResult] | None = None,
     ) -> None:
         """Initialize probe harness with runtime driver and execution options."""
         self.runtime = runtime
@@ -800,7 +801,7 @@ def conduct(
     allow_truncation: bool = False,
     composed: Composition | None = None,
     workers: int | None = None,
-    outcome_cache: dict[Any, Any] | None = None,
+    outcome_cache: dict[ProbeOutcomeCacheKey, ProbeResult] | None = None,
 ) -> RunOutcome:
     """Execute an evaluation run end-to-end and return the full RunOutcome."""
     resolved_runtime = runtime or build_runtime(config.runtime)

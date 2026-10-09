@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
 from pydantic import (
     AwareDatetime,
@@ -303,7 +303,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
-    mapping: Mapping[str, Any] | None = None,
+    mapping: Mapping[str, str] | None = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()

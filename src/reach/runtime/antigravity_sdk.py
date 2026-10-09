@@ -62,13 +62,13 @@ from pydantic import BaseModel, Field
 from reach.config import (
     DEFAULT_GEMINI_MODEL,
     RuntimeSettings,
+    agent_default_model,
 )
 from reach.runtime import (
     AntigravityOptions,
     AntigravityRuntime,
     SelectionOutcome,
     TrajectoryTracker,
-    agent_default_model,
 )
 from reach.runtime._env import (
     raise_missing_agent_dependency,

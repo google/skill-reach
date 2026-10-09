@@ -35,7 +35,7 @@ from pydantic import (
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import resident_skills
-from reach.config import DEFAULT_CLAUDE_MODEL
+from reach.config import DEFAULT_CLAUDE_MODEL, agent_default_model
 from reach.runtime import (
     CatalogFit,
     CliAgentRuntime,
@@ -44,7 +44,6 @@ from reach.runtime import (
     SessionSummary,
     SkillRoot,
     VertexOptions,
-    agent_default_model,
 )
 from reach.runtime._env import sync_claude_settings_env
 from reach.runtime._fs import ensure_private_directory

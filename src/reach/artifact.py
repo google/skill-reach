@@ -21,7 +21,7 @@ import statistics
 from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Self
+from typing import TYPE_CHECKING, Annotated, Protocol, Self, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -80,6 +80,7 @@ __all__ = [
     "ConfusionPair",
     "ContestedSkill",
     "Leak",
+    "LexicalRankLike",
     "NotHeadline",
     "QueryRecord",
     "ResolvedRoot",
@@ -267,6 +268,16 @@ class ConfusionPair(BaseModel):
                 msg,
             )
         return self
+
+
+@runtime_checkable
+class LexicalRankLike(Protocol):
+    """Protocol for rank objects exposing a 1-based integer position."""
+
+    @property
+    def position(self) -> int:
+        """Return the 1-based rank position of the target skill."""
+        ...
 
 
 class QueryRecord(BaseModel):
@@ -584,7 +595,7 @@ class Artifact(BaseModel):
         fit: CatalogFit | None = None,
         spend_usd: float = 0.0,
         reused: int = 0,
-        difficulty: Mapping[str, Any] | None = None,
+        difficulty: Mapping[str, int | LexicalRankLike] | None = None,
         digests: Provenance | None = None,
         cross_check: bool = True,
     ) -> Artifact:
@@ -919,7 +930,7 @@ def _spread(
 def _query_records(
     results: Sequence[ProbeResult],
     queries: Sequence[Query],
-    ranks: Mapping[str, Any],
+    ranks: Mapping[str, int | LexicalRankLike],
     flags: Mapping[str, Leak],
 ) -> tuple[QueryRecord, ...]:
     """Construct QueryRecord models for all queries in the query set."""
@@ -932,7 +943,13 @@ def _query_records(
     for query in sorted(queries, key=lambda q: q.query_id):
         usable = grouped.get(query.query_id, [])
         rank = ranks.get(query.query_id)
-        difficulty_rank = int(getattr(rank, "position", rank)) if rank is not None else None
+        difficulty_rank: int | None
+        if rank is None:
+            difficulty_rank = None
+        elif isinstance(rank, int):
+            difficulty_rank = rank
+        else:
+            difficulty_rank = int(rank.position)
         records.append(
             QueryRecord(
                 query_id=query.query_id,
@@ -1055,7 +1072,7 @@ class _ArtifactAssembler:
         fit: CatalogFit | None = None,
         spend_usd: float = 0.0,
         reused: int = 0,
-        difficulty: Mapping[str, Any] | None = None,
+        difficulty: Mapping[str, int | LexicalRankLike] | None = None,
         digests: Provenance | None = None,
         cross_check: bool = True,
     ) -> None:
