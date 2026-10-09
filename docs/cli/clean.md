@@ -52,7 +52,7 @@ reach clean --project your-project-id
 ///
 
 /// tab | Purge all caches, runs, and queries
-Delete registry cache along with local run artifacts (`.reach/eval.json`, `.reach/sweep.json`, `*.artifact.json`, `*.config.json`) and benchmark query sets (`.reach/queries.{json,jsonl,csv}`):
+Delete registry cache along with local run artifacts (`.reach/eval.json`, `.reach/sweep.json`, `*.artifact.json`, `*.config.json`) and benchmark query sets (`.reach/queries.json`, `.reach/queries.jsonl`, `.reach/queries.csv`):
 
 ```bash
 reach clean --all
