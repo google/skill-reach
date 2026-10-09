@@ -98,7 +98,7 @@ In practice, **lexical similarity does not predict behavioral collision**:
 
 ### Classification and Trajectory Metrics
 
-When evaluating skill routing (computed over `Query.scored_invocations` after stripping neutral `acceptable_skills`):
+When evaluating skill routing (after stripping neutral `acceptable_skills`):
 
 - **Top-1 Accuracy & Entrypoint Accuracy**: Fraction of scored probes where the first skill invocation matches `expected_skill` (or correctly abstains on `out_of_scope` queries).
 - **Trajectory Reachability & Trajectory Recall**: Fraction of probes where `expected_skill` was reached at any turn within `max_turns` (`ClassMetrics.trajectory_recall` vs. Turn-1 `ClassMetrics.recall`).
@@ -131,7 +131,7 @@ Per-class `ClassMetrics` (`true_positives`, `false_positives`, `false_negatives`
 Queries can declare optional `acceptable_skills` (for example, a catalog index or discovery router skill such as `finding-google-skills`). `skill-reach` treats `acceptable_skills` as **neutral exploratory steps** (analogous to `cd` or `list_dir`):
 
 - **Runtime Turn Accounting**: Reading an `acceptable_skill` is a real LLM tool call and consumes 1 turn from `max_turns`, but it does **not** trigger `early_exit`—allowing the agent to proceed to the next turn to invoke `expected_skill`.
-- **Scoring Neutrality**: `Query.scored_invocations` strips `acceptable_skills` before scoring:
+- **Scoring Neutrality**: Neutral `acceptable_skills` are stripped from the observed trajectory before scoring:
   - **Assisted Hit (`("router-skill", "expected-skill")`)**: Scored as `("expected-skill",)` (`1 TP` for `expected-skill`, `0 FP` and `0` collisions for `router-skill`, `0` redundancy).
   - **Unfinished Exploration (`("router-skill",)` alone)**: Scored as `()` (`NO_SKILL`). `router-skill` is not blamed as a False Positive or collision (`0 FP`), while `expected-skill` records a False Negative (`1 FN` / `false_abstention`) because the target capability was never reached within `max_turns`.
 
@@ -167,9 +167,9 @@ Small query sets are susceptible to random variation and hierarchical correlatio
 
 ### Turn Budgeting & Early Exit
 
-To balance multi-turn realism with evaluation speed and token cost, `skill-reach` enforces an execution turn budget with early abort capability via `TrajectoryTracker`:
+To balance multi-turn realism with evaluation speed and token cost, `skill-reach` enforces an execution turn budget with early abort capability across all runtimes:
 
-- **Unified Cross-Agent Enforcement**: Every runtime (`antigravity-sdk`, `antigravity-cli`, `claude-code`, `goose`, `pi`, `fake`, `keyword`, and `retriever`) enforces turn budgets and early-exit invariants through `AgentRuntime.make_tracker` and `TrajectoryTracker.apply_to_outcome`.
+- **Unified Cross-Agent Enforcement**: Every supported runtime (`antigravity-sdk`, `antigravity-cli`, `claude-code`, `goose`, `pi`, `keyword`, and `retriever`) enforces consistent turn budgets and early-exit invariants.
 - **Turn Budget (`max_turns = 3`)**: Limits conversation depth per probe. Every skill read (including neutral `acceptable_skills`) consumes 1 turn. If the agent fails to reach `expected_skill` within `max_turns`, the probe terminates.
-- **Early Exit (`early_exit = true`)**: Live probes monitor agent tool calls. The moment `expected_skill` is invoked (or `max_turns` is reached), `skill-reach` halts execution and locks the trajectory tracker so no post-exit tool calls can append extra skills.
+- **Early Exit (`early_exit = true`)**: Live probes monitor agent tool calls. The moment `expected_skill` is invoked (or `max_turns` is reached), `skill-reach` halts execution so no post-exit tool calls can append extra skills.
 - **Precursor & Router Tolerance**: Intermediate precursor or neutral `acceptable_skills` do not trigger early exit; execution continues up to `max_turns` until `expected_skill` itself is reached.

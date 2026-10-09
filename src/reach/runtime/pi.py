@@ -429,7 +429,7 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             lines = session_file.read_text(encoding="utf-8").splitlines()
             entries = list(iter_json_lines(lines))
             summary = parse_session_entries(entries, self._resident)
-            outcome = self.make_tracker(target_skill).apply_to_outcome(
+            outcome = self._make_tracker(target_skill).apply_to_outcome(
                 summary.to_outcome(
                     self._resident,
                     fallback_model=self.model,

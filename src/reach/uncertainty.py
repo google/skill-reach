@@ -24,13 +24,8 @@ from typing import Annotated, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
-    "DEFAULT_CONFIDENCE",
-    "DEFAULT_POWER",
     "Interval",
-    "bootstrap_quantiles",
-    "ci_span_sigmas",
     "cluster_wilson_interval",
-    "critical_value",
     "detectable_delta",
     "effective_sample_size",
     "estimate_skill_icc",

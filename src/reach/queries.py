@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 
 from pydantic import (
     AwareDatetime,
@@ -38,15 +38,12 @@ from reach._io import read_model, write_model
 from reach.models import Query, QueryKind
 
 if TYPE_CHECKING:
-    from reach.exchange import FieldMap
     from reach.models import Skill
 
 __all__ = [
     "Origin",
     "QuerySet",
     "QuerySetProvenance",
-    "format_skill_sample",
-    "format_sync_counts",
     "load_query_set",
     "query_set_digest",
     "save_query_set",
@@ -306,7 +303,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
-    mapping: FieldMap | None = None,
+    mapping: Mapping[str, Any] | None = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()

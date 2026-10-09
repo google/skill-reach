@@ -38,20 +38,12 @@ if TYPE_CHECKING:
 __all__ = [
     "Bm25Scorer",
     "DenseScorer",
-    "EmbeddingVector",
     "HybridScorer",
     "OverlapQuadrant",
-    "PairwiseSimilarity",
-    "ScoredPair",
     "Scorer",
     "TextScorer",
     "build_scorer",
     "classify_overlap_quadrant",
-    "compute_rrf",
-    "cosine_similarity",
-    "directional_projection",
-    "skill_text",
-    "tokenize",
 ]
 
 _DEFAULT_RETRIEVAL = RetrievalSettings()
@@ -72,7 +64,6 @@ type EmbeddingVector = list[float]
 type SimilarityMatrix = dict[tuple[str, str], float]
 type DocumentPostings = dict[str, tuple[str, ...]]
 type TermFrequencyTable = dict[str, Counter[str]]
-type ScoredPair = tuple[str, float]
 type PairwiseSimilarity = tuple[str, str, float]
 
 
@@ -94,7 +85,7 @@ class Scorer(Protocol):
         self,
         target: Skill,
         candidates: Sequence[Skill],
-    ) -> list[ScoredPair]:
+    ) -> list[tuple[str, float]]:
         """Return candidate names paired with scores, strongest first."""
         ...
 
@@ -370,7 +361,7 @@ class DenseScorer(BaseModel):
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    vectors: dict[str, EmbeddingVector] = Field(default_factory=dict)
+    vectors: dict[str, list[float]] = Field(default_factory=dict)
     model_name: str = DEFAULT_RETRIEVAL_MODEL
     mode: Literal["cosine", "directional"] = "cosine"
 
@@ -437,7 +428,7 @@ class DenseScorer(BaseModel):
         self,
         target: Skill,
         candidates: Sequence[Skill],
-    ) -> list[ScoredPair]:
+    ) -> list[tuple[str, float]]:
         """Rank candidate skills against target using semantic similarity."""
         if self.mode == "directional":
             target_vec = self._get_or_compute_vector(target)
@@ -470,7 +461,7 @@ class DenseScorer(BaseModel):
     def pairwise_similarity(
         self,
         skills: Sequence[Skill],
-    ) -> list[PairwiseSimilarity]:
+    ) -> list[tuple[str, str, float]]:
         """Calculate pairwise cosine similarity for all distinct skill pairs."""
         pairs: list[PairwiseSimilarity] = []
 

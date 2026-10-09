@@ -41,13 +41,10 @@ from reach.models import CatalogMode
 from reach.uncertainty import DEFAULT_CONFIDENCE, DEFAULT_POWER
 
 __all__ = [
-    "DEFAULT_CATALOG_BUDGET_CHARS",
-    "QUICK_ATTEMPTS",
     "AgentProfile",
     "CatalogSettings",
     "CheckSettings",
     "DiffSettings",
-    "Digests",
     "DiscoverySettings",
     "GeneralSettings",
     "LintSettings",
@@ -59,15 +56,9 @@ __all__ = [
     "RetrievalSettings",
     "RunConfig",
     "RuntimeSettings",
+    "Severity",
     "StudySettings",
-    "agent_default_model",
-    "agent_profiles",
-    "default_agent",
-    "digest_material",
     "load_config",
-    "resolve_registry_location",
-    "resolve_registry_project",
-    "resolve_sub_settings",
 ]
 
 #: Default probe attempts per query.
@@ -1075,20 +1066,27 @@ class RunConfig(BaseModel):
     @classmethod
     def from_toml(
         cls,
-        path: Path | str,
+        path: Path | str | None = None,
         *,
-        skills: Path | None = None,
+        skills: Path | str | None = None,
     ) -> RunConfig:
         """Load and validate a RunConfig from a TOML configuration file."""
-        resolved = Path(path).expanduser().resolve()
-        payload = tomllib.loads(resolved.read_text(encoding="utf-8"))
-        study = payload.get("study", {})
+        resolved = (
+            _discover_config_path(None)[0] if path is None else Path(path).expanduser().resolve()
+        )
+        payload = (
+            tomllib.loads(resolved.read_text(encoding="utf-8"))
+            if resolved is not None
+            else load_config(None)
+        )
+        base_dir = resolved.parent if resolved is not None else Path.cwd()
+        study = dict(payload.get("study", {}))
         if skills is not None:
             study["skills"] = skills
         for key in ("skills", "queries", "workdir", "out"):
             raw = study.get(key)
             if raw is not None:
-                study[key] = expand_path(raw, base=resolved.parent)
+                study[key] = expand_path(raw, base=base_dir)
         payload["study"] = study
         return cls.model_validate(payload)
 

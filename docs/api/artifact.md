@@ -9,10 +9,9 @@ Data structures representing evaluation outcomes, confusion matrices, and serial
       members:
         - Abstention
         - Artifact
-        - artifact_path
         - ConfusionPair
         - ContestedSkill
-        - filter_query_set
+        - Leak
         - NotHeadline
         - QueryRecord
         - read_artifact

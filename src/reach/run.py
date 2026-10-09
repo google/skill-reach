@@ -49,29 +49,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Composition",
-    "ConfigSidecar",
     "Plan",
     "ProbeHarness",
-    "ProbeOutcomeCacheKey",
     "RunOutcome",
-    "append_result",
-    "completed_attempts",
     "compose",
     "conduct",
     "evaluate",
     "load_corpus",
     "load_results",
     "plan_only",
-    "plan_probes",
-    "read_sidecar",
-    "recorded_fingerprints",
-    "sidecar_path",
-    "validate_appendable",
-    "validate_catalog_fit",
-    "validate_query_coverage",
-    "validate_residency",
     "write_results",
-    "write_sidecar",
 ]
 
 
@@ -571,7 +558,7 @@ class ProbeHarness:
         pause_s: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
         cache_outcomes: bool = True,
-        outcome_cache: dict[ProbeOutcomeCacheKey, Any] | None = None,
+        outcome_cache: dict[Any, Any] | None = None,
     ) -> None:
         """Initialize probe harness with runtime driver and execution options."""
         self.runtime = runtime
@@ -813,7 +800,7 @@ def conduct(
     allow_truncation: bool = False,
     composed: Composition | None = None,
     workers: int | None = None,
-    outcome_cache: dict[ProbeOutcomeCacheKey, Any] | None = None,
+    outcome_cache: dict[Any, Any] | None = None,
 ) -> RunOutcome:
     """Execute an evaluation run end-to-end and return the full RunOutcome."""
     resolved_runtime = runtime or build_runtime(config.runtime)

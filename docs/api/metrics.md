@@ -19,7 +19,7 @@ flowchart LR
 
 ## Trajectory Metrics
 
-Reach evaluates multi-step trajectories against the ground-truth capability target $T$ over `Query.scored_invocations` ($\vec{s}$ after stripping neutral `acceptable_skills`):
+Reach evaluates multi-step trajectories against the ground-truth capability target $T$ over the scored trajectory ($\vec{s}$ after stripping neutral `acceptable_skills`):
 
 | Metric                      |       Symbol        | Definition & Meaning                                                                                                                                                                      |
 | :-------------------------- | :-----------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,10 +43,8 @@ Reach evaluates multi-step trajectories against the ground-truth capability targ
         - classify_invocation_pattern
         - ClassMetrics
         - collisions
-        - compute_f1
         - confusion
         - consistency
-        - consistency_counts
         - decompose_pass_rate_drop
         - DecompositionResult
         - score_trajectory

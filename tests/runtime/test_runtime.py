@@ -982,7 +982,7 @@ def test_check_tool_leak() -> None:
 
 def test_session_summary_to_outcome() -> None:
     """Verify SessionSummary converts cleanly to SelectionOutcome with sync and fallback."""
-    assert issubclass(SelectionOutcome, SessionSummary)
+    assert not issubclass(SelectionOutcome, SessionSummary)
     summary = SessionSummary(
         invoked_skills=("pizza-calculator",),
         reasoning=("thought 1",),

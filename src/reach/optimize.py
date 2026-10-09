@@ -34,7 +34,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StringConstraints,
     computed_field,
 )
 
@@ -50,7 +49,7 @@ from reach.config import (
 )
 from reach.generate import generate_query_set, sanitize_xml_boundary
 from reach.lint import LintSettings
-from reach.models import Catalog, CatalogMode, Query, QueryKind, Skill
+from reach.models import Catalog, CatalogMode, NonEmptyStr, Query, QueryKind, Skill
 from reach.overlap import rank_corpus
 from reach.queries import Origin, QuerySet, QuerySetProvenance, load_query_set
 from reach.review import launch_query_review
@@ -70,16 +69,7 @@ __all__ = [
     "OptimizationReport",
     "ReciprocalHandoff",
     "apply_optimization_candidate",
-    "build_optimization_prompt",
-    "build_reciprocal_handoff",
-    "evaluate_candidate",
-    "filter_candidates",
     "optimize_skill",
-    "render_body_with_routing_note",
-    "split_query_set",
-    "synthesize_candidates",
-    "update_skill_description",
-    "upsert_skill_routing_note",
 ]
 
 _DEFAULT_OPTIMIZE = OptimizeSettings()
@@ -118,7 +108,6 @@ def _round_4dp(value: float) -> float:
 
 type UnitMetric = Annotated[float, AfterValidator(_round_4dp), Field(ge=0.0, le=1.0)]
 type DeltaMetric = Annotated[float, AfterValidator(_round_4dp), Field(ge=-1.0, le=1.0)]
-type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ReciprocalHandoff(BaseModel):
@@ -455,7 +444,7 @@ class _SkillFrontmatterPatch(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    description: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    description: NonEmptyStr
 
 
 class IterationRecord(BaseModel):
@@ -463,7 +452,7 @@ class IterationRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    iteration: int = Field(ge=1)
+    iteration: Annotated[int, Field(ge=1)]
     candidates: tuple[OptimizationCandidate, ...]
     best_candidate: OptimizationCandidate
     failed_queries: tuple[str, ...] = ()
@@ -926,7 +915,7 @@ class _CandidatePayload(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    description: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    description: NonEmptyStr
     rationale: str = ""
 
 

@@ -10,8 +10,6 @@ Rank and analyze lexical overlap between skill descriptions using BM25.
         - compete
         - Competition
         - CorpusOverlap
-        - did_you_mean_hint
         - rank_corpus
         - Rival
         - Standing
-        - suggest_close_skills

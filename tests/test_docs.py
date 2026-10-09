@@ -878,6 +878,25 @@ def test_public_api_modules_and_members_are_alphabetized(
     assert not unsorted, f"API doc members must be sorted alphabetically: {unsorted}"
 
 
+def test_top_level_reach_facade_exports_are_curated_and_sorted() -> None:
+    """Verify top-level reach.__all__ exports are sorted, public, and from public modules."""
+    exported = list(getattr(reach, "__all__", ()))
+    assert exported, "reach.__all__ must be non-empty"
+    assert exported == sorted(exported), "reach.__all__ must be sorted"
+
+    public_module_exports: set[str] = set()
+    for mod_name in PUBLIC_API_MODULES:
+        mod = importlib.import_module(mod_name)
+        public_module_exports.update(getattr(mod, "__all__", ()))
+
+    for sym in exported:
+        assert not sym.startswith("_"), f"Private symbol {sym!r} in reach.__all__"
+        assert hasattr(reach, sym), f"Symbol {sym!r} in reach.__all__ missing on reach package"
+        assert sym in public_module_exports, (
+            f"Top-level export {sym!r} must also be exported in a public reach.* submodule __all__"
+        )
+
+
 def _collect_export_callables(mod: Any, exported: set[str]) -> list[tuple[str, Any]]:
     """Collect public functions and public methods on exported classes in a module."""
     targets: list[tuple[str, Any]] = []
@@ -888,8 +907,12 @@ def _collect_export_callables(mod: Any, exported: set[str]) -> list[tuple[str, A
         elif inspect.isclass(obj):
             targets.extend(
                 (f"{sym_name}.{attr_name}", attr_val)
-                for attr_name, attr_val in inspect.getmembers(obj, predicate=inspect.isfunction)
-                if (not attr_name.startswith("_") or attr_name == "__init__")
+                for attr_name, attr_val in inspect.getmembers(
+                    obj,
+                    predicate=lambda m: inspect.isfunction(m) or inspect.ismethod(m),
+                )
+                if attr_name in obj.__dict__
+                and (not attr_name.startswith("_") or attr_name == "__init__")
                 and getattr(attr_val, "__qualname__", "").startswith(f"{sym_name}.")
             )
     return targets
@@ -920,6 +943,52 @@ def _collect_export_annotations(mod: Any, exported: set[str]) -> list[tuple[str,
     return annotations
 
 
+@functools.cache
+def _all_public_module_exports() -> frozenset[str]:
+    """Return the union of all __all__ exports across PUBLIC_API_MODULES."""
+    exports: set[str] = set()
+    for mod_name in PUBLIC_API_MODULES:
+        mod = importlib.import_module(mod_name)
+        exports.update(getattr(mod, "__all__", ()))
+    return frozenset(exports)
+
+
+def _collect_reach_imported_names(mod: Any) -> set[str]:
+    """Collect symbol names defined in or imported from reach.* within a module."""
+    names: set[str] = {
+        name
+        for name, val in vars(mod).items()
+        if not name.startswith("__")
+        and (inspect.isclass(val) or inspect.isfunction(val))
+        and str(getattr(val, "__module__", "")).startswith("reach.")
+    }
+    mod_file = getattr(mod, "__file__", None)
+    if mod_file:
+        tree = ast.parse(Path(mod_file).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and (node.module == "reach" or node.module.startswith("reach."))
+            ):
+                for alias in node.names:
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _annotated_alias_bases(mod: Any) -> dict[str, str]:
+    """Map Annotated TypeAliasType names in a module to their underlying base type string."""
+    bases: dict[str, str] = {}
+    for name, val in vars(mod).items():
+        if type(val).__name__ == "TypeAliasType":
+            alias_val = getattr(val, "__value__", None)
+            if get_origin(alias_val) is Annotated:
+                args = getattr(alias_val, "__args__", ())
+                if args:
+                    bases[name] = str(args[0])
+    return bases
+
+
 @pytest.mark.parametrize("mod_name", PUBLIC_API_MODULES)
 def test_public_api_signatures_reference_no_private_or_unexported_types(mod_name: str) -> None:
     """Verify public signatures and model_fields do not expose private or unexported types."""
@@ -927,6 +996,10 @@ def test_public_api_signatures_reference_no_private_or_unexported_types(mod_name
     exported: set[str] = set(getattr(mod, "__all__", ()))
     if not exported:
         return
+
+    all_public = _all_public_module_exports()
+    reach_names = _collect_reach_imported_names(mod)
+    annotated_alias_bases = _annotated_alias_bases(mod)
 
     # Intra-module classes, functions, and non-Annotated domain type aliases must be exported
     intra_domain_defs = {
@@ -955,13 +1028,63 @@ def test_public_api_signatures_reference_no_private_or_unexported_types(mod_name
             for priv in private_type_re.findall(ann_str)
             if priv != "_"
         )
-        leaks.extend(
-            f"{label} references unexported intra-module type {tok!r}"
-            for tok in ident_re.findall(ann_str)
-            if tok in intra_domain_defs and tok not in exported
-        )
+        tokens = list(ident_re.findall(ann_str))
+        idx = 0
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok in annotated_alias_bases:
+                for base_tok in ident_re.findall(annotated_alias_bases[tok]):
+                    if base_tok not in tokens:
+                        tokens.append(base_tok)
+            idx += 1
+        for tok in tokens:
+            if tok in annotated_alias_bases:
+                continue
+            if tok in intra_domain_defs and tok not in exported:
+                leaks.append(f"{label} references unexported intra-module type {tok!r}")
+            elif tok in reach_names and tok not in exported and tok not in all_public:
+                leaks.append(f"{label} references unexported reach symbol {tok!r}")
 
     assert not leaks, f"Private or unexported type(s) exposed in public API of {mod_name}: {leaks}"
+
+
+@pytest.mark.parametrize("mod_name", PUBLIC_API_MODULES)
+def test_public_pydantic_models_avoid_no_default_field_assignment(mod_name: str) -> None:
+    """Verify exported BaseModels use Annotated[T, Field(...)] on required fields."""
+    mod = importlib.import_module(mod_name)
+    exported: set[str] = set(getattr(mod, "__all__", ()))
+    mod_file = getattr(mod, "__file__", None)
+    if not exported or not mod_file:
+        return
+
+    tree = ast.parse(Path(mod_file).read_text(encoding="utf-8"))
+    class_nodes: dict[str, ast.ClassDef] = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    violations: list[str] = []
+    for sym_name in sorted(exported):
+        obj = getattr(mod, sym_name, None)
+        if not (inspect.isclass(obj) and issubclass(obj, BaseModel)):
+            continue
+        cls_node = class_nodes.get(sym_name)
+        if cls_node is None:
+            continue
+        required_fields = {
+            fname for fname, finfo in obj.model_fields.items() if finfo.is_required()
+        }
+        violations.extend(
+            f"{mod_name}.{sym_name}.{stmt.target.id}"
+            for stmt in cls_node.body
+            if isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id in required_fields
+            and stmt.value is not None
+        )
+
+    assert not violations, (
+        f"Required BaseModel fields must use Annotated[T, Field(...)] instead of '= Field(...)': "
+        f"{violations}"
+    )
 
 
 # ==============================================================================

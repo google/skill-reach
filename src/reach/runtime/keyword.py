@@ -199,7 +199,7 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
             matched = self.match_skill(query_text)
             if matched is None:
                 matched = self._match_bm25(query_text)
-            return self.make_tracker(target_skill).apply_to_outcome(
+            return self._make_tracker(target_skill).apply_to_outcome(
                 SelectionOutcome(
                     invoked_skills=(matched,) if matched is not None else (),
                     observed_catalog=self._resident,

@@ -21,7 +21,7 @@ import statistics
 from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 
 from pydantic import (
     BaseModel,
@@ -35,7 +35,7 @@ from pydantic import (
 from reach._io import read_model, write_model
 from reach.catalog import corpus_digest, resident_skills
 from reach.config import RunConfig, resolve_path
-from reach.difficulty import LexicalRank, lexical_ranks
+from reach.difficulty import lexical_ranks
 from reach.leak import Leak, leaks
 from reach.metrics import (
     ClassificationReport,
@@ -50,6 +50,7 @@ from reach.models import (
     NO_SKILL,
     Catalog,
     CatalogMode,
+    NonBlankStr,
     ProbeResult,
     Provenance,
     Query,
@@ -78,6 +79,7 @@ __all__ = [
     "Artifact",
     "ConfusionPair",
     "ContestedSkill",
+    "Leak",
     "NotHeadline",
     "QueryRecord",
     "ResolvedRoot",
@@ -86,8 +88,6 @@ __all__ = [
     "SampleQuery",
     "SkillScore",
     "Spread",
-    "artifact_path",
-    "filter_query_set",
     "read_artifact",
     "write_artifact",
 ]
@@ -130,8 +130,8 @@ class SkillScore(BaseModel):
     skill: str
     root: Path | None = None
     attempts: Annotated[int, Field(ge=1)] = 1
-    probes: int = Field(ge=0)
-    reached: int = Field(ge=0)
+    probes: Annotated[int, Field(ge=0)]
+    reached: Annotated[int, Field(ge=0)]
     recall: float | None = None
     trajectory_reached: int = Field(default=0, ge=0)
     trajectory_recall: float | None = None
@@ -234,10 +234,13 @@ class SampleQuery(BaseModel):
 
     query_id: str
     text: str
-    probes: int = Field(
-        ge=1,
-        description="Number of attempts that resulted in this confusion pairing.",
-    )
+    probes: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Number of attempts that resulted in this confusion pairing.",
+        ),
+    ]
     reasoning: tuple[str, ...] = ()
 
 
@@ -248,7 +251,7 @@ class ConfusionPair(BaseModel):
 
     expected: str
     invoked: str
-    probes: int = Field(ge=1)
+    probes: Annotated[int, Field(ge=1)]
     collisions: int = Field(default=0, ge=0)
     queries: tuple[SampleQuery, ...] = ()
 
@@ -271,8 +274,8 @@ class QueryRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    query_id: str = Field(min_length=1)
-    text: str = Field(min_length=1)
+    query_id: NonBlankStr
+    text: NonBlankStr
     kind: QueryKind | None = None
     expected_skill: str
     probes: int = Field(default=0, ge=0)
@@ -346,10 +349,10 @@ class Abstention(BaseModel):
     rate: float
     false_rate: float
     out_of_scope_detection: float | None = None
-    scored: int = Field(ge=0)
-    abstentions: int = Field(ge=0)
-    in_scope: int = Field(ge=0)
-    false_abstentions: int = Field(ge=0)
+    scored: Annotated[int, Field(ge=0)]
+    abstentions: Annotated[int, Field(ge=0)]
+    in_scope: Annotated[int, Field(ge=0)]
+    false_abstentions: Annotated[int, Field(ge=0)]
     out_of_scope: int = Field(default=0, ge=0)
     out_of_scope_detected: int = Field(default=0, ge=0)
     attempts: Annotated[int, Field(ge=1)] = 1
@@ -390,9 +393,9 @@ class RunScores(BaseModel):
     top1_accuracy: float
     abstention: Abstention
     not_headline: NotHeadline
-    unanimous_queries: int = Field(ge=0)
-    observed_queries: int = Field(ge=0)
-    top1_hits: int = Field(ge=0)
+    unanimous_queries: Annotated[int, Field(ge=0)]
+    observed_queries: Annotated[int, Field(ge=0)]
+    top1_hits: Annotated[int, Field(ge=0)]
     entrypoint_hits: int = Field(default=0, ge=0)
     entrypoint_accuracy: float = 0.0
     trajectory_hits: int = Field(default=0, ge=0)
@@ -400,7 +403,7 @@ class RunScores(BaseModel):
     step_efficiency: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     skill_f1: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
     redundancy: float = 0.0
-    scored: int = Field(ge=0)
+    scored: Annotated[int, Field(ge=0)]
     attempts: Annotated[int, Field(ge=1)] = 1
 
     @computed_field
@@ -467,7 +470,7 @@ class RunProvenance(BaseModel):
     runtime: str
     model: str
     resolved_model: str = ""
-    attempts: int = Field(ge=1)
+    attempts: Annotated[int, Field(ge=1)]
     arm: str
     condition: str = ""
     catalog_fit: CatalogFit | None = None
@@ -482,12 +485,15 @@ class Artifact(BaseModel):
     schema_version: str = SCHEMA_VERSION
     catalog_id: str
     catalog_mode: CatalogMode
-    catalog_size: int = Field(ge=0)
+    catalog_size: Annotated[int, Field(ge=0)]
     catalog_target: str | None = None
     provenance: RunProvenance
-    digests: Provenance = Field(
-        description="Configuration fingerprint, corpus digest, and query set digest.",
-    )
+    digests: Annotated[
+        Provenance,
+        Field(
+            description="Configuration fingerprint, corpus digest, and query set digest.",
+        ),
+    ]
     verified_digests: tuple[str, ...] = Field(
         default=(),
         description="Provenance digests corroborated by individual probe results.",
@@ -578,7 +584,7 @@ class Artifact(BaseModel):
         fit: CatalogFit | None = None,
         spend_usd: float = 0.0,
         reused: int = 0,
-        difficulty: Mapping[str, LexicalRank] | None = None,
+        difficulty: Mapping[str, Any] | None = None,
         digests: Provenance | None = None,
         cross_check: bool = True,
     ) -> Artifact:
@@ -913,7 +919,7 @@ def _spread(
 def _query_records(
     results: Sequence[ProbeResult],
     queries: Sequence[Query],
-    ranks: Mapping[str, LexicalRank],
+    ranks: Mapping[str, Any],
     flags: Mapping[str, Leak],
 ) -> tuple[QueryRecord, ...]:
     """Construct QueryRecord models for all queries in the query set."""
@@ -925,6 +931,8 @@ def _query_records(
     records = []
     for query in sorted(queries, key=lambda q: q.query_id):
         usable = grouped.get(query.query_id, [])
+        rank = ranks.get(query.query_id)
+        difficulty_rank = int(getattr(rank, "position", rank)) if rank is not None else None
         records.append(
             QueryRecord(
                 query_id=query.query_id,
@@ -936,7 +944,7 @@ def _query_records(
                     1 for row in usable if query.matches_skill(query.effective_invoked_skill(row))
                 ),
                 selections=tuple(sorted({row.predicted_label for row in usable})),
-                difficulty_rank=(rank.position if (rank := ranks.get(query.query_id)) else None),
+                difficulty_rank=difficulty_rank,
                 leak=flags.get(query.query_id),
             ),
         )
@@ -1047,7 +1055,7 @@ class _ArtifactAssembler:
         fit: CatalogFit | None = None,
         spend_usd: float = 0.0,
         reused: int = 0,
-        difficulty: Mapping[str, LexicalRank] | None = None,
+        difficulty: Mapping[str, Any] | None = None,
         digests: Provenance | None = None,
         cross_check: bool = True,
     ) -> None:

@@ -734,7 +734,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute chat evaluation asynchronously and return observed outcome."""
-        tracker = self.make_tracker(target_skill)
+        tracker = self._make_tracker(target_skill)
         hook_observed_tools: list[str] = []
         agent_holder: list[Any] = []
         post_step_seen: list[bool] = []

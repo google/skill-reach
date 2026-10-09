@@ -32,13 +32,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from reach.catalog import load_skills
 from reach.config import (
-    KEYWORD_AGENT,
+    KEYWORD_AGENT as KEYWORD_AGENT,
+)
+from reach.config import (
     RuntimeSettings,
-    agent_default_model,
     agent_profiles,
     resolve_path,
     resolve_registry_location,
     resolve_registry_project,
+)
+from reach.config import (
+    agent_default_model as agent_default_model,
 )
 from reach.runtime._env import (
     detect_model_provider,
@@ -57,12 +61,20 @@ from reach.runtime._subprocess import (
     process_failure_reason,
     run_subprocess_probe,
 )
-from reach.runtime.generator import BaseTextGenerator, TextGenerator, build_text_generator
+from reach.runtime.generator import (
+    BaseTextGenerator as BaseTextGenerator,
+)
+from reach.runtime.generator import (
+    TextGenerator as TextGenerator,
+)
+from reach.runtime.generator import (
+    build_text_generator as build_text_generator,
+)
 from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
     from reach.models import Catalog, Skill
-    from reach.runtime.retriever import TwoStageRetrieverRuntime
+    from reach.runtime.retriever import TwoStageRetrieverRuntime as TwoStageRetrieverRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -70,38 +82,20 @@ logger = logging.getLogger(__name__)
 FAKE_AGENT = "fake"
 
 __all__ = [
-    "FAKE_AGENT",
-    "KEYWORD_AGENT",
     "AgentOptions",
     "AgentRuntime",
     "AntigravityOptions",
-    "AntigravityRuntime",
-    "BaseTextGenerator",
     "CatalogFit",
-    "CliAgentRuntime",
     "CliOptions",
     "SelectionOutcome",
     "SessionStatus",
     "SessionSummary",
     "SkillRoot",
-    "SkillSelectionBase",
-    "TextGenerator",
     "ToolCallInfo",
-    "TrajectoryTracker",
-    "TwoStageRetrieverRuntime",
     "VertexOptions",
-    "agent_default_model",
-    "antigravity_agents",
     "build_runtime",
-    "build_text_generator",
-    "builtin_tool_names",
-    "cli_agents",
-    "find_agent_for_model",
     "known_agents",
-    "options_model",
     "register_agent",
-    "resolve_options",
-    "runtime_class",
 ]
 
 
@@ -290,12 +284,13 @@ class ToolCallInfo(BaseModel):
     @classmethod
     def _coerce_path(cls, data: Any) -> Any:  # noqa: ANN401
         """Populate parameters with path keyword argument when provided directly."""
-        if isinstance(data, dict) and "path" in data:
+        if isinstance(data, dict) and ("path" in data or data.get("parameters") is None):
             data = dict(data)
             params = dict(data.get("parameters") or {})
-            val = data.pop("path")
-            if val is not None and "path" not in params and "AbsolutePath" not in params:
-                params["path"] = str(val)
+            if "path" in data:
+                val = data.pop("path")
+                if val is not None and "path" not in params and "AbsolutePath" not in params:
+                    params["path"] = str(val)
             data["parameters"] = params
         return data
 
@@ -316,8 +311,8 @@ class SessionStatus(StrEnum):
     TIMEOUT = "TIMEOUT"
 
 
-class SessionSummary(BaseModel):
-    """Hold parsed session outcomes and telemetry across CLI runtime logs."""
+class _ProbeTelemetry(BaseModel):
+    """Hold shared execution telemetry fields across session summaries and probe outcomes."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -328,18 +323,23 @@ class SessionSummary(BaseModel):
     invoked_skills: tuple[str, ...] = ()
     early_exit: bool = False
     turns_taken: int = Field(default=1, ge=1)
-    tool_calls: tuple[ToolCallInfo, ...] = ()
     observed_tools: tuple[str, ...] = ()
     reasoning: tuple[str, ...] = ()
     observed_catalog: tuple[str, ...] = ()
     resolved_model: str = ""
-    status: SessionStatus | str | None = None
-    retries: int = 0
 
     @property
     def invoked_skill(self) -> str | None:
         """Return the first invoked skill name, or None if none was invoked."""
         return self.invoked_skills[0] if self.invoked_skills else None
+
+
+class SessionSummary(_ProbeTelemetry):
+    """Hold parsed session outcomes and telemetry across CLI runtime logs."""
+
+    tool_calls: tuple[ToolCallInfo, ...] = ()
+    status: SessionStatus | str | None = None
+    retries: int = 0
 
     @field_validator("status", mode="before")
     @classmethod
@@ -361,17 +361,13 @@ class SessionSummary(BaseModel):
         """Return True if stream contained a terminal result event or early exit."""
         return self.status is not None or self.early_exit
 
-    @model_validator(mode="before")
-    @classmethod
-    def _derive_observed_tools(cls, data: Any) -> Any:  # noqa: ANN401 (Pydantic before validator)
+    @model_validator(mode="after")
+    def _derive_observed_tools(self) -> Self:
         """Populate observed tools from tool calls if not explicitly provided."""
-        if isinstance(data, dict):
-            data = dict(data)
-            calls = data.get("tool_calls")
-            if calls and not data.get("observed_tools"):
-                names = {getattr(c, "name", None) or c.get("name") for c in calls if c}
-                data["observed_tools"] = tuple(sorted(n for n in names if n))
-        return data
+        if self.tool_calls and not self.observed_tools:
+            names = tuple(sorted({c.name for c in self.tool_calls if c.name}))
+            object.__setattr__(self, "observed_tools", names)
+        return self
 
     def to_outcome(
         self,
@@ -393,28 +389,26 @@ class SessionSummary(BaseModel):
             invoked_skills=self.invoked_skills,
             early_exit=effective_early_exit,
             turns_taken=turns,
-            tool_calls=self.tool_calls,
             observed_tools=self.observed_tools,
             reasoning=self.reasoning,
             resolved_model=self.resolved_model or fallback_model,
-            status=self.status,
             observed_catalog=catalog,
         )
 
 
-class SelectionOutcome(SessionSummary):
+class SelectionOutcome(_ProbeTelemetry):
     """Represent the observable result of probing an agent runtime with a query."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def _enforce_early_exit_invariants(cls, data: Any) -> Any:  # noqa: ANN401 (Pydantic before validator)
+    @model_validator(mode="after")
+    def _enforce_early_exit_invariants(self) -> Self:
         """Ensure process cancellation artifacts are never reported as probe errors."""
-        if isinstance(data, dict) and data.get("early_exit"):
-            data = dict(data)
-            err = str(data.get("error") or "")
-            if err and not err.startswith(("tool leak", "residency leak")):
-                data["error"] = None
-        return data
+        if (
+            self.early_exit
+            and self.error
+            and not self.error.startswith(("tool leak", "residency leak"))
+        ):
+            object.__setattr__(self, "error", None)
+        return self
 
 
 class TrajectoryTracker:
@@ -475,10 +469,8 @@ class TrajectoryTracker:
             early = bool(self.early_exit and (replay.early_exit_hit or outcome.early_exit))
         was_truncated = len(outcome.invoked_skills) > len(skills)
         turns = min(outcome.turns_taken, len(skills) or 1) if was_truncated else outcome.turns_taken
-        new_invoked_skill = skills[0] if skills else None
         return outcome.model_copy(
             update={
-                "invoked_skill": new_invoked_skill,
                 "invoked_skills": skills,
                 "early_exit": early,
                 "turns_taken": turns,
@@ -847,7 +839,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         del workdir
         return sanitize_subprocess_env(dict(os.environ), blocked_env_vars=self.blocked_env_vars)
 
-    def make_tracker(self, target_skill: str | None = None) -> TrajectoryTracker:
+    def _make_tracker(self, target_skill: str | None = None) -> TrajectoryTracker:
         """Create a TrajectoryTracker configured with this runtime's turn and early-exit options."""
         return TrajectoryTracker(
             target_skill=target_skill,
@@ -1006,7 +998,7 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute a query probe via the unified CLI subprocess template pipeline."""
-        tracker = self.make_tracker(target_skill)
+        tracker = self._make_tracker(target_skill)
 
         def _on_line(line: str) -> bool:
             skills = self.extract_skills_from_line(line)

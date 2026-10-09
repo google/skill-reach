@@ -42,15 +42,11 @@ __all__ = [
     "AuthenticationError",
     "NotFoundError",
     "PermissionDeniedError",
-    "RegistryCacheManager",
     "RegistryClient",
     "RegistryError",
     "RegistryManifest",
     "RegistrySkillData",
     "ServiceDisabledError",
-    "find_adc_path",
-    "get_access_token",
-    "is_adc_available",
 ]
 
 

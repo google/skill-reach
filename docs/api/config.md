@@ -7,16 +7,10 @@ Configuration models, settings resolution, and path expansions.
     options:
       show_root_heading: false
       members:
-        - agent_default_model
-        - agent_profiles
         - AgentProfile
         - CatalogSettings
         - CheckSettings
-        - default_agent
-        - DEFAULT_CATALOG_BUDGET_CHARS
         - DiffSettings
-        - digest_material
-        - Digests
         - DiscoverySettings
         - GeneralSettings
         - LintSettings
@@ -25,12 +19,9 @@ Configuration models, settings resolution, and path expansions.
         - OverlapSettings
         - PlanSettings
         - QuerySettings
-        - QUICK_ATTEMPTS
         - RegistrySettings
-        - resolve_registry_location
-        - resolve_registry_project
-        - resolve_sub_settings
         - RetrievalSettings
         - RunConfig
         - RuntimeSettings
+        - Severity
         - StudySettings

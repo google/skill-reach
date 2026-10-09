@@ -49,10 +49,8 @@ __all__ = [
     "classification_report",
     "classify_invocation_pattern",
     "collisions",
-    "compute_f1",
     "confusion",
     "consistency",
-    "consistency_counts",
     "decompose_pass_rate_drop",
     "score_trajectory",
 ]
