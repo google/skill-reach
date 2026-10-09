@@ -9,7 +9,7 @@ The `reach` command-line interface provides tools for the complete skill measure
 | Command                             | Purpose                                                                                  |
 | :---------------------------------- | :--------------------------------------------------------------------------------------- |
 | [`reach check`](check.md)           | Execute two-stage CI/CD quality gate combining linting and empirical assertions.         |
-| [`reach clean`](clean.md)           | Clean cached Agent Registry payloads, sandboxes, and evaluation artifacts.               |
+| [`reach clean`](clean.md)           | Clean cached Agent Registry payloads and evaluation artifacts.                           |
 | [`reach cluster`](cluster.md)       | Partition skill catalogs into cohesive subagent scopes to prevent routing decay.         |
 | [`reach completion`](completion.md) | Generate or install shell tab completion scripts for bash, zsh, and fish.                |
 | [`reach diff`](diff.md)             | Change one factor (description, rival, scope), hold queries fixed, and report the delta. |
@@ -25,15 +25,15 @@ The `reach` command-line interface provides tools for the complete skill measure
 
 ---
 
-## Global Options
+## Global & Common Options
 
 The following flags apply across `reach` commands:
 
-- `--help`, `-h`: Display command help and exit.
-- `--version`: Display application version and exit.
-- `--global`, `-g`: Discover and inspect skills from user global configuration (`~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`, etc.). Can be used as a top-level flag (`reach --global lint`) or subcommand flag (`reach lint --global`).
-- `--quiet`, `-q`: Suppress interactive progress bars and spinners.
-- `--verbose`: Display full cryptographic hashes and detailed logs.
+- `--help`, `-h`: Display command help and exit (all commands).
+- `--version`: Display application version and exit (all commands).
+- `--global`, `-g`: Discover and inspect skills from user global configuration (`~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`, etc.) on skill-discovery subcommands (`check`, `cluster`, `eval`, `lint`, `list`, `optimize`, `overlap`, `query draft`, `query view`, `sweep`).
+- `--quiet`, `-q`: Suppress interactive progress bars and spinners (`eval`, `check`, `query`, `clean`).
+- `--verbose`: Display full cryptographic hashes and detailed metadata (`eval`, `diff`, `view`).
 
 ---
 

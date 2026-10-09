@@ -19,15 +19,15 @@ flowchart LR
 
 ## Trajectory Metrics
 
-Reach evaluates multi-step trajectories against the ground-truth capability target $T$:
+Reach evaluates multi-step trajectories against the ground-truth capability target $T$ over `Query.scored_invocations` ($\vec{s}$ after stripping neutral `acceptable_skills`):
 
-| Metric                      |       Symbol        | Definition & Meaning                                                                                                                             |
-| :-------------------------- | :-----------------: | :----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Fraction of queries where the **very first** skill invoked matches the target skill $T$ ($\vec{s}_1 = T$). Penalizes misrouted initial dispatch. |
-| **Trajectory Reachability** |  $R_{\text{traj}}$  | Fraction of queries where the target skill $T$ is reached anywhere in the trajectory ($T \in \vec{s}$).                                          |
-| **Step Efficiency (MRR)**   |    $\text{MRR}$     | Reciprocal rank $\frac{1}{\text{step}}$, measuring how directly and promptly the agent invoked the target skill.                                 |
-| **Skill Selection F1**      |        $F_1$        | Harmonic mean of precision (target reached / total unique skills invoked) and recall (target reached).                                           |
-| **Skill Redundancy**        | $\text{Redundancy}$ | Excess invocations beyond the target: $\max(0, \text{len}(\vec{s}) - 1)$. Zero indicates optimal, direct execution.                              |
+| Metric                      |       Symbol        | Definition & Meaning                                                                                                                                                                      |
+| :-------------------------- | :-----------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Fraction of queries where the **very first** scored skill invoked matches target $T$ ($\vec{s}_1 = T$, or $\vec{s} = \emptyset$ for `out_of_scope` queries).                              |
+| **Trajectory Reachability** |  $R_{\text{traj}}$  | Fraction of queries where target $T$ is reached anywhere in the scored trajectory ($T \in \vec{s}$, or $\vec{s} = \emptyset$ for `out_of_scope` queries).                                 |
+| **Step Efficiency (MRR)**   |    $\text{MRR}$     | Reciprocal rank $\frac{1}{\text{step}}$ of the first scored invocation of $T$ for positive queries (`None` / excluded from macro-averages on `out_of_scope` queries).                     |
+| **Skill Selection F1**      |        $F_1$        | Harmonic mean of set-level precision (target reached / unique scored skills invoked) and recall (target reached) for positive queries (`None` on `out_of_scope` queries).                 |
+| **Skill Redundancy**        | $\text{Redundancy}$ | Excess scored invocations beyond the target: $\max(0, \text{len}(\vec{s}) - 1)$ for positive queries, or $\text{len}(\vec{s})$ for `out_of_scope` queries where any invocation is excess. |
 
 ---
 

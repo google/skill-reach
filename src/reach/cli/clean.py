@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Clean cached Agent Registry payloads, ephemeral sandboxes, and evaluation artifacts."""
+"""Clean cached Agent Registry payloads and evaluation artifacts."""
 
 from __future__ import annotations
 
@@ -72,9 +72,9 @@ def clean(
     ] = False,
     quiet: Quiet = False,
 ) -> int:
-    """Clean cached Agent Registry payloads, sandboxes, and evaluation artifacts.
+    """Clean cached Agent Registry payloads and evaluation artifacts.
 
-    By default, clean safely purges the .reach/cache/ directory containing
+    By default, clean safely purges the .reach/cache/registry/ directory containing
     cached Agent Registry metadata and revision bundles without touching
     user-generated evaluation results or query sets.
 

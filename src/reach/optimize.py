@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CandidateOrigin",
+    "CandidateProbeTally",
     "IterationRecord",
     "OptimizationCandidate",
     "OptimizationReport",
@@ -173,7 +174,7 @@ def _compute_paired_delta(
     return round(clamped, 4)
 
 
-class _CandidateProbeTally(BaseModel):
+class CandidateProbeTally(BaseModel):
     """Encapsulate empirical probe counts and derived routing metrics for a candidate."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -299,12 +300,12 @@ class OptimizationCandidate(BaseModel):
 
     def with_train_metrics(
         self,
-        tally: _CandidateProbeTally,
+        tally: CandidateProbeTally,
         *,
         delta_recall: float,
         delta_trajectory_recall: float = 0.0,
     ) -> OptimizationCandidate:
-        """Return a copy populated with training probe metrics from a _CandidateProbeTally."""
+        """Return a copy populated with training probe metrics from a CandidateProbeTally."""
         return self.model_copy(
             update={
                 "recall": tally.recall,
@@ -319,8 +320,8 @@ class OptimizationCandidate(BaseModel):
             }
         )
 
-    def with_test_metrics(self, tally: _CandidateProbeTally) -> OptimizationCandidate:
-        """Return a copy populated with holdout test probe metrics from a _CandidateProbeTally."""
+    def with_test_metrics(self, tally: CandidateProbeTally) -> OptimizationCandidate:
+        """Return a copy populated with holdout test probe metrics from a CandidateProbeTally."""
         return self.model_copy(
             update={
                 "test_recall": tally.recall,
@@ -1355,7 +1356,7 @@ def _run_candidate_probes(
     catalog: Catalog | None = None,
     *,
     workers: int = DEFAULT_WORKERS,
-) -> _CandidateProbeTally:
+) -> CandidateProbeTally:
     """Execute empirical queries via ProbeHarness in isolated workspace and tally outcomes."""
     from reach.run import ProbeHarness
 
@@ -1414,7 +1415,7 @@ def _run_candidate_probes(
             misroutes += 1
             misrouted_queries.append(query.text)
 
-    return _CandidateProbeTally(
+    return CandidateProbeTally(
         triggers=triggers,
         trajectory_triggers=trajectory_triggers,
         positive_queries=positive_queries,

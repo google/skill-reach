@@ -799,13 +799,13 @@ def test_scaling_sweep_does_not_skip_probes_when_out_path_configured(tmp_path: P
 def test_run_scaling_sweep_shares_probe_harness_cache_across_identical_scales(
     tmp_path: Path,
 ) -> None:
-    """Verify ProbeHarness uses Pydantic _ProbeOutcomeCacheKey and shares cache across scales."""
+    """Verify ProbeHarness uses Pydantic ProbeOutcomeCacheKey and shares cache across scales."""
     from pydantic import BaseModel
 
-    from reach.run import _ProbeOutcomeCacheKey
+    from reach.run import ProbeOutcomeCacheKey
     from reach.runtime.keyword import KeywordRuntime
 
-    assert issubclass(_ProbeOutcomeCacheKey, BaseModel)
+    assert issubclass(ProbeOutcomeCacheKey, BaseModel)
 
     from reach.catalog import load_skills
 

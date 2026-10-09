@@ -1,10 +1,10 @@
 # `reach eval`
 
-Measure whether a catalog's skills are reachable when resident alongside their rivals. If no labeled query set exists, `reach eval` automatically drafts one.
+Measure whether a catalog's skills are reachable when resident alongside their rivals. Uses `.reach/queries.{json,yaml,yml}` when present, or synthesizes queries automatically when `--auto` or a single-skill `[TARGET]` is provided.
 
-> [!WARNING]
-> **Agent Execution Safety**
-> `reach eval` executes live agent subprocesses that can run tools and shell commands on the host system. When testing third-party or untrusted skills, execute inside an isolated container sandbox (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)) or use `--agent keyword` (an in-memory lexical matching engine that matches query terms against skill manifests via compiled regexes and BM25 scoring without running subprocesses or external APIs). Automated non-interactive environments must explicitly pass `--yes` / `-y` or set `REACH_YES=1` to bypass the safety confirmation gate.
+/// warning | Agent Execution Safety
+`reach eval` executes live agent subprocesses that can run tools and shell commands on the host system. When testing third-party or untrusted skills, execute inside an isolated container sandbox (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)) or use `--agent keyword` (an in-memory lexical matching engine that matches query terms against skill manifests via compiled regexes and BM25 scoring without running subprocesses or external APIs). Automated non-interactive environments must explicitly pass `--yes` / `-y` or set `REACH_YES=1` to bypass the safety confirmation gate.
+///
 
 ---
 
@@ -84,20 +84,19 @@ reach eval cloud-deploy --workers 4
 
 ### Study & Corpus
 
-| Option       | Type          | Description                                                                                                                    |
-| :----------- | :------------ | :----------------------------------------------------------------------------------------------------------------------------- |
-| `[TARGET]`   | String / Path | One skill to evaluate, by name or directory (requests a quick run).                                                            |
-| `--skill`    | String        | Filter evaluation queries or auto-drafting to specific skill name(s) (repeatable).                                             |
-| `--query`    | String        | Probe this exact question rather than drafting one (repeatable).                                                               |
-| `--expected` | String        | The skill every `--query` should reach; defaults to the skill named.                                                           |
-| `--skills`   | Path          | Root directory containing skills or a catalog tree.                                                                            |
-| `--queries`  | Path          | Labeled evaluation queries file (`.json`, `.yaml`/`.yml`, `.jsonl`, or `.csv`). If omitted, queries are automatically drafted. |
-| `--workdir`  | Path          | Temporary workspace to install the competitive catalog into.                                                                   |
-| `--catalog`  | String        | Catalog identifier; defaults to the query set's catalog ID.                                                                    |
-| `--partial`  | Flag          | Allow a query set that targets only a subset of the catalog's skills.                                                          |
-| `--rescope`  | Flag          | Probe the query set against a catalog other than the one it was labeled in.                                                    |
-| `--tag`      | String        | Short semantic label for this run (e.g. `v1-baseline`), displayed in headers.                                                  |
-| `--run-dir`  | Path          | Directory containing default queries, workdir, and output paths.                                                               |
+| Option           | Type          | Description                                                                                                                                                   |
+| :--------------- | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `[TARGET]`       | String / Path | One skill to evaluate by name or directory (requests a quick run), or a skill corpus directory when paired with `--auto`.                                     |
+| `--query`        | String        | Probe this exact question rather than drafting one (repeatable).                                                                                              |
+| `--expected`     | String        | The skill every `--query` should reach; defaults to the skill named.                                                                                          |
+| `--skills`, `-s` | Path          | Root directory containing skills or a catalog tree.                                                                                                           |
+| `--queries`      | Path          | Labeled evaluation queries file (`.json`, `.yaml`/`.yml`, `.jsonl`, or `.csv`). Defaults to `.reach/queries.*` if present, or requires `--auto` / `[TARGET]`. |
+| `--workdir`      | Path          | Temporary workspace to install the competitive catalog into.                                                                                                  |
+| `--catalog`      | String        | Catalog identifier; defaults to the query set's catalog ID.                                                                                                   |
+| `--partial`      | Flag          | Allow a query set that targets only a subset of the catalog's skills.                                                                                         |
+| `--rescope`      | Flag          | Probe the query set against a catalog other than the one it was labeled in.                                                                                   |
+| `--tag`          | String        | Short semantic label for this run (e.g. `v1-baseline`), displayed in headers.                                                                                 |
+| `--run-dir`      | Path          | Directory containing default queries, workdir, and output paths.                                                                                              |
 
 ### Agent Registry Options
 
@@ -130,7 +129,7 @@ reach eval cloud-deploy --workers 4
 | `--max-turns`, `-T`                | Integer | `3`                      | Maximum conversation turns to execute and evaluate.                                            |
 | `--early-exit` / `--no-early-exit` | Flag    | `true`                   | Terminate multi-turn probe immediately when target skill is invoked.                           |
 | `--opt`, `-O`                      | String  | -                        | Agent runtime option as `key=value` (repeatable).                                              |
-| `--attempts`                       | Integer | `5` (`3` for quick eval) | Number of probe attempts per query for consistency estimation.                                 |
+| `--attempts`, `-n`                 | Integer | `5` (`3` for quick eval) | Number of probe attempts per query for consistency estimation.                                 |
 | `--retries`                        | Integer | `2`                      | Retry attempts for failed model invocations.                                                   |
 | `--backoff`                        | Float   | `5.0`                    | Initial backoff time in seconds before the first retry.                                        |
 | `--pause`                          | Float   | `0.0`                    | Seconds to pause between probes to respect rate limits.                                        |
@@ -144,17 +143,17 @@ reach eval cloud-deploy --workers 4
 
 ### Query Generation
 
-| Option                | Type    | Default            | Description                                                                  |
-| :-------------------- | :------ | :----------------- | :--------------------------------------------------------------------------- |
-| `--skill`             | String  | All                | Specific skill name(s) to draft queries for (repeatable).                    |
-| `--count`             | Integer | `3`                | Number of queries to draft per target skill.                                 |
-| `--generator-model`   | String  | `gemini-3.8-flash` | Model used to draft synthetic queries.                                       |
-| `--generator-agent`   | String  | Auto-detected      | Agent driver used to draft synthetic queries, overriding the probe agent.    |
-| `--generator-arm`     | String  | `content`          | Which generation prompt to use (`content`, `behavioral`, etc.).              |
-| `--top-rivals`        | Integer | `3`                | Maximum number of top-ranked rival skills to include in generation prompts.  |
-| `--draft-concurrency` | Integer | `1`                | Targets to draft concurrently.                                               |
-| `--adversarial`       | Flag    | `false`            | Synthesize near-miss adversarial negative queries sharing target vocabulary. |
-| `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                           |
+| Option                | Type    | Default            | Description                                                                                  |
+| :-------------------- | :------ | :----------------- | :------------------------------------------------------------------------------------------- |
+| `--skill`             | String  | All                | Filter evaluation queries or auto-drafting to specific skill name(s) (repeatable).           |
+| `--count`             | Integer | `3`                | Number of queries to draft per target skill.                                                 |
+| `--generator-model`   | String  | `gemini-3.8-flash` | Model used to draft synthetic queries.                                                       |
+| `--generator-agent`   | Choice  | Auto-detected      | Agent driver used to draft synthetic queries, overriding the probe agent.                    |
+| `--generator-arm`     | Choice  | `None`             | Which generation prompt to use (`content` or `framing`).                                     |
+| `--top-rivals`        | Integer | `None` (All)       | Maximum number of top-ranked rival skills to include in generation prompts (`3` via config). |
+| `--draft-concurrency` | Integer | `1`                | Targets to draft concurrently.                                                               |
+| `--adversarial`       | Flag    | `false`            | Synthesize near-miss adversarial negative queries sharing target vocabulary.                 |
+| `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                                           |
 
 ### Recording & Artifacts
 

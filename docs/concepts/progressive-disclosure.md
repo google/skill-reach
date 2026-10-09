@@ -39,17 +39,17 @@ graph TD
 
 Because the Level 1 selection surface lives inside the system prompt, agent runtimes bound the total context allocated to catalog listings.
 
-| Runtime                                                       | Per-Description Guidance                 | Whole-Catalog Budget                             | Exceeded Budget Behavior                                                    |
-| :------------------------------------------------------------ | :--------------------------------------- | :----------------------------------------------- | :-------------------------------------------------------------------------- |
-| **Claude Code** (`claude-code`)                               | 1,024 characters (recommended ceiling)   | ~30,000 column listing budget (1% of 1M context) | Drops descriptions entirely, listing only bare skill names (`- <name>`)     |
-| **Google Antigravity** (`antigravity-cli`, `antigravity-sdk`) | 1,024 characters                         | System prompt skill listing budget               | Truncates lower-ranked skills or rejects oversized system prompt extensions |
-| **Goose** (`goose`)                                           | 1,024 characters                         | Extension declaration context window             | Truncates tool/extension listing surface                                    |
-| **Pi** (`pi`)                                                 | 1,024 characters                         | Context window allocation                        | Omits descriptions of overflow skills                                       |
-| **Offline Runtime** (`keyword`)                               | Configurable via `reach.toml` (`[lint]`) | Unconstrained catalog fit                        | Evaluates all resident skills without catalog elision                       |
+| Runtime                                                       | Per-Description Guidance                                                 | Whole-Catalog Budget                                                    | Exceeded Budget Behavior                                                    |
+| :------------------------------------------------------------ | :----------------------------------------------------------------------- | :---------------------------------------------------------------------- | :-------------------------------------------------------------------------- |
+| **Claude Code** (`claude-code`)                               | 1,024 characters (`reach lint` ceiling; 250-char runtime truncation cap) | ~30,000 chars (1% of 1M context) or ~8,000 chars (`2%` of 200K context) | Drops descriptions entirely, listing only bare skill names (`- <name>`)     |
+| **Google Antigravity** (`antigravity-cli`, `antigravity-sdk`) | 1,024 characters                                                         | System prompt skill listing budget                                      | Truncates lower-ranked skills or rejects oversized system prompt extensions |
+| **Goose** (`goose`)                                           | 1,024 characters                                                         | Extension declaration context window                                    | Truncates tool/extension listing surface                                    |
+| **Pi** (`pi`)                                                 | 1,024 characters                                                         | Context window allocation                                               | Omits descriptions of overflow skills                                       |
+| **Offline Runtime** (`keyword`)                               | Configurable via `reach.toml` (`[lint]`)                                 | Unconstrained catalog fit                                               | Evaluates all resident skills without catalog elision                       |
 
 ### Why This Matters for Skill Developers
 
-If a skill description exceeds 1,024 characters, [`reach lint`](../cli/lint.md) warns of `listing-overflow`. Even more critically, when an installed catalog exceeds the runtime prompt budget, Claude Code does not truncate descriptions in the middle; it **elides descriptions entirely** for lower-priority skills, listing only bare skill names (`- <name>`).
+If a skill description exceeds 1,024 characters, [`reach lint`](../cli/lint.md) warns of `description-too-long` (while `reach eval` / `reach sweep` model Claude Code's 250-character per-entry cap and 30,000-character listing budget via `CatalogFit` / `listing-overflow`). Even more critically, when an installed catalog exceeds the runtime prompt budget, Claude Code does not merely truncate; once the minimum per-entry floor is breached, it **elides descriptions entirely** for overflow skills, listing only bare skill names (`- <name>`).
 
 Without its description in the prompt, the model has no trigger boundaries or semantic criteria to select the skill, rendering it **unreachable regardless of user intent**.
 

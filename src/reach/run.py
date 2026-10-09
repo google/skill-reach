@@ -52,6 +52,7 @@ __all__ = [
     "ConfigSidecar",
     "Plan",
     "ProbeHarness",
+    "ProbeOutcomeCacheKey",
     "RunOutcome",
     "append_result",
     "completed_attempts",
@@ -543,7 +544,7 @@ class RunOutcome(BaseModel):
         )
 
 
-class _ProbeOutcomeCacheKey(BaseModel):
+class ProbeOutcomeCacheKey(BaseModel):
     """Identify a content-addressed probe outcome by resident skills and query."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -570,7 +571,7 @@ class ProbeHarness:
         pause_s: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
         cache_outcomes: bool = True,
-        outcome_cache: dict[_ProbeOutcomeCacheKey, Any] | None = None,
+        outcome_cache: dict[ProbeOutcomeCacheKey, Any] | None = None,
     ) -> None:
         """Initialize probe harness with runtime driver and execution options."""
         self.runtime = runtime
@@ -581,7 +582,7 @@ class ProbeHarness:
         self.sleep = sleep
         self.cache_outcomes = cache_outcomes and runtime.name != "fake"
         self._cache_lock = threading.Lock()
-        self._outcome_cache: dict[_ProbeOutcomeCacheKey, Any] = (
+        self._outcome_cache: dict[ProbeOutcomeCacheKey, Any] = (
             outcome_cache if outcome_cache is not None else {}
         )
 
@@ -598,7 +599,7 @@ class ProbeHarness:
         """Execute a single query probe attempt with catalog residency validation."""
         elided = frozenset(fit.elided_skills) if fit is not None else frozenset()
         resident = tuple(s for s in catalog.skills if s not in elided)
-        cache_key = _ProbeOutcomeCacheKey(
+        cache_key = ProbeOutcomeCacheKey(
             runtime_name=self.runtime.name,
             runtime_model=self.runtime.model,
             resident_skills=resident,
@@ -812,7 +813,7 @@ def conduct(
     allow_truncation: bool = False,
     composed: Composition | None = None,
     workers: int | None = None,
-    outcome_cache: dict[_ProbeOutcomeCacheKey, Any] | None = None,
+    outcome_cache: dict[ProbeOutcomeCacheKey, Any] | None = None,
 ) -> RunOutcome:
     """Execute an evaluation run end-to-end and return the full RunOutcome."""
     resolved_runtime = runtime or build_runtime(config.runtime)

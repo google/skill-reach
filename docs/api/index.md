@@ -10,7 +10,7 @@
 | :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------- |
 | [`reach.artifact`](artifact.md)       | Evaluation artifact schema, scoring metrics, and confusion matrix data structures.                                         |
 | [`reach.catalog`](catalog.md)         | Catalog discovery, filesystem scanning, and YAML frontmatter parsing.                                                      |
-| [`reach.check`](check.md)             | Two-stage CI/CD quality gate orchestration, threshold enforcement, and GitHub Actions summary generation.                  |
+| [`reach.check`](check.md)             | Two-stage CI/CD quality gate orchestration, git diff scoping, and threshold enforcement.                                   |
 | [`reach.cluster`](cluster.md)         | Modularity-based skill clustering for subagent catalog scoping.                                                            |
 | [`reach.config`](config.md)           | Configuration loading and Pydantic settings models.                                                                        |
 | [`reach.diff`](diff.md)               | A/B evaluation comparison, noise floor estimation, and effect size reporting.                                              |
@@ -36,10 +36,10 @@ Programmatically load a catalog, run static linting, and inspect issues:
 ```python
 from pathlib import Path
 from reach.catalog import load_skills
-from reach.lint import lint_skills
+from reach.lint import lint_tree
 
 skills = load_skills(Path("./skills"))
-report = lint_skills(skills)
+report = lint_tree(Path("./skills"))
 
 for issue in report.issues:
     print(f"[{issue.rule}] {issue.skill}: {issue.message}")

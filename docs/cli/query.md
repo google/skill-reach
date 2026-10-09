@@ -37,17 +37,20 @@ reach query --queries .reach/queries.json --leaks --citations
 
 ### Synthesis & Targets
 
-| Option                | Type    | Default            | Description                                                                                          |
-| :-------------------- | :------ | :----------------- | :--------------------------------------------------------------------------------------------------- |
-| `[TARGET]`            | Path    | Auto-discovered    | Skill directory to draft queries for, or existing query file (`.json`, `.jsonl`, `.csv`) to convert. |
-| `--skills`            | Path    | Auto-discovered    | Path to skills directory or catalog.                                                                 |
-| `--skill`             | String  | All                | Specific skill name(s) to draft queries for (repeatable).                                            |
-| `--count`             | Integer | `3`                | Number of queries to draft per target skill.                                                         |
-| `--generator-model`   | String  | `gemini-3.8-flash` | Model used to draft synthetic queries.                                                               |
-| `--generator-agent`   | String  | Auto-detected      | Agent driver used to draft synthetic queries, overriding the probe agent.                            |
-| `--adversarial`       | Flag    | `false`            | Synthesize near-miss negative queries sharing target vocabulary.                                     |
-| `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                                                   |
-| `--review`            | Flag    | `false`            | Launch interactive browser review for drafted queries before saving.                                 |
+| Option                | Type    | Default            | Description                                                                                                                   |
+| :-------------------- | :------ | :----------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| `[TARGET]`            | Path    | Auto-discovered    | Skill directory to draft queries for, or existing query file (`.json`, `.jsonl`, `.csv`) to convert.                          |
+| `--skills`, `-s`      | Path    | Auto-discovered    | Path to skills directory or catalog.                                                                                          |
+| `--skill`             | String  | All                | Specific skill name(s) to draft queries for (repeatable).                                                                     |
+| `--count`             | Integer | `3`                | Number of queries to draft per target skill.                                                                                  |
+| `--generator-model`   | String  | `gemini-3.8-flash` | Model used to draft synthetic queries.                                                                                        |
+| `--generator-agent`   | Choice  | Auto-detected      | Agent driver used to draft synthetic queries (`antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `keyword`, `pi`). |
+| `--generator-arm`     | Choice  | `None`             | Prompt synthesis arm (`content` or `framing`).                                                                                |
+| `--adversarial`       | Flag    | `false`            | Synthesize near-miss negative queries sharing target vocabulary.                                                              |
+| `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                                                                            |
+| `--top-rivals`        | Integer | `3`                | Maximum number of rival skills to include in prompt context.                                                                  |
+| `--draft-concurrency` | Integer | `1`                | Parallel concurrency for query generation workers.                                                                            |
+| `--review`            | Flag    | `false`            | Launch interactive browser review for drafted queries before saving.                                                          |
 
 ### Output & Formats
 
@@ -58,6 +61,9 @@ reach query --queries .reach/queries.json --leaks --citations
 | `--force`        | Flag   | `false`               | Overwrite destination query set file if it already exists.                                                                     |
 | `--sync`         | Flag   | `false`               | Backfill missing skills and refresh updated skills in an existing destination query set.                                       |
 | `--dry-run`      | Flag   | `false`               | Preview prompts and token budget without making model calls.                                                                   |
+| `--config`       | Path   | `reach.toml`          | Explicit path to a configuration file.                                                                                         |
+| `--global`       | Flag   | `false`               | Include user-level global skill directories (`~`) during discovery.                                                            |
+| `--quiet`, `-q`  | Flag   | `false`               | Suppress non-essential progress output.                                                                                        |
 
 ### Inspection & View
 
@@ -115,16 +121,17 @@ reach query draft ./my-skills --sync
 reach query draft ./my-skills --review
 ```
 
-| Option                | Type    | Default  | Description                                                                          |
-| :-------------------- | :------ | :------- | :----------------------------------------------------------------------------------- |
-| `--count`, `-c`       | Integer | `4`      | Target evaluation queries generated per skill.                                       |
-| `--sync`              | Flag    | `false`  | Backfill missing skills and refresh updated skills in an existing query set.         |
-| `--review`            | Flag    | `false`  | Open interactive browser review session before saving.                               |
-| `--agent`             | String  | `claude` | Generation agent runtime (`antigravity`, `claude-code`, `gemini-cli`, `gemini-api`). |
-| `--model`             | String  | -        | LLM model identifier for query drafting.                                             |
-| `--top-rivals`        | Integer | -        | Maximum number of rival skills to include in prompt context.                         |
-| `--draft-concurrency` | Integer | `4`      | Parallel concurrency for query generation workers.                                   |
-| `--out`, `-o`         | Path    | -        | Output path for generated queries JSON (defaults to `.reach/queries.json`).          |
+| Option                | Type    | Default            | Description                                                                                               |
+| :-------------------- | :------ | :----------------- | :-------------------------------------------------------------------------------------------------------- |
+| `--count`             | Integer | `3`                | Target evaluation queries generated per skill.                                                            |
+| `--sync`              | Flag    | `false`            | Backfill missing skills and refresh updated skills in an existing query set.                              |
+| `--review`            | Flag    | `false`            | Open interactive browser review session before saving.                                                    |
+| `--generator-agent`   | Choice  | Auto-detected      | Generation agent runtime (`antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `keyword`, `pi`). |
+| `--generator-model`   | String  | `gemini-3.8-flash` | LLM model identifier for query drafting.                                                                  |
+| `--generator-arm`     | Choice  | `None`             | Prompt synthesis arm (`content` or `framing`).                                                            |
+| `--top-rivals`        | Integer | `3`                | Maximum number of rival skills to include in prompt context.                                              |
+| `--draft-concurrency` | Integer | `1`                | Parallel concurrency for query generation workers.                                                        |
+| `--out`, `-o`         | Path    | -                  | Output path for generated queries JSON (defaults to `.reach/queries.json`).                               |
 
 ### `reach query view`
 
@@ -169,16 +176,16 @@ reach eval --queries queries.csv
 
 ## Query Schema (`Query`)
 
-Each entry in a `.reach/queries.json` (or `.yaml` / `.jsonl` / `.csv` dataset) conforms to the [`Query`](../api/models.md) model (when hand-authoring JSON or YAML files, top-level `catalog_id` defaults to `"all"` and missing query `id`s are numbered automatically):
+Each entry in a `.reach/queries.json` (or `.yaml` / `.jsonl` / `.csv` dataset) conforms to the [`Query`](../api/models.md) model. When hand-authoring JSON or YAML files, top-level `catalog_id` defaults to `"all"` and `query_id` (or legacy `"id"`, which is normalized to `"query_id"` on load) is required; when importing CSV or JSONL files via `reach query`, missing IDs are numbered automatically as `q-1`, `q-2`, ...:
 
-| Field               | Type                | Default      | Description                                                                                                                                               |
-| :------------------ | :------------------ | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                | `str`               | Auto (`q-N`) | Unique identifier for the evaluation query (numbered automatically as `q-001`, `q-002`, ... when omitted).                                                |
-| `text`              | `str`               | —            | Realistic user prompt text presented to the agent runtime. Accepts `"query"` as a validation alias and always serializes to `"text"` on save.             |
-| `kind`              | `QueryKind \| None` | `None`       | Structural category (`implicit`, `contextual`, `neighbor_negative`, or `out_of_scope`).                                                                   |
-| `expected_skill`    | `str \| None`       | `None`       | Ground-truth target skill expected to be invoked, or `None` for out-of-scope queries.                                                                     |
-| `acceptable_skills` | `tuple[str, ...]`   | `()`         | Optional neutral helper or router skills (e.g. `finding-google-skills`) that consume turns at runtime but are neither rewarded as TP nor penalized as FP. |
-| `notes`             | `str`               | `""`         | Author notes, rationale, or difficulty context.                                                                                                           |
+| Field               | Type                | Default | Description                                                                                                                                                |
+| :------------------ | :------------------ | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_id`          | `str`               | —       | Unique non-empty identifier for the evaluation query (accepts legacy `"id"` on load; numbered automatically as `q-1`, `q-2`, ... during CSV/JSONL import). |
+| `text`              | `str`               | —       | Realistic user prompt text presented to the agent runtime.                                                                                                 |
+| `kind`              | `QueryKind \| None` | `None`  | Structural category (`implicit`, `contextual`, `neighbor_negative`, or `out_of_scope`).                                                                    |
+| `expected_skill`    | `str \| None`       | `None`  | Ground-truth target skill expected to be invoked, or `None` for out-of-scope queries.                                                                      |
+| `acceptable_skills` | `tuple[str, ...]`   | `()`    | Optional neutral helper or router skills (e.g. `finding-google-skills`) that consume turns at runtime but are neither rewarded as TP nor penalized as FP.  |
+| `notes`             | `str`               | `""`    | Author notes, rationale, or difficulty context.                                                                                                            |
 
 ### Provenance & Per-Skill Sync Digests (`QuerySetProvenance`)
 

@@ -14,6 +14,8 @@
 
 """Load, save, and validate labeled evaluation query sets and calculate digests."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
@@ -123,7 +125,7 @@ class QuerySetProvenance(BaseModel):
 
     def with_updated_digests(
         self,
-        skills: Sequence["Skill"],
+        skills: Sequence[Skill],
         *,
         drafted_targets: Iterable[str] = (),
         covered_targets: Iterable[str] = (),
@@ -204,7 +206,7 @@ class QuerySet(BaseModel):
             if q.expected_skill is not None and q.kind != QueryKind.NEIGHBOR_NEGATIVE
         )
 
-    def stale_skills(self, skills: Sequence["Skill"]) -> frozenset[str]:
+    def stale_skills(self, skills: Sequence[Skill]) -> frozenset[str]:
         """Return covered skill names whose markdown body differs from recorded provenance SHA."""
         from reach.generate import skill_body_digest
 
@@ -220,7 +222,7 @@ class QuerySet(BaseModel):
 
     def out_of_sync_skills(
         self,
-        skills: Sequence["Skill"],
+        skills: Sequence[Skill],
     ) -> tuple[frozenset[str], frozenset[str]]:
         """Return (missing_skills, stale_skills) relative to the provided skill corpus."""
         covered = self.covered_skills()
@@ -238,7 +240,7 @@ class QuerySet(BaseModel):
 
     def with_updated_digests(
         self,
-        skills: Sequence["Skill"],
+        skills: Sequence[Skill],
         *,
         drafted_targets: Iterable[str] = (),
         covered_targets: Iterable[str] = (),
@@ -304,7 +306,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
-    mapping: "FieldMap | None" = None,
+    mapping: FieldMap | None = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()

@@ -105,20 +105,23 @@ nav:
       - Sandboxing & Safety: guides/sandboxing.md
   - CLI Reference:
       - Overview: cli/index.md
-      - reach init: cli/init.md
-      - reach doctor: cli/doctor.md
-      - reach clean: cli/clean.md
-      - reach lint: cli/lint.md
-      - reach overlap: cli/overlap.md
-      - reach query: cli/query.md
-      - reach eval: cli/eval.md
-      - reach check: cli/check.md
-      - reach cluster: cli/cluster.md
-      - reach optimize: cli/optimize.md
-      - reach diff: cli/diff.md
-      - reach sweep: cli/sweep.md
-      - reach view: cli/view.md
-      - reach completion: cli/completion.md
+      - Evaluation & CI:
+          - reach eval: cli/eval.md
+          - reach check: cli/check.md
+          - reach diff: cli/diff.md
+          - reach sweep: cli/sweep.md
+          - reach view: cli/view.md
+      - Catalog & Optimization:
+          - reach lint: cli/lint.md
+          - reach overlap: cli/overlap.md
+          - reach cluster: cli/cluster.md
+          - reach optimize: cli/optimize.md
+          - reach query: cli/query.md
+      - Setup & Maintenance:
+          - reach init: cli/init.md
+          - reach doctor: cli/doctor.md
+          - reach clean: cli/clean.md
+          - reach completion: cli/completion.md
   - Configuration: configuration.md
   - Python API:
       - Overview: api/index.md

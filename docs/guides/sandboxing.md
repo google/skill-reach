@@ -75,7 +75,7 @@ Reach tailors isolation mechanisms to the execution model of each supported agen
 | **Goose**<br>`goose`                                    | Scopes built-in extensions strictly to skill resolution (`--with-builtin skills`)                                           | Runs with `--no-profile` to bypass developer extensions and `.goosehints`   | Dedicated working home directory per probe worker                                                 |
 | **Pi**<br>`pi`                                          | Restricts runtime tools strictly to resident skill definitions                                                              | Ignores ambient host configurations and ancestor instructions               | Dedicated per-worker session directories (`.reach_pi_sessions`)                                   |
 | **Antigravity**<br>`antigravity-cli`, `antigravity-sdk` | Scopes tool declarations strictly to resident catalog schemas and denies `read_file` on isolated `.config` credential paths | Enforces turn limits, early-exit invariants, and cumulative token budgets   | Ephemeral workspace and isolated `HOME` (`settings.json` + `0600` ADC copy unlinked after probes) |
-| **Keyword Driver**<br>`keyword`                         | N/A (zero tool execution)                                                                                                   | N/A (zero prompt context or LLM calls)                                      | In-memory evaluation (zero disk mutations)                                                        |
+| **Keyword Driver**<br>`keyword`                         | N/A (zero tool execution)                                                                                                   | N/A (zero prompt context or LLM calls)                                      | Ephemeral skill staging without subprocess or tool execution                                      |
 
 ---
 
@@ -299,8 +299,9 @@ reach check --yes
 reach optimize --skill my-skill --yes
 ```
 
-> [!NOTE]
-> `--yes` / `-y` specifically bypasses safety confirmation prompts. On `reach optimize`, `--force` / `-f` remains exclusively dedicated to force-applying candidate descriptions even when empirical recall does not improve.
+/// note
+`--yes` / `-y` specifically bypasses safety confirmation prompts. On `reach optimize`, `--force` / `-f` remains exclusively dedicated to force-applying candidate descriptions even when empirical recall does not improve.
+///
 
 ### 2. Environment Variable (`REACH_YES=1`)
 

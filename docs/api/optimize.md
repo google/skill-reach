@@ -11,6 +11,7 @@ Closed-loop skill description optimization using candidate synthesis and empiric
         - build_optimization_prompt
         - build_reciprocal_handoff
         - CandidateOrigin
+        - CandidateProbeTally
         - evaluate_candidate
         - filter_candidates
         - IterationRecord

@@ -141,7 +141,7 @@ class Skill(BaseModel):
         return value
 
 
-type _NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
+type NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 
 class Query(BaseModel):
@@ -149,10 +149,10 @@ class Query(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    query_id: _NonBlankStr = Field(
+    query_id: NonBlankStr = Field(
         description="Unique identifier for the evaluation query.",
     )
-    text: _NonBlankStr = Field(
+    text: NonBlankStr = Field(
         description="Realistic user request text presented to the agent.",
     )
     kind: QueryKind | None = Field(
