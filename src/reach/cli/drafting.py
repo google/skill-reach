@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
     from reach.config import RunConfig
     from reach.models import Catalog, Query, Skill
-    from reach.runtime import TextGenerator
+    from reach.runtime.generator import TextGenerator
 
     from .flags import GenerateFlags
 
@@ -141,7 +141,7 @@ def _init_or_recover_checkpoint(
 
 def _effective_generator_model(settings: RunConfig, generate: GenerateFlags) -> str:
     """Resolve the effective model for query drafting."""
-    from reach.runtime import KEYWORD_AGENT
+    from reach.config import KEYWORD_AGENT
 
     generator_agent = generate.generator_agent or settings.runtime.agent
     model = generate.generator_model

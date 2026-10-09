@@ -179,7 +179,7 @@ flowchart LR
 
 | Metric                      |       Symbol        | Description                                                                                                                                                                                     |
 | :-------------------------- | :-----------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Proportion of queries where the first scored skill invocation (`Query.scored_invocations`, after stripping `acceptable_skills`) matches `expected_skill` (or abstains on `out_of_scope`).       |
+| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Proportion of queries where the first scored skill invocation (after stripping `acceptable_skills`) matches `expected_skill` (or abstains on `out_of_scope`).                                   |
 | **Trajectory Reachability** |  $R_{\text{traj}}$  | Proportion of queries where `expected_skill` is reached at any turn within `max_turns` (`ClassMetrics.trajectory_recall`, or abstains on `out_of_scope`).                                       |
 | **Step Efficiency**         |    $\text{MRR}$     | Mean reciprocal rank ($\frac{1}{\text{step}}$) of the first scored invocation of `expected_skill` for positive queries (`None` on `out_of_scope` queries).                                      |
 | **Skill Selection F1**      |        $F_1$        | Harmonic mean of set-level precision (target reached / unique scored skills called) and recall (target reached) for positive queries (`None` on `out_of_scope` queries).                        |
@@ -187,10 +187,10 @@ flowchart LR
 
 ### Turn Budgeting, Early Exit & Neutral Helper Skills
 
-By default, `skill-reach` configures `max_turns = 3` and enables `early_exit = true` via `TrajectoryTracker` across all runtimes:
+By default, `skill-reach` configures `max_turns = 3` and enables `early_exit = true` across all runtimes:
 
-- **Immediate Termination on Target**: When an agent invokes `expected_skill`, execution terminates immediately and locks the trajectory tracker, avoiding redundant post-target turns and saving API spend.
-- **Neutral Router / Helper Skills (`acceptable_skills`)**: Optional helper/discovery skills declared in `acceptable_skills` consume 1 turn like any other step, do **not** trigger early exit (allowing the agent to reach `expected_skill` on a subsequent turn), and are stripped before scoring (`Query.scored_invocations`) so they are neither rewarded as a True Positive alone nor penalized as a False Positive / redundancy when followed by `expected_skill`.
+- **Immediate Termination on Target**: When an agent invokes `expected_skill`, execution terminates immediately, avoiding redundant post-target turns and saving API spend.
+- **Neutral Router / Helper Skills (`acceptable_skills`)**: Optional helper/discovery skills declared in `acceptable_skills` consume 1 turn like any other step, do **not** trigger early exit (allowing the agent to reach `expected_skill` on a subsequent turn), and are stripped before scoring so they are neither rewarded as a True Positive alone nor penalized as a False Positive / redundancy when followed by `expected_skill`.
 - **Turn-1 Prediction Conservation**: Per-class `false_positives`, `predicted`, `confusion()`, and `collisions()` strictly reflect Turn-1 scored selections so greedy distractors that hijack Turn 1 still surface in `top_attractors()` even when the agent recovers on Turn 2.
 - **Turn Budget Enforcement**: If `expected_skill` is not reached within `max_turns`, the probe halts cleanly.
 - **Configurable**: Override defaults via CLI (`reach eval --max-turns 5 --no-early-exit`) or project configuration (`reach.toml`).

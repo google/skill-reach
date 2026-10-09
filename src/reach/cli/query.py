@@ -445,7 +445,12 @@ def _handle_existing_query_source(
             show_citations=show_citations,
         )
 
-    save_query_set(query_set, out, fmt=target_fmt, mapping=field_map)
+    save_query_set(
+        query_set,
+        out,
+        fmt=target_fmt,
+        mapping=field_map.model_dump() if field_map is not None else None,
+    )
     then_msg = (
         f"{len(query_set.queries)} queries for catalog '{query_set.catalog_id}'; "
         "review them, then probe with `reach eval`"

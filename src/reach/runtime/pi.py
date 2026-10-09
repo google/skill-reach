@@ -32,14 +32,13 @@ from pydantic import (
     field_validator,
 )
 
-from reach.config import DEFAULT_GEMINI_MODEL, resolve_path
+from reach.config import DEFAULT_GEMINI_MODEL, agent_default_model, resolve_path
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
     SelectionOutcome,
     SessionStatus,
     SessionSummary,
-    agent_default_model,
 )
 from reach.runtime._env import (
     apply_provider_api_key,
@@ -429,7 +428,7 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             lines = session_file.read_text(encoding="utf-8").splitlines()
             entries = list(iter_json_lines(lines))
             summary = parse_session_entries(entries, self._resident)
-            outcome = self.make_tracker(target_skill).apply_to_outcome(
+            outcome = self._make_tracker(target_skill).apply_to_outcome(
                 summary.to_outcome(
                     self._resident,
                     fallback_model=self.model,

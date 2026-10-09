@@ -39,9 +39,7 @@ __all__ = [
     "Rival",
     "Standing",
     "compete",
-    "did_you_mean_hint",
     "rank_corpus",
-    "suggest_close_skills",
 ]
 
 

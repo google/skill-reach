@@ -47,29 +47,14 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 __all__ = [
-    "DEFAULT_SWEEP_SCALES",
-    "CorpusScalingPlan",
-    "ResolvedTarget",
     "build_catalogs",
-    "build_corpus_scaling_catalogs",
-    "build_corpus_scaling_queries",
-    "build_corpus_scaling_sequence",
     "build_neighborhood_catalogs",
     "build_scaling_catalogs",
     "corpus_digest",
-    "deduplicate_skills",
-    "determine_min_scale",
-    "find_cluster_medoids",
-    "find_skill_manifest",
-    "generate_log_scales",
     "load_registry_skills",
     "load_skills",
     "parse_frontmatter",
-    "resident_skills",
     "resolve_catalog",
-    "resolve_skill_target",
-    "resolve_sweep_scales",
-    "split_frontmatter",
 ]
 
 FRONTMATTER_DELIMITER = "---"

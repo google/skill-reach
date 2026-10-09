@@ -41,13 +41,10 @@ from reach.models import CatalogMode
 from reach.uncertainty import DEFAULT_CONFIDENCE, DEFAULT_POWER
 
 __all__ = [
-    "DEFAULT_CATALOG_BUDGET_CHARS",
-    "QUICK_ATTEMPTS",
     "AgentProfile",
     "CatalogSettings",
     "CheckSettings",
     "DiffSettings",
-    "Digests",
     "DiscoverySettings",
     "GeneralSettings",
     "LintSettings",
@@ -59,15 +56,9 @@ __all__ = [
     "RetrievalSettings",
     "RunConfig",
     "RuntimeSettings",
+    "Severity",
     "StudySettings",
-    "agent_default_model",
-    "agent_profiles",
-    "default_agent",
-    "digest_material",
     "load_config",
-    "resolve_registry_location",
-    "resolve_registry_project",
-    "resolve_sub_settings",
 ]
 
 #: Default probe attempts per query.
@@ -1075,14 +1066,25 @@ class RunConfig(BaseModel):
     @classmethod
     def from_toml(
         cls,
-        path: Path | str,
+        path: Path | str | None = None,
         *,
-        skills: Path | None = None,
+        skills: Path | str | None = None,
     ) -> RunConfig:
         """Load and validate a RunConfig from a TOML configuration file."""
-        resolved = Path(path).expanduser().resolve()
+        resolved = (
+            _discover_config_path(None)[0] if path is None else Path(path).expanduser().resolve()
+        )
+        if resolved is None:
+            config = cls()
+            if skills is not None:
+                resolved_skills = expand_path(skills, base=Path.cwd())
+                config = config.model_copy(
+                    update={"study": config.study.model_copy(update={"skills": resolved_skills})}
+                )
+            return config
+
         payload = tomllib.loads(resolved.read_text(encoding="utf-8"))
-        study = payload.get("study", {})
+        study = dict(payload.get("study", {}))
         if skills is not None:
             study["skills"] = skills
         for key in ("skills", "queries", "workdir", "out"):

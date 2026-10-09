@@ -30,13 +30,12 @@ from pydantic import (
     ValidationError,
 )
 
-from reach.config import DEFAULT_GEMINI_MODEL
+from reach.config import DEFAULT_GEMINI_MODEL, agent_default_model
 from reach.runtime import (
     CliAgentRuntime,
     CliOptions,
     SessionStatus,
     SessionSummary,
-    agent_default_model,
 )
 from reach.runtime._env import (
     apply_provider_api_key,

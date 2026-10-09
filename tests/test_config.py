@@ -1885,3 +1885,26 @@ def test_run_config_rejects_malformed_registry_and_general_tables(
 
     with pytest.raises(ValidationError):
         RunConfig.model_validate(invalid_payload)
+
+
+def test_run_config_from_toml_defaults_to_discovered_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify RunConfig.from_toml() with no arguments loads ./reach.toml or defaults."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("REACH_CONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
+
+    # Without a reach.toml file, returns default RunConfig and expands relative skills against CWD
+    default_cfg = RunConfig.from_toml(skills="rel_skills")
+    assert default_cfg.study.skills == (tmp_path / "rel_skills").resolve()
+
+    # With a local reach.toml file, discovers and resolves relative study paths
+    (tmp_path / "reach.toml").write_text(
+        '[study]\nskills = "my_corpus"\nqueries = "q.json"\n[plan]\nattempts = 7\n',
+        encoding="utf-8",
+    )
+    discovered_cfg = RunConfig.from_toml()
+    assert discovered_cfg.study.skills == (tmp_path / "my_corpus").resolve()
+    assert discovered_cfg.plan.attempts == 7

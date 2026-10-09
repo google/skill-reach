@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -136,20 +137,29 @@ def infer_format(path: Path | str) -> Exchange:
     return SUFFIXES[suffix]
 
 
+def _resolve_field_map(mapping: FieldMap | Mapping[str, str] | None) -> FieldMap:
+    """Resolve an optional FieldMap or raw dictionary into a validated FieldMap."""
+    if mapping is None:
+        return FieldMap()
+    if isinstance(mapping, FieldMap):
+        return mapping
+    return FieldMap.model_validate(mapping)
+
+
 def export_query_set(
     query_set: QuerySet,
     fmt: Exchange,
-    mapping: FieldMap | None = None,
+    mapping: FieldMap | Mapping[str, str] | None = None,
 ) -> str:
     """Serialize a QuerySet into CSV or JSONL format using the given field mapping."""
-    mapping = mapping or FieldMap()
-    rows = [_as_row(query, mapping, fmt) for query in query_set.queries]
+    resolved_map = _resolve_field_map(mapping)
+    rows = [_as_row(query, resolved_map, fmt) for query in query_set.queries]
     if fmt is Exchange.JSONL:
         return "".join(json.dumps(row) + "\n" for row in rows)
     buffer = io.StringIO()
     writer = csv.DictWriter(
         buffer,
-        fieldnames=list(mapping.columns()),
+        fieldnames=list(resolved_map.columns()),
         lineterminator="\n",
     )
     writer.writeheader()
@@ -178,16 +188,16 @@ def import_query_set(
     fmt: Exchange,
     *,
     catalog_id: str,
-    mapping: FieldMap | None = None,
+    mapping: FieldMap | Mapping[str, str] | None = None,
     notes: str = "",
     source: str = "",
 ) -> QuerySet:
     """Parse a CSV or JSONL document into a QuerySet model for a specific catalog."""
-    mapping = mapping or FieldMap()
+    resolved_map = _resolve_field_map(mapping)
     where = source or "input"
     rows = _read_rows(document, fmt, where)
-    _assert_columns(rows[0], mapping, where)
-    queries = _as_queries(rows, mapping, where)
+    _assert_columns(rows[0], resolved_map, where)
+    queries = _as_queries(rows, resolved_map, where)
     return QuerySet(
         catalog_id=catalog_id,
         notes=notes,

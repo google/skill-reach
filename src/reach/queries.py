@@ -38,15 +38,12 @@ from reach._io import read_model, write_model
 from reach.models import Query, QueryKind
 
 if TYPE_CHECKING:
-    from reach.exchange import FieldMap
     from reach.models import Skill
 
 __all__ = [
     "Origin",
     "QuerySet",
     "QuerySetProvenance",
-    "format_skill_sample",
-    "format_sync_counts",
     "load_query_set",
     "query_set_digest",
     "save_query_set",
@@ -306,7 +303,7 @@ def save_query_set(
     path: Path | str,
     *,
     fmt: str | None = None,
-    mapping: FieldMap | None = None,
+    mapping: Mapping[str, str] | None = None,
 ) -> Path:
     """Serialize a QuerySet instance to disk in JSON, JSONL, or CSV format."""
     resolved = Path(path).expanduser().resolve()

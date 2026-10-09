@@ -219,7 +219,7 @@ class FakeRuntime(AgentRuntime[FakeOptions]):
                 if isinstance(answer, str)
                 else (tuple(s for s in answer if s) if answer else ())
             )
-            return self.make_tracker(target_skill).apply_to_outcome(
+            return self._make_tracker(target_skill).apply_to_outcome(
                 SelectionOutcome(
                     invoked_skills=raw_skills,
                     turns_taken=len(raw_skills) or 1,

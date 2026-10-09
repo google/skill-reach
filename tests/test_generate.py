@@ -434,7 +434,7 @@ def test_the_generator_is_never_handed_a_description(target: Skill) -> None:
 
 def test_generation_needs_no_probe_isolation() -> None:
     """Verify generator runtime configuration leaves standard flags untruncated."""
-    from reach.runtime import agent_default_model
+    from reach.config import agent_default_model
 
     claude_model = agent_default_model("claude-code") or "opus"
     generator = text_generator(model=claude_model, agent="claude-code")
@@ -449,7 +449,7 @@ def test_generation_needs_no_probe_isolation() -> None:
 
 def test_text_generator_routes_gemini_to_antigravity_cli_with_isolated_home() -> None:
     """Verify text_generator handles antigravity-cli with temp home directory."""
-    from reach.runtime import agent_default_model
+    from reach.config import agent_default_model
 
     model = agent_default_model("antigravity-cli") or "gemini-3.8-flash"
     generator = text_generator(model=model, agent="antigravity-cli")
@@ -462,7 +462,7 @@ def test_text_generator_routes_gemini_to_antigravity_cli_with_isolated_home() ->
 
 def test_text_generator_preserves_custom_home_dir(tmp_path: Path) -> None:
     """Verify text_generator preserves custom home_dir in options when provided."""
-    from reach.runtime import agent_default_model
+    from reach.config import agent_default_model
 
     model = agent_default_model("antigravity-cli") or "gemini-3.8-flash"
     custom_home = tmp_path / "custom_home"

@@ -131,16 +131,20 @@ def test_catalog_rejects_duplicate_skills() -> None:
 
 
 def test_skill_requires_non_empty_name_and_description() -> None:
-    """Verify Skill custom field validators reject whitespace-only name or description."""
+    """Verify Skill StringConstraints reject whitespace-only name or description and strip name."""
     from pathlib import Path
 
     from reach.models import Skill
 
-    with pytest.raises(ValidationError, match="name must be non-empty"):
+    with pytest.raises(ValidationError, match="name"):
         Skill(name="   ", description="Valid description.", path=Path("SKILL.md"))
 
-    with pytest.raises(ValidationError, match="description must be non-empty"):
+    with pytest.raises(ValidationError, match="description"):
         Skill(name="s", description="   ", path=Path("SKILL.md"))
+
+    stripped = Skill(name="  deploy  ", description="  Valid description.  ", path=Path("SKILL.md"))
+    assert stripped.name == "deploy"
+    assert stripped.description == "  Valid description.  "
 
 
 def test_query_acceptable_skills() -> None:

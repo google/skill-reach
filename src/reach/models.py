@@ -26,7 +26,6 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    field_validator,
     model_validator,
 )
 
@@ -50,6 +49,15 @@ __all__ = [
 
 #: Sentinel label representing abstention (no skill invoked).
 NO_SKILL = "(no skill)"
+
+# NonEmptyStr strips surrounding whitespace and requires >= 1 character.
+# Used for identifiers (like skill names) where leading/trailing whitespace is invalid.
+type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# NonBlankStr requires >= 1 non-whitespace character without stripping whitespace.
+# Used for descriptive prose and markdown bodies where surrounding indentation or formatting
+# must be preserved.
+type NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 
 class QueryKind(StrEnum):
@@ -95,11 +103,17 @@ class Skill(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    name: str = Field(description="Unique identifier and directory name of the skill.")
-    description: str = Field(
-        description="Selection surface text presented to the model in the system prompt.",
-    )
-    path: Path = Field(description="Filesystem path to the skill directory.")
+    name: Annotated[
+        NonEmptyStr,
+        Field(description="Unique identifier and directory name of the skill."),
+    ]
+    description: Annotated[
+        NonBlankStr,
+        Field(
+            description="Selection surface text presented to the model in the system prompt.",
+        ),
+    ]
+    path: Annotated[Path, Field(description="Filesystem path to the skill directory.")]
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Arbitrary key-value metadata parsed from frontmatter.",
@@ -121,40 +135,24 @@ class Skill(BaseModel):
         description="Whether the skill allows model invocation.",
     )
 
-    @field_validator("name")
-    @classmethod
-    def _require_name(cls, value: str) -> str:
-        """Validate that the skill name contains non-whitespace text."""
-        clean = value.strip()
-        if not clean:
-            msg = "name must be non-empty"
-            raise ValueError(msg)
-        return clean
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        """Validate that the skill description contains non-whitespace text."""
-        if not value.strip():
-            msg = "description must be non-empty"
-            raise ValueError(msg)
-        return value
-
-
-type NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
-
 
 class Query(BaseModel):
     """Represent a single evaluation probe query and expected target skill."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    query_id: NonBlankStr = Field(
-        description="Unique identifier for the evaluation query.",
-    )
-    text: NonBlankStr = Field(
-        description="Realistic user request text presented to the agent.",
-    )
+    query_id: Annotated[
+        NonBlankStr,
+        Field(
+            description="Unique identifier for the evaluation query.",
+        ),
+    ]
+    text: Annotated[
+        NonBlankStr,
+        Field(
+            description="Realistic user request text presented to the agent.",
+        ),
+    ]
     kind: QueryKind | None = Field(
         default=None,
         description="Structural category of query (implicit, contextual, negative, out of scope).",

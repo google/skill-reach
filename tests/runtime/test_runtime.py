@@ -29,7 +29,13 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import build_catalogs, load_skills
-from reach.config import RuntimeSettings, agent_profiles, default_agent, load_config
+from reach.config import (
+    RuntimeSettings,
+    agent_default_model,
+    agent_profiles,
+    default_agent,
+    load_config,
+)
 from reach.models import Catalog, CatalogMode, Skill
 from reach.runtime import (
     AgentOptions,
@@ -42,12 +48,9 @@ from reach.runtime import (
     SessionSummary,
     SkillRoot,
     SkillSelectionBase,
-    TextGenerator,
     ToolCallInfo,
-    agent_default_model,
     antigravity_agents,
     build_runtime,
-    build_text_generator,
     cli_agents,
     find_agent_for_model,
     known_agents,
@@ -76,6 +79,10 @@ from reach.runtime._subprocess import (
     process_failure_reason,
 )
 from reach.runtime.fake import FakeGenerator, FakeOptions, FakeRuntime
+from reach.runtime.generator import (
+    TextGenerator,
+    build_text_generator,
+)
 from reach.runtime.profiles import model_profile
 
 from .conftest import MINIMAL_OPTIONS
@@ -982,7 +989,7 @@ def test_check_tool_leak() -> None:
 
 def test_session_summary_to_outcome() -> None:
     """Verify SessionSummary converts cleanly to SelectionOutcome with sync and fallback."""
-    assert issubclass(SelectionOutcome, SessionSummary)
+    assert not issubclass(SelectionOutcome, SessionSummary)
     summary = SessionSummary(
         invoked_skills=("pizza-calculator",),
         reasoning=("thought 1",),

@@ -7,12 +7,7 @@ Statistical uncertainty estimation, Wilson score confidence intervals, and power
     options:
       show_root_heading: false
       members:
-        - bootstrap_quantiles
-        - ci_span_sigmas
         - cluster_wilson_interval
-        - critical_value
-        - DEFAULT_CONFIDENCE
-        - DEFAULT_POWER
         - detectable_delta
         - effective_sample_size
         - estimate_skill_icc

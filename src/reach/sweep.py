@@ -34,7 +34,6 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
-    StringConstraints,
     ValidationError,
     model_validator,
 )
@@ -58,7 +57,7 @@ from reach.metrics import (
     decompose_pass_rate_drop,
     score_trajectory,
 )
-from reach.models import Catalog, CatalogMode, ProbeResult, Query, QueryKind, Skill
+from reach.models import Catalog, CatalogMode, NonEmptyStr, ProbeResult, Query, QueryKind, Skill
 from reach.queries import QuerySet, load_query_set
 from reach.run import Composition, conduct, validate_catalog_fit
 from reach.runtime import AgentRuntime, build_runtime
@@ -75,14 +74,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
-    "KneePmf",
     "PairedTrialOutcomes",
     "ReplicateCollisionDiagnostic",
     "ScalingPoint",
     "ScalingStudy",
-    "bootstrap_f1_ci",
-    "compute_scaling_noise_floor",
-    "find_kneedle_knee",
     "run_scaling_sweep",
 ]
 
@@ -90,8 +85,6 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 type UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
-type KneePmf = dict[PositiveInt, UnitInterval]
-type NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ReplicateCollisionDiagnostic(BaseModel):
@@ -266,7 +259,7 @@ class ScalingStudy(BaseModel):
 
     # 4. Diagnostics & maps
     anchor_skills: tuple[str, ...] | None = None
-    knee_scale_pmf: KneePmf | None = None
+    knee_scale_pmf: dict[PositiveInt, UnitInterval] | None = None
     paired_outcomes: PairedTrialOutcomes | None = None
     replicate_collisions: tuple[ReplicateCollisionDiagnostic, ...] = ()
     skill_icc: UnitInterval | None = None

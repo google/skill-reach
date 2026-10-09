@@ -37,7 +37,7 @@ from reach.config import (
 from reach.models import Catalog, Query, QueryKind, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance
 from reach.retrieval import Bm25Scorer, Scorer
-from reach.runtime import (
+from reach.runtime.generator import (
     TextGenerator,
     build_text_generator,
 )
