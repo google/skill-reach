@@ -2,9 +2,9 @@
 
 Measure reachability decay and capacity limits across catalog sizes.
 
-> [!WARNING]
-> **Scaling Safety**
-> Scaling sweeps execute repeated live agent probe iterations across varying catalog sizes. Ensure all resident skills in the scaling neighborhood are trusted, or execute the sweep inside an isolated sandbox container (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)). Pass `--yes` / `-y` or set `REACH_YES=1` to bypass interactive confirmation.
+/// warning | Scaling Safety
+Scaling sweeps execute repeated live agent probe iterations across varying catalog sizes. Ensure all resident skills in the scaling neighborhood are trusted, or execute the sweep inside an isolated sandbox container (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)). Pass `--yes` / `-y` or set `REACH_YES=1` to bypass interactive confirmation.
+///
 
 ---
 
@@ -56,13 +56,13 @@ reach sweep ./skills --format json > sweep.json
 
 ---
 
-> [!NOTE]
-> **Anchor Cohort Identification & Simpson's Paradox**
-> By default, `reach sweep` evaluates a fixed anchor cohort across all library sizes. This holds target-skill difficulty constant to cleanly isolate distractor interference from target-set composition shift. Using `--anchor all` subjects the decay curve to composition bias as peripheral skills enter at larger catalog scales.
+/// note | Anchor Cohort Identification & Simpson's Paradox
+By default, `reach sweep` evaluates a fixed anchor cohort across all library sizes. This holds target-skill difficulty constant to cleanly isolate distractor interference from target-set composition shift. Using `--anchor all` subjects the decay curve to composition bias as peripheral skills enter at larger catalog scales.
+///
 
-> [!TIP]
-> **Knee Uncertainty, Right-Censoring & Replicate Collision Diagnostics**
-> `ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision sensitivity (`replicate_collisions` when `--catalog-replicates > 1`).
+/// tip | Knee Uncertainty, Right-Censoring & Replicate Collision Diagnostics
+`ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision sensitivity (`replicate_collisions` when `--catalog-replicates > 1`).
+///
 
 ## Options
 

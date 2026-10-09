@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
+    "KneePmf",
     "PairedTrialOutcomes",
     "ReplicateCollisionDiagnostic",
     "ScalingPoint",

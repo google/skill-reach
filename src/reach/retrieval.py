@@ -38,8 +38,11 @@ if TYPE_CHECKING:
 __all__ = [
     "Bm25Scorer",
     "DenseScorer",
+    "EmbeddingVector",
     "HybridScorer",
     "OverlapQuadrant",
+    "PairwiseSimilarity",
+    "ScoredPair",
     "Scorer",
     "TextScorer",
     "build_scorer",

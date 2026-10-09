@@ -22,9 +22,9 @@ flowchart TD
 1. **Stage 1 (static)**: Fast, offline schema, budget, dependency, and lockfile validation across modified skills without API calls.
 2. **Stage 2 (empirical)**: Probes modified skills against their rivals using a fixed query set, validating classification accuracy, misrouting, and multi-step trajectory metrics (entrypoint accuracy, reachability, step efficiency, skill F1, and redundancy).
 
-> [!WARNING]
-> **CI/CD Runner Safety**
-> Stage 2 empirical probes execute live agent tools on the runner. For automated CI/CD pipelines (GitHub Actions, Cloud Build), ensure workflows run inside isolated runner containers or sandboxes (e.g. [Google Cloud Run sandboxes](../guides/sandboxing.md)), and pass `--yes` (or set `REACH_YES=1`) to prevent non-interactive fail-closed termination.
+/// warning | CI/CD Runner Safety
+Stage 2 empirical probes execute live agent tools on the runner. For automated CI/CD pipelines (GitHub Actions, Cloud Build), ensure workflows run inside isolated runner containers or sandboxes (e.g. [Google Cloud Run sandboxes](../guides/sandboxing.md)), and pass `--yes` (or set `REACH_YES=1`) to prevent non-interactive fail-closed termination.
+///
 
 ---
 
@@ -79,18 +79,18 @@ Stage 1 (Static Pre-flight): ✓ PASS
 
 Stage 2 (Empirical Quality Gate): ✓ PASS
   • 12 query(ies) evaluated across 12 probe(s) (budget: 50).
-╭─────────────────────────┬──────────┬──────────┬────────╮
-│ Metric                  │ Observed │   Target │ Status │
-├─────────────────────────┼──────────┼──────────┼────────┤
-│ recall                  │   100.0% │ >= 80.0% │  PASS  │
-│ accuracy                │   100.0% │ >= 80.0% │  PASS  │
-│ misroute_rate           │     0.0% │ <= 10.0% │  PASS  │
-│ entrypoint_accuracy     │    91.7% │ >= 80.0% │  PASS  │
-│ trajectory_reachability │    95.0% │ >= 90.0% │  PASS  │
-│ step_efficiency         │    88.5% │ >= 80.0% │  PASS  │
-│ skill_f1                │    92.0% │ >= 85.0% │  PASS  │
-│ redundancy              │     0.08 │  <= 0.25 │  PASS  │
-╰─────────────────────────┴──────────┴──────────┴────────╯
+╭──────────────────┬──────────┬──────────┬────────╮
+│ Metric           │ Observed │   Target │ Status │
+├──────────────────┼──────────┼──────────┼────────┤
+│ recall           │   100.0% │ >= 80.0% │  PASS  │
+│ accuracy         │   100.0% │ >= 80.0% │  PASS  │
+│ misroute_rate    │     0.0% │ <= 10.0% │  PASS  │
+│ entrypoint       │    91.7% │ >= 80.0% │  PASS  │
+│ reachability     │    95.0% │ >= 90.0% │  PASS  │
+│ step_efficiency  │    0.885 │ >= 0.800 │  PASS  │
+│ skill_f1         │    92.0% │ >= 85.0% │  PASS  │
+│ redundancy       │     0.08 │  <= 0.25 │  PASS  │
+╰──────────────────┴──────────┴──────────┴────────╯
 ```
 
 ///

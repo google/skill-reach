@@ -177,13 +177,13 @@ flowchart LR
     P -->|Handoff| T["Step 3: Target Capability<br/>(Trajectory Reachability)"]
 ```
 
-| Metric                      |       Symbol        | Description                                                                                                                |
-| :-------------------------- | :-----------------: | :------------------------------------------------------------------------------------------------------------------------- |
-| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Proportion of queries where the first skill invocation matches `expected_skill`.                                           |
-| **Trajectory Reachability** |  $R_{\text{traj}}$  | Proportion of queries where `expected_skill` is reached at any turn within `max_turns` (`ClassMetrics.trajectory_recall`). |
-| **Step Efficiency**         |    $\text{MRR}$     | Mean reciprocal rank ($\frac{1}{\text{step}}$) of the first step where `expected_skill` was invoked.                       |
-| **Skill Selection F1**      |        $F_1$        | Harmonic mean of precision (relevant skills called / total skills called) and recall (target reached).                     |
-| **Skill Redundancy**        | $\text{Redundancy}$ | Excess skill invocations beyond the required target: $\max(0, \text{len}(\vec{s}) - 1)$. Zero indicates optimal routing.   |
+| Metric                      |       Symbol        | Description                                                                                                                                                                                     |
+| :-------------------------- | :-----------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrypoint Accuracy**     | $A_{\text{entry}}$  | Proportion of queries where the first scored skill invocation (`Query.scored_invocations`, after stripping `acceptable_skills`) matches `expected_skill` (or abstains on `out_of_scope`).       |
+| **Trajectory Reachability** |  $R_{\text{traj}}$  | Proportion of queries where `expected_skill` is reached at any turn within `max_turns` (`ClassMetrics.trajectory_recall`, or abstains on `out_of_scope`).                                       |
+| **Step Efficiency**         |    $\text{MRR}$     | Mean reciprocal rank ($\frac{1}{\text{step}}$) of the first scored invocation of `expected_skill` for positive queries (`None` on `out_of_scope` queries).                                      |
+| **Skill Selection F1**      |        $F_1$        | Harmonic mean of set-level precision (target reached / unique scored skills called) and recall (target reached) for positive queries (`None` on `out_of_scope` queries).                        |
+| **Skill Redundancy**        | $\text{Redundancy}$ | Excess scored skill invocations beyond the target: $\max(0, \text{len}(\vec{s}) - 1)$ for positive queries, or $\text{len}(\vec{s})$ for `out_of_scope` queries where any invocation is excess. |
 
 ### Turn Budgeting, Early Exit & Neutral Helper Skills
 
@@ -217,7 +217,7 @@ Alongside setup, cleaning, and diagnostic utility commands:
 | Command      | Purpose                                                                                | Network            |
 | :----------- | :------------------------------------------------------------------------------------- | :----------------- |
 | `doctor`     | Diagnoses environment prerequisites, runtime binaries, credentials, and catalog health | Local / API probes |
-| `clean`      | Cleans cached Agent Registry payloads, ephemeral sandboxes, and run artifacts          | Local (offline)    |
+| `clean`      | Cleans cached Agent Registry payloads and local `.reach/` evaluation artifacts         | Local (offline)    |
 | `init`       | Scaffolds configuration (`reach.toml`) and initializes skill workspaces                | Local (offline)    |
 | `completion` | Generates shell tab-completion scripts (`bash`, `zsh`, `fish`)                         | Local (offline)    |
 
@@ -228,7 +228,9 @@ Evaluate, audit, and benchmark skills hosted in the Google Cloud Agent Registry 
 ```sh
 # Audit local workspace skills against Agent Registry to detect description drift
 uv run reach check --project your-project-id --location global
+```
 
+```sh
 # Evaluate reachability directly on remote registry skills
 uv run reach eval --project your-project-id --auto
 
@@ -407,7 +409,7 @@ uv run reach sweep path/to/skills --format json
 
 ### `reach diff`
 
-Compares a control run against a treatment run where exactly one experimental factor was varied (`description`, `rival`, or `scope`). It tests whether observed changes exceed the statistical noise floor using Wilson score intervals:
+Compares a control run against a treatment run where exactly one experimental factor was varied (`description`, `rival`, or `scope`). It tests whether observed changes exceed the replicate standard-error noise floor ($|\Delta| > 2 \times \text{SE}_{\Delta}$, with binomial fallback for single-attempt runs):
 
 ```sh
 uv run reach diff control.jsonl treatment.jsonl --vary description
@@ -507,13 +509,13 @@ agent = "claude-code"
 timeout_s = 200
 
 [catalog]
-mode = "neighborhood" # choices: neighborhood, all, singleton, sweep
+# mode = "neighborhood" # choices: neighborhood, all, singleton, sweep
 size = 20
 rivals = 10
 seed = 42
 
 [plan]
-attempts = 5
+# attempts = 5 # Mode-dependent default when omitted: 5 (formal eval/check/diff), 3 (quick eval), 1 (sweep/keyword)
 retries = 2
 backoff_s = 5.0
 ```

@@ -37,8 +37,7 @@
   │ view      Read back a recorded run and render what it measured.              │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   ╭─ Setup & Diagnostics ────────────────────────────────────────────────────────╮
-  │ clean       Clean cached Agent Registry payloads, sandboxes, and evaluation  │
-  │             artifacts.                                                       │
+  │ clean       Clean cached Agent Registry payloads and evaluation artifacts.   │
   │ completion  Generate or install shell tab-completion scripts for Reach.      │
   │ doctor      Inspect local development environment, runtime agent binaries,   │
   │             keys, and skill catalogs.                                        │

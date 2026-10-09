@@ -36,7 +36,7 @@ default_agent = "antigravity-cli"
 [catalog]
 # Synthetic catalog generation and neighborhood sampling settings.
 # choices: neighborhood, all, singleton, sweep
-mode = "neighborhood"
+# mode = "neighborhood"
 rivals = 10
 scorer = "hybrid"
 seed = 0
@@ -66,7 +66,9 @@ power = 0.80
 [discovery]
 # Project-level search order for skill directories.
 # Supports "." (single SKILL.md at root), "skills" (generic project folder),
-# explicit paths (e.g. ".agents/skills"), or named agent profiles ("claude-code", "cursor", "github", "goose", "pi").
+# explicit paths (e.g. ".agents/skills"), or named client profiles ("agents",
+# "antigravity-cli", "antigravity-sdk", "claude-code", "codex", "copilot",
+# "cursor", "github", "goose", "pi").
 precedence = [
     ".",
     "skills",
@@ -80,6 +82,7 @@ precedence = [
 
 [lint]
 # Validation thresholds for skill names and descriptions.
+# catalog_budget_chars = 30000
 max_description_length = 1024
 max_name_length = 64
 min_description_length = 20
@@ -132,10 +135,12 @@ min_claim_uses = 2
 
 [plan]
 # Execution plan parameters for retry policies and rate-limit backoff.
-attempts = 5
+# Mode-dependent default when omitted: 5 (formal eval/check/diff), 3 (quick eval), 1 (sweep/keyword).
+# attempts = 5
 backoff_s = 5.0
 pause_s = 0.0
 retries = 2
+# workers = 1
 
 [query]
 # Query generation and adversarial drafting parameters.
@@ -162,8 +167,8 @@ scorer = "hybrid"
 similarity_threshold = 0.92
 
 [runtime]
-# Process execution timeout and runtime parameters.
-agent = "antigravity-cli"
+# Process execution timeout and runtime parameters (agent inherits from [general].default_agent when omitted).
+# agent = "antigravity-cli"
 early_exit = true
 max_turns = 3
 timeout_s = 200
@@ -179,14 +184,22 @@ tag = ""
 # anchor = "all"
 # auto_queries = true
 # bootstrap_iterations = 200
+# bootstrap_seed = 0
+# catalog_replicates = 3
+# out = ".reach/eval.json"
+# queries = "queries.yaml"
 # scales = [10, 25, 50, 100]
+# skills = "skills"
 # trusted = false
+# workdir = ".reach/work"
 
 # Custom agent profiles or path overrides.
 # Any client can declare custom local and user global skill locations:
 
 # [agents.my-custom-agent]
 # default_model = "custom-model"
+# default_provider = "google"
+# models = ["custom-model"]
 # skills_dir = ".my-custom-agent/skills"
 # user_skills_dir = ".my-custom-agent/skills"
 
@@ -194,10 +207,12 @@ tag = ""
 # Overrides customize token sizing and reasoning effort for supported models:
 #
 # [models.claude-sonnet-5]
+# budget_fraction_places = 2
 # chars_per_token = 3.0
 # completion_window = 200_000
 # context_window = 1_000_000
 # effort = "low"
+# listing_budget_fraction = 0.01
 #
 # [models.gemini-3-8-flash]
 # effort = "low"

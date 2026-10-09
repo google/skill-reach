@@ -57,7 +57,7 @@ from reach.runtime._subprocess import (
     process_failure_reason,
     run_subprocess_probe,
 )
-from reach.runtime.generator import TextGenerator, build_text_generator
+from reach.runtime.generator import BaseTextGenerator, TextGenerator, build_text_generator
 from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
@@ -76,6 +76,7 @@ __all__ = [
     "AgentRuntime",
     "AntigravityOptions",
     "AntigravityRuntime",
+    "BaseTextGenerator",
     "CatalogFit",
     "CliAgentRuntime",
     "CliOptions",

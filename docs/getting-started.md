@@ -87,7 +87,8 @@ Use `--agent keyword` for instant, offline verification without consuming model 
 - **Single skill quick eval** (`reach eval <skill>`): Auto-drafts test questions and evaluates one skill against rivals, saving results to `.reach/eval.json`.
 - **Full catalog auto eval** (`reach eval --auto`): Auto-drafts questions for every skill in your catalog and probes them end-to-end in one step.
 - **Full catalog benchmark** (`reach eval`): Automatically uses `.reach/queries.json` if present, or specify `--queries <path>`.
-  ///
+
+///
 
 ### 4. Inspect the interactive scorecard
 

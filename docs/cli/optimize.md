@@ -4,9 +4,9 @@ Optimize a skill's description using automated candidate synthesis and empirical
 
 When two skills collide (for example, `gcp-cloud-run` and `docker-deploy`), adjusting the wording of their descriptions can eliminate misroutes without reducing legitimate activations.
 
-> [!WARNING]
-> **Closed-Loop Probe Safety**
-> Description optimization runs fast-path empirical probes against candidate descriptions using real agent processes. Pass `--yes` / `-y` (or set `REACH_YES=1`) to bypass interactive confirmation prompts. When testing candidate descriptions against untrusted skills, execute Reach inside an isolated sandbox (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)). Note that `--force` / `-f` remains exclusively dedicated to force-applying candidate descriptions when recall does not strictly increase.
+/// warning | Closed-Loop Probe Safety
+Description optimization runs fast-path empirical probes against candidate descriptions using real agent processes. Pass `--yes` / `-y` (or set `REACH_YES=1`) to bypass interactive confirmation prompts. When testing candidate descriptions against untrusted skills, execute Reach inside an isolated sandbox (e.g. Docker or [Google Cloud Run sandboxes](../guides/sandboxing.md)). Note that `--force` / `-f` remains exclusively dedicated to force-applying candidate descriptions when recall does not strictly increase.
+///
 
 ---
 

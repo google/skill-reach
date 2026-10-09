@@ -1863,3 +1863,25 @@ def test_runtime_settings_with_overrides_clears_options_when_explicitly_none() -
     base = RuntimeSettings(agent="claude-code", options={"model": "claude-sonnet-5"})
     cleared = base.with_overrides(options=None)
     assert cleared.options == {}
+
+
+@pytest.mark.parametrize(
+    "invalid_payload",
+    [
+        {"general": {"default_agent": "claude-code", "unknown_general_key": True}},
+        {"agents": "not-a-mapping"},
+        {"agents": {"claude-code": 123}},
+        {"agents": {"claude-code": {"executable": "/usr/local/bin/claude"}}},
+        {"models": "not-a-mapping"},
+        {"models": {"claude-sonnet-5": 456}},
+        {"models": {"claude-sonnet-5": {"unknown_model_key": 100}}},
+    ],
+)
+def test_run_config_rejects_malformed_registry_and_general_tables(
+    invalid_payload: dict[str, Any],
+) -> None:
+    """Verify RunConfig fails fast on unknown keys or non-mapping agents/models tables."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(invalid_payload)

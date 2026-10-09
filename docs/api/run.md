@@ -20,6 +20,7 @@ Orchestration engine for conducting evaluation runs, assembling catalogs, and ex
         - plan_only
         - plan_probes
         - ProbeHarness
+        - ProbeOutcomeCacheKey
         - read_sidecar
         - recorded_fingerprints
         - RunOutcome

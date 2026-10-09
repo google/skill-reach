@@ -13,6 +13,7 @@ Agent execution runtime interfaces, CLI subprocess template drivers, Antigravity
         - antigravity_agents
         - AntigravityOptions
         - AntigravityRuntime
+        - BaseTextGenerator
         - build_runtime
         - build_text_generator
         - builtin_tool_names

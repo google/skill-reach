@@ -1889,10 +1889,10 @@ def test_optimization_pydantic_models_and_transitions(
     total_queries: int,
     expected_metrics: tuple[float, float, float],
 ) -> None:
-    """Verify Pydantic _CandidateProbeTally, rounding validators, and candidate transitions."""
-    from reach.optimize import _CandidateProbeTally
+    """Verify Pydantic CandidateProbeTally, rounding validators, and candidate transitions."""
+    from reach.optimize import CandidateProbeTally
 
-    tally = _CandidateProbeTally(
+    tally = CandidateProbeTally(
         triggers=triggers,
         positive_queries=positive_queries,
         correct_count=correct_count,

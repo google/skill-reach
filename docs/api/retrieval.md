@@ -14,8 +14,11 @@ Lexical, dense embedding, and hybrid retrieval scorers for skill selection model
         - cosine_similarity
         - DenseScorer
         - directional_projection
+        - EmbeddingVector
         - HybridScorer
         - OverlapQuadrant
+        - PairwiseSimilarity
+        - ScoredPair
         - Scorer
         - skill_text
         - TextScorer

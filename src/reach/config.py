@@ -22,7 +22,7 @@ import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from enum import StrEnum
-from functools import cached_property
+from functools import cache, cached_property
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, NamedTuple, Self, cast
 
@@ -31,6 +31,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    TypeAdapter,
     ValidationError,
     field_validator,
     model_validator,
@@ -178,7 +179,7 @@ def load_config(config_path: Path | str | None = None) -> dict[str, Any]:
 class AgentProfile(BaseModel):
     """Configuration profile for a named agent runtime in reach.toml."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     default_model: str | None = None
     default_provider: str | None = None
@@ -190,7 +191,7 @@ class AgentProfile(BaseModel):
 class GeneralSettings(BaseModel):
     """Global default settings from reach.toml."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     default_agent: str = "antigravity-cli"
 
@@ -880,6 +881,17 @@ class StudySettings(BaseModel):
         return self.workdir.resolve()
 
 
+_AGENT_REGISTRY_ADAPTER: TypeAdapter[dict[str, AgentProfile]] = TypeAdapter(dict[str, AgentProfile])
+
+
+@cache
+def _model_registry_adapter() -> TypeAdapter[Any]:
+    """Return cached TypeAdapter validating top-level [models] registry tables."""
+    from reach.runtime.profiles import ModelProfile
+
+    return TypeAdapter(dict[str, ModelProfile])
+
+
 class RunConfig(BaseModel):
     """Encapsulate all parameters required to drive an evaluation run."""
 
@@ -903,8 +915,12 @@ class RunConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _strip_registry_tables(cls, data: object) -> object:
-        """Strip top-level agent and model registry tables merged by load_config()."""
+        """Validate and strip top-level agent and model registry tables merged by load_config()."""
         if isinstance(data, Mapping) and ("agents" in data or "models" in data):
+            if "agents" in data:
+                _AGENT_REGISTRY_ADAPTER.validate_python(data["agents"])
+            if "models" in data:
+                _model_registry_adapter().validate_python(data["models"])
             return {k: v for k, v in data.items() if k not in {"agents", "models"}}
         return data
 

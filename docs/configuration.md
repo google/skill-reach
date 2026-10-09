@@ -14,56 +14,37 @@ cp reach.example.toml reach.toml
 
 ## The `reach.toml` Specification
 
-Place a `reach.toml` file in your repository root, or specify a custom path with `--config <path>`:
+Place a `reach.toml` file in your repository root, or specify a custom path with `--config <path>`. All sections and keys are optional—include only the settings you want to override from [reach.example.toml](https://github.com/google/skill-reach/blob/main/reach.example.toml):
 
 ```toml
-# ==============================================================================
-# General Settings
-# ==============================================================================
 [general]
 default_agent = "antigravity-cli"
 
-
-# ==============================================================================
-# Catalog Assembly
-# ==============================================================================
 [catalog]
-mode = "neighborhood"    # Assembly strategy: all, neighborhood, singleton
+# mode = "neighborhood"  # Assembly strategy: all, neighborhood, singleton, sweep
 rivals = 10              # Number of competitor skills sampled around the target
 scorer = "hybrid"        # Rival selection metric: hybrid, dense, bm25
 seed = 0                 # Deterministic seed for reproducible catalog sampling
 size = 20                # Total resident skills installed per probe trial
 
-# ==============================================================================
-# CI/CD Quality Gate (`reach check`)
-# ==============================================================================
 [check]
 budget = 50              # Probe limit budget for Stage 2 empirical evaluation
 max_misroute = 0.10      # Maximum permitted fraction of misrouted queries
-max_redundancy = 0.25    # Maximum acceptable skill redundancy (excess calls >= 0.0, optional)
 min_accuracy = 0.80      # Minimum overall routing accuracy (0.0 - 1.0)
-min_efficiency = 0.80    # Minimum observed step efficiency MRR (0.0 - 1.0, optional)
-min_entrypoint = 0.80    # Minimum observed entrypoint accuracy (0.0 - 1.0, optional)
-min_f1 = 0.85            # Minimum observed skill selection F1 score (0.0 - 1.0, optional)
-min_reachability = 0.90  # Minimum observed trajectory reachability (0.0 - 1.0, optional)
 min_recall = 0.80        # Minimum recall rate for target skills (0.0 - 1.0)
+# Optional multi-step trajectory quality thresholds (unset / None by default):
+# max_redundancy = 0.25
+# min_efficiency = 0.80
+# min_entrypoint = 0.80
+# min_f1 = 0.85
+# min_reachability = 0.90
 since = "HEAD~1"         # Default git base reference when running --changed
 strict = true            # When true, Stage 1 static lint warnings fail the build
 
-# ==============================================================================
-# A/B Diffing & Noise Floor Calibration
-# ==============================================================================
-[diff]
-confidence = 0.95
-noise_inflation = 1.265
-power = 0.80
-
-# ==============================================================================
-# Discovery Precedence Order
-# ==============================================================================
 [discovery]
-# Candidate paths checked in order; the first one found with skills in the workspace is used.
-# Supports "." (single skill at root), "skills" (generic project folder), explicit directory paths (e.g. ".agents/skills"), or agent/client names ("claude-code", "cursor", "github", "copilot", "pi", "goose", "codex", "agents").
+# Supports "." (single skill at root), "skills" (generic project folder), explicit
+# paths (e.g. ".agents/skills"), or client profile names ("agents", "antigravity-cli",
+# "antigravity-sdk", "claude-code", "codex", "copilot", "cursor", "github", "goose", "pi").
 precedence = [
     ".",
     "skills",
@@ -75,9 +56,6 @@ precedence = [
     "goose",
 ]
 
-# ==============================================================================
-# Static Linting
-# ==============================================================================
 [lint]
 max_description_length = 1024
 max_name_length = 64
@@ -105,89 +83,21 @@ unknown-skill-reference = "warn"
 unresolved-declared-dependency = "warn"
 unresolved-placeholder = "warn"
 
-# ==============================================================================
-# Description Optimization
-# ==============================================================================
-[optimize]
-adversarial_count = 5
-auto_queries = true
-budget = 30
-holdout = 0.2
-iterations = 1
-positive_count = 5
-review = false
-review_timeout = 600.0
-seed = 42
-temperature = 0.7
-with_handoff = false
-workers = 4
-
-# ==============================================================================
-# Lexical Overlap & Vocabulary Rewrite Heuristics
-# ==============================================================================
-[overlap]
-claim_limit = 8
-contender_band = 0.90
-material_share = 0.01
-min_claim_length = 3
-min_claim_uses = 2
-
-# ==============================================================================
-# Probe Planning & Rate Limiting
-# ==============================================================================
 [plan]
-attempts = 5             # Replicate probes per query for confidence interval sizing
-backoff_s = 5.0          # Exponential backoff duration in seconds
-pause_s = 0.0            # Delay between successive probes to prevent rate limits
-retries = 2              # Retry attempts on transient API failures
+# Mode-dependent default when omitted: 5 (formal eval/check/diff), 3 (quick eval), 1 (sweep/keyword)
+# attempts = 5
+backoff_s = 5.0
+pause_s = 0.0
+retries = 2
 
-# ==============================================================================
-# Query Synthesis & Difficulty
-# ==============================================================================
-[query]
-adversarial_count = 1
-count = 3
-distinctive_idf_floor = 0.693147
-top_rivals = 3
-
-# ==============================================================================
-# Semantic, Lexical & Hybrid Retrieval
-# ==============================================================================
-[retrieval]
-bm25_b = 0.75
-bm25_k1 = 1.5
-model = "minishlab/potion-retrieval-32M"
-rrf_k = 60
-scorer = "hybrid"
-similarity_threshold = 0.92
-
-# ==============================================================================
-# Runtime Execution
-# ==============================================================================
 [runtime]
 early_exit = true        # Abort multi-turn execution immediately when target skill is observed
 max_turns = 3            # Maximum turns for multi-turn evaluations
 timeout_s = 200          # Maximum seconds to wait for an agent probe response
 
-# ==============================================================================
-# Study Inputs, Workspaces & Artifacts
-# ==============================================================================
-[study]
-# catalog = "auto"             # Target catalog scope: "auto" (default), "all", "neighborhood:<skill>", or "singleton:<skill>"
-# out = ".reach/eval.json"     # Destination for evaluation run results
-# partial = false              # Enforce query set coverage across all catalog skills
-# queries = ".reach/queries.json"  # Labeled evaluation queries benchmark file
-# rescope = false              # Prevent cross-catalog label reuse without --rescope
-# skills = "skills"            # Optional explicit override (omit to use [discovery].precedence)
-# tag = ""                     # Semantic label for run tracking (e.g. "v1-baseline")
-# workdir = "work"             # Custom persistent workspace (omit to use isolated ephemeral tempdir)
-
-# ==============================================================================
-# Agent Profiles & Executables
-# ==============================================================================
+# Bundled Agent Profiles (customizable per agent under [agents.<name>])
 [agents.antigravity-cli]
 default_model = "gemini-3.8-flash"
-executable = "agy"
 models = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -219,14 +129,12 @@ skills_dir = ".agents/skills"
 
 [agents.claude-code]
 default_model = "claude-sonnet-5"
-executable = "claude"
 models = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"]
 skills_dir = ".claude/skills"
 user_skills_dir = ".claude/skills"
 
 [agents.goose]
 default_model = "gemini-3.8-flash"
-executable = "goose"
 models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite"]
 skills_dir = ".agents/skills"
 user_skills_dir = ".agents/skills"
@@ -234,7 +142,6 @@ user_skills_dir = ".agents/skills"
 [agents.pi]
 default_model = "gemini-3.8-flash"
 default_provider = "google"
-executable = "pi"
 models = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -249,9 +156,7 @@ models = [
 skills_dir = ".pi/skills"
 user_skills_dir = ".pi/agent/skills"
 
-# ==============================================================================
-# Model Context Windows & Listing Budgets
-# ==============================================================================
+# Model Context Windows & Listing Budgets (dots in model names replaced with hyphens)
 [models.gemini-3-8-flash]
 effort = "low"
 
@@ -266,17 +171,29 @@ effort = "low"
 
 ## Sections & Options Reference
 
+### `[agents.<name>]`
+
+Configures built-in or custom agent runtime profiles (`AgentProfile`), including supported model identifiers and project/user skill discovery directories. Note that CLI binary overrides (`executable`) belong under `[runtime.options]`, not `[agents.<name>]`.
+
+| Key                | Type             | Default | Description                                                                                  |
+| :----------------- | :--------------- | :------ | :------------------------------------------------------------------------------------------- |
+| `default_model`    | String           | `""`    | Default model identifier used when probing with this agent runtime.                          |
+| `default_provider` | String / `None`  | `None`  | Optional default model provider name (e.g. `"google"` for `pi`).                             |
+| `models`           | Sequence[String] | `()`    | Model identifiers supported by this agent runtime for `--model` auto-routing.                |
+| `skills_dir`       | String           | `""`    | Relative project workspace directory where this agent discovers resident skills.             |
+| `user_skills_dir`  | String / `None`  | `None`  | Relative path under `~` where this agent discovers user-global skills when `--global` is on. |
+
 ### `[catalog]`
 
 Controls how competing skills are selected and installed into the active catalog during empirical probes.
 
-| Key      | Type    | Default          | Description                                                                                                         |
-| :------- | :------ | :--------------- | :------------------------------------------------------------------------------------------------------------------ |
-| `mode`   | String  | `"neighborhood"` | Assembly mode: `all` (install whole catalog), `neighborhood` (target + nearest rivals), `singleton` (target alone). |
-| `size`   | Integer | `20`             | Total number of resident skills in the synthetic catalog.                                                           |
-| `rivals` | Integer | `10`             | Number of competing skills selected by vocabulary or semantic proximity.                                            |
-| `seed`   | Integer | `0`              | Deterministic random seed for catalog permutation.                                                                  |
-| `scorer` | String  | `"hybrid"`       | Scoring method for selecting nearest rivals: `hybrid`, `dense`, or `bm25`.                                          |
+| Key      | Type    | Default          | Description                                                                                                                                      |
+| :------- | :------ | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`   | String  | `"neighborhood"` | Assembly mode: `all` (install whole catalog), `neighborhood` (target + nearest rivals), `singleton` (target alone), or `sweep` (scaling curves). |
+| `size`   | Integer | `20`             | Total number of resident skills in the synthetic catalog.                                                                                        |
+| `rivals` | Integer | `10`             | Number of competing skills selected by vocabulary or semantic proximity.                                                                         |
+| `seed`   | Integer | `0`              | Deterministic random seed for catalog permutation.                                                                                               |
+| `scorer` | String  | `"hybrid"`       | Scoring method for selecting nearest rivals: `hybrid`, `dense`, or `bm25`.                                                                       |
 
 ### `[check]`
 
@@ -308,7 +225,7 @@ Statistical parameters for A/B evaluation diffing and noise floor estimation.
 
 ### `[discovery]`
 
-Controls directory and client skill store search precedence for auto-discovering skills.
+Controls directory and client skill store search precedence for auto-discovering skills. Supports `"."`, `"skills"`, explicit relative paths, or any of the 10 built-in client profiles (`"agents"`, `"antigravity-cli"`, `"antigravity-sdk"`, `"claude-code"`, `"codex"`, `"copilot"`, `"cursor"`, `"github"`, `"goose"`, `"pi"`).
 
 | Key          | Type            | Default                                                                               | Description                                            |
 | :----------- | :-------------- | :------------------------------------------------------------------------------------ | :----------------------------------------------------- |
@@ -332,7 +249,24 @@ Controls static frontmatter and budget thresholds.
 | `catalog_budget_chars`                | Integer | `30000`  | Maximum allowable resident listing budget in characters before triggering `catalog-budget-overflow`. |
 | `mutual_handoff_similarity_threshold` | Float   | `0.75`   | Minimum semantic similarity between neighbors before requiring reciprocal handoffs.                  |
 | `mutual_handoff_lexical_threshold`    | Float   | `0.35`   | Minimum lexical competition score before requiring reciprocal handoffs.                              |
-| `rules.<rule-name>`                   | String  | (varies) | Severity override for any static lint rule: `"error"`, `"warn"`, or `"ignore"`.                      |
+| `rules.<rule-name>`                   | String  | (varies) | Severity override for any static lint rule: `"error"`, `"warn"`, `"info"`, or `"ignore"`.            |
+
+/// note | Interaction with `[catalog]` in `reach.toml`
+When a project's `reach.toml` explicitly includes a `[catalog]` table (with the default `scorer = "hybrid"`) and omits `catalog_budget_chars` under `[lint]`, `load_config()` sets `lint.catalog_budget_chars = None` unless `catalog_budget_chars` is explicitly specified in `[lint]`.
+///
+
+### `[models.<name>]`
+
+Configures context window limits, character-to-token ratios, and reasoning effort tiers (`ModelProfile`). Dots in model names are replaced with hyphens in table headers (e.g., `[models.gemini-3-8-flash]`).
+
+| Key                       | Type            | Default     | Description                                                                                      |
+| :------------------------ | :-------------- | :---------- | :----------------------------------------------------------------------------------------------- |
+| `context_window`          | Integer         | `1_000_000` | Total model context window in tokens.                                                            |
+| `completion_window`       | Integer         | `65_536`    | Maximum output completion window in tokens (`200_000` for Claude 4.5/5 models).                  |
+| `chars_per_token`         | Float           | `4.0`       | Estimated characters per token used for catalog budget calculations (`3.0` for Claude models).   |
+| `listing_budget_fraction` | Float           | `0.01`      | Fraction of `context_window` allocated to the resident skill listing table (`0 < f \le 1`).      |
+| `budget_fraction_places`  | Integer         | `4`         | Decimal rounding precision when formatting listing budget fractions (`1`–`10`).                  |
+| `effort`                  | String / `None` | `None`      | Default reasoning effort level (`"minimal"`, `"low"`, `"medium"`, `"high"`, `"max"`, `"xhigh"`). |
 
 ### `[optimize]`
 
@@ -369,13 +303,13 @@ Parameters governing lexical competition and vocabulary rewrite suggestions.
 
 Controls probe replication and network resilience.
 
-| Key         | Type    | Default | Description                                                                           |
-| :---------- | :------ | :------ | :------------------------------------------------------------------------------------ |
-| `attempts`  | Integer | `5`     | Number of repeated trials per query to compute statistical confidence intervals.      |
-| `retries`   | Integer | `2`     | Number of times to retry a probe if an agent throws a transient API or network error. |
-| `backoff_s` | Float   | `5.0`   | Initial backoff time in seconds between retries.                                      |
-| `pause_s`   | Float   | `0.0`   | Delay between consecutive probes to respect provider rate limits.                     |
-| `workers`   | Integer | `1`     | Number of concurrent worker threads executing probes in parallel.                     |
+| Key         | Type    | Default | Description                                                                                                                                                      |
+| :---------- | :------ | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attempts`  | Integer | `5`     | Replicate trials per query (`5` for formal `eval`/`check`/`diff`, `3` for quick mode, `1` for `sweep` and deterministic `keyword` unless explicitly overridden). |
+| `retries`   | Integer | `2`     | Number of times to retry a probe if an agent throws a transient API or network error.                                                                            |
+| `backoff_s` | Float   | `5.0`   | Initial backoff time in seconds between retries.                                                                                                                 |
+| `pause_s`   | Float   | `0.0`   | Delay between consecutive probes to respect provider rate limits.                                                                                                |
+| `workers`   | Integer | `1`     | Number of concurrent worker threads executing probes in parallel.                                                                                                |
 
 ### `[query]`
 
@@ -421,7 +355,7 @@ Parameters for dense embedding models, BM25 lexical scoring, and hybrid reciproc
 | `early_exit`       | Boolean          | `true`  | When true, aborts probe execution immediately when the target skill is invoked.                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `blocked_env_vars` | Sequence[String] | `None`  | Explicit list of ambient environment variables to strip from child agent processes. When omitted, Reach's default sensitive credentials are stripped (with automatic exemption of `GOOGLE_APPLICATION_CREDENTIALS` when Google Cloud Model Garden, Agent Platform, or Antigravity ADC mode is active; runner configuration variables such as `AGY_ADC_AUTH`, `GOOGLE_GENAI_USE_ENTERPRISE`, `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` are preserved). |
 
-Agent-specific driver options (such as Claude Code's `disable_bundled_skills`, `skill_overrides`, and `enabled_plugins`) are configured under `[runtime.options]`. See [Driver Options](#driver-options) and the [Sandboxing Guide](guides/sandboxing.md) for full driver configuration details.
+Agent-specific driver options are configured under `[runtime.options]`. See [Driver Options (`[runtime.options]`)](#driver-options-runtimeoptions) and the [Sandboxing Guide](guides/sandboxing.md) for full driver configuration details.
 
 ### `[study]`
 
@@ -445,19 +379,60 @@ Controls default file paths for benchmark queries, skill roots, workspaces, and 
 | `trusted`              | Boolean                             | `false`  | When true, trusts resident skills and bypasses interactive safety confirmation prompts.                                                                         |
 | `workdir`              | Path                                | `None`   | Custom persistent workspace path (defaults to isolated ephemeral temp directory).                                                                               |
 
-> [!CAUTION]
-> **Risk of Bypassing Safety Confirmation**
-> Setting `trusted = true` bypasses interactive safety confirmation prompts across all commands that launch live agent probes. **Only enable `trusted = true` in private repositories where all skill manifests and instructions have been vetted and reviewed.** Never enable `trusted = true` on repositories that evaluate untrusted or community-contributed skills.
+/// warning | Risk of Bypassing Safety Confirmation
+Setting `trusted = true` bypasses interactive safety confirmation prompts across all commands that launch live agent probes, and agent runtimes execute with the host permissions of the running user. Only enable `trusted = true` in private repositories where all skill manifests have been reviewed; when evaluating untrusted third-party skills, run Reach inside an isolated container or VM (see the [Sandboxing & Safety Guide](guides/sandboxing.md)).
+///
 
 ---
 
-## Driver Options
+## Driver Options (`[runtime.options]`)
 
-Driver-specific settings can be passed in `reach.toml` under `[runtime.options]`.
+Driver-specific settings can be passed in `reach.toml` under `[runtime.options]` or via `--opt KEY=VALUE` on the CLI. All agent drivers inherit the base `AgentOptions` fields, CLI drivers add `CliOptions`, and Vertex-enabled drivers add `VertexOptions`.
+
+### Common Runtime Options (`AgentOptions`, `CliOptions`, `VertexOptions`)
+
+| Key                  | Base Class      | Type                    | Default            | Description                                                                                          |
+| :------------------- | :-------------- | :---------------------- | :----------------- | :--------------------------------------------------------------------------------------------------- |
+| `model`              | `AgentOptions`  | String                  | Driver default     | Model identifier to evaluate.                                                                        |
+| `effort`             | `AgentOptions`  | String / `None`         | `None`             | Reasoning effort level (`"low"`, `"medium"`, `"high"`).                                              |
+| `provider`           | `AgentOptions`  | String / `None`         | `None`             | Model provider override (e.g., `"google"`, `"anthropic"`, `"vertex"`).                               |
+| `max_turns`          | `AgentOptions`  | Integer `>= 1`          | `3`                | Maximum number of conversation turns permitted per probe.                                            |
+| `early_exit`         | `AgentOptions`  | Boolean                 | `true`             | Terminate the session immediately once the target skill is invoked.                                  |
+| `allowed_tools`      | `AgentOptions`  | Sequence[String] / None | `None`             | Explicit allowlist of runtime tools exposed during probes.                                           |
+| `blocked_env_vars`   | `AgentOptions`  | Sequence[String] / None | `None`             | Environment variable names stripped from agent subprocesses (overrides defaults).                    |
+| `api_key`            | `AgentOptions`  | String / `None`         | `None`             | Explicit API key override for direct provider authentication.                                        |
+| `use_symlinks`       | `AgentOptions`  | Boolean                 | `true` (`false`\*) | Symlink skill directories into isolated workspaces (`false` by default on `antigravity-*` runtimes). |
+| `isolate_config_dir` | `AgentOptions`  | Boolean                 | `true`             | Isolate the agent's home/config directory inside the ephemeral probe workspace.                      |
+| `auto_clean`         | `AgentOptions`  | Boolean                 | `false`            | Automatically delete isolated session artifacts after each probe completes.                          |
+| `json_schema`        | `AgentOptions`  | String / `None`         | `None`             | Optional JSON schema string or object constraining structured agent output.                          |
+| `executable`         | `CliOptions`    | String                  | Driver binary      | Path or command name for the CLI agent binary (`antigravity-cli`, `claude-code`, `goose`, `pi`).     |
+| `extra_args`         | `CliOptions`    | Sequence[String]        | `()`               | Extra command-line arguments appended to every CLI subprocess invocation.                            |
+| `vertex`             | `VertexOptions` | Boolean / `None`        | `None`             | Explicitly enable (`true`) or disable (`false`) Google Cloud Vertex AI / ADC authentication.         |
+| `project`            | `VertexOptions` | String / `None`         | Inferred           | Google Cloud project ID for Vertex AI / Agent Platform requests.                                     |
+| `location`           | `VertexOptions` | String / `None`         | `"global"` / None  | Google Cloud region or `"global"` endpoint location for Vertex AI / Agent Platform requests.         |
+
+### Google Antigravity CLI (`antigravity-cli`)
+
+| Key            | Type    | Default              | Description                                                                                                      |
+| :------------- | :------ | :------------------- | :--------------------------------------------------------------------------------------------------------------- |
+| `executable`   | String  | `"agy"`              | Path or command name for the Antigravity CLI binary.                                                             |
+| `model`        | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                    |
+| `vertex`       | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`AGY_ADC_AUTH`).  |
+| `project`      | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                           |
+| `location`     | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                 |
+| `use_symlinks` | Boolean | `false`              | Copy skill directories by default so Antigravity's workspace file watcher indexes resident `SKILL.md` manifests. |
+
+### Google Antigravity SDK (`antigravity-sdk`)
+
+| Key            | Type    | Default              | Description                                                                                                        |
+| :------------- | :------ | :------------------- | :----------------------------------------------------------------------------------------------------------------- |
+| `model`        | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                      |
+| `vertex`       | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`vertexai`).        |
+| `project`      | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                             |
+| `location`     | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                   |
+| `use_symlinks` | Boolean | `false`              | Copy skill directories by default so Antigravity's workspace file indexer discovers resident `SKILL.md` manifests. |
 
 ### Claude Code (`claude-code`)
-
-When `agent = "claude-code"`, the following options configure Claude Code's execution, isolation, and listing budgets:
 
 | Key                             | Type                     | Default                  | Description                                                                                                            |
 | :------------------------------ | :----------------------- | :----------------------- | :--------------------------------------------------------------------------------------------------------------------- |
@@ -475,8 +450,6 @@ When `agent = "claude-code"`, the following options configure Claude Code's exec
 
 ### Goose (`goose`)
 
-When `agent = "goose"`, the following options configure the Goose agent CLI:
-
 | Key            | Type    | Default              | Description                                                                       |
 | :------------- | :------ | :------------------- | :-------------------------------------------------------------------------------- |
 | `executable`   | String  | `"goose"`            | Path or command name for the Goose CLI binary.                                    |
@@ -487,29 +460,20 @@ When `agent = "goose"`, the following options configure the Goose agent CLI:
 
 ### Pi (`pi`)
 
-When `agent = "pi"`, the following options configure the Pi agent harness CLI:
-
 | Key          | Type   | Default              | Description                                 |
 | :----------- | :----- | :------------------- | :------------------------------------------ |
 | `executable` | String | `"pi"`               | Path or command name for the Pi CLI binary. |
 | `model`      | String | `"gemini-3.8-flash"` | Model identifier to evaluate.               |
 | `provider`   | String | `"google"`           | Model provider identifier.                  |
 
-### Google Antigravity (`antigravity-cli` & `antigravity-sdk`)
-
-When `agent = "antigravity-cli"` or `agent = "antigravity-sdk"`, the following options configure Antigravity execution:
-
-| Key          | Type    | Default              | Description                                                                                                                  |
-| :----------- | :------ | :------------------- | :--------------------------------------------------------------------------------------------------------------------------- |
-| `executable` | String  | `"agy"`              | Path or command name for the Antigravity CLI binary (for `antigravity-cli`).                                                 |
-| `model`      | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                                |
-| `vertex`     | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`AGY_ADC_AUTH` / `vertexai`). |
-| `project`    | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                                       |
-| `location`   | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                             |
-
 ### Keyword (`keyword`)
 
-The keyword driver runs entirely in memory without external subprocesses or model APIs and requires no driver options.
+The deterministic `keyword` baseline driver scores resident skills by word-boundary lexical matching and BM25 without external subprocesses or model APIs:
+
+| Key     | Type   | Default     | Description                                                                   |
+| :------ | :----- | :---------- | :---------------------------------------------------------------------------- |
+| `model` | String | `"keyword"` | Baseline lexical scorer identifier recorded in evaluation provenance.         |
+| `scope` | String | `"user"`    | Skill scope label applied when staging resident skills (`"user"`, `"local"`). |
 
 ---
 
@@ -521,22 +485,27 @@ Settings resolve in the following order (highest precedence wins):
 2. **Project-local `reach.toml`** (in the current working directory, or specified by `--config`)
 3. **Bundled default `reach.toml`**
 
-Configuration values in `reach.toml` can also interpolate environment variables dynamically using `${VAR}` syntax (e.g. `skills = "${REACH_SKILL_ROOT}"`).
+Path fields in `[study]` (`skills`, `queries`, `workdir`, `out`) and entries in `[discovery].precedence` also interpolate environment variables dynamically using `${VAR}` or `$VAR` syntax (e.g. `skills = "${REACH_SKILL_ROOT}"`).
 
 ---
 
 ## Environment Variables
 
-| Variable                      | Description                                                                                              |
-| :---------------------------- | :------------------------------------------------------------------------------------------------------- |
-| `REACH_NO_BROWSER`            | Set to `"1"` or `"true"` to bypass interactive browser review for drafted queries.                       |
-| `REACH_YES`                   | Set to `"1"` or `"true"` to bypass interactive safety confirmation prompts in CI/CD and scripts.         |
-| `AGY_ADC_AUTH`                | Set to `"true"` or `"1"` to enable Google Cloud ADC / Vertex AI authentication for `antigravity-cli`.    |
-| `GOOGLE_GENAI_USE_ENTERPRISE` | Set to `"true"` or `"1"` to enable Google Cloud Agent Platform ADC authentication for `antigravity-sdk`. |
-| `GOOGLE_CLOUD_PROJECT`        | Default Google Cloud project ID for Agent Platform, Vertex AI, and Agent Registry operations.            |
-| `GOOGLE_CLOUD_LOCATION`       | Default Google Cloud location (e.g. `"global"`) for Agent Platform and Vertex AI requests.               |
-| `GITHUB_STEP_SUMMARY`         | When set (in GitHub Actions), `reach check` automatically writes markdown summaries to this file.        |
-| `NO_MKDOCS_2_WARNING`         | Set to `"1"` to suppress upstream MkDocs 2.0 console notices during documentation builds.                |
+| Variable                      | Description                                                                                                          |
+| :---------------------------- | :------------------------------------------------------------------------------------------------------------------- |
+| `REACH_NO_BROWSER`            | Set to `"1"`, `"true"`, or `"yes"` to bypass interactive browser review for drafted queries.                         |
+| `REACH_YES`                   | Set to `"1"`, `"true"`, or `"yes"` to bypass interactive safety confirmation prompts in CI/CD and scripts.           |
+| `AGY_ADC_AUTH`                | Set to `"true"` or `"1"` to enable Google Cloud ADC / Vertex AI authentication for `antigravity-cli`.                |
+| `GOOGLE_GENAI_USE_ENTERPRISE` | Set to `"true"` or `"1"` to enable Google Cloud Agent Platform ADC authentication for `antigravity-sdk`.             |
+| `GOOGLE_GENAI_USE_VERTEXAI`   | Set to `"true"` or `"1"` to enable Vertex AI authentication for `google-genai` and Antigravity runtimes.             |
+| `GOOGLE_CLOUD_PROJECT`        | Default Google Cloud project ID for Agent Platform, Vertex AI, and Agent Registry operations.                        |
+| `GOOGLE_CLOUD_QUOTA_PROJECT`  | Fallback Google Cloud project ID checked when `GOOGLE_CLOUD_PROJECT` is unset.                                       |
+| `GOOGLE_CLOUD_LOCATION`       | Default Google Cloud location (e.g. `"global"`) for Agent Platform and Vertex AI requests.                           |
+| `CLAUDE_CODE_USE_VERTEX`      | Set to `"1"` or `"true"` to route `claude-code` through Google Cloud Model Garden on Vertex AI.                      |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | Google Cloud project ID used by `claude-code` when Vertex AI mode is enabled (falls back to `GOOGLE_CLOUD_PROJECT`). |
+| `CLOUD_ML_REGION`             | Google Cloud region used by `claude-code` when Vertex AI mode is enabled (defaults to `"global"`).                   |
+| `GITHUB_STEP_SUMMARY`         | When set (in GitHub Actions), `reach check` automatically appends markdown gate summaries to this file.              |
+| `NO_MKDOCS_2_WARNING`         | Set to `"1"` to suppress upstream MkDocs 2.0 console notices during documentation builds.                            |
 
 ---
 
@@ -544,21 +513,15 @@ Configuration values in `reach.toml` can also interpolate environment variables 
 
 Reach automatically routes model API keys and ADC settings to the corresponding environment variables expected by each runtime agent:
 
-| Provider            | Credentials / Injected Environment Variables                                                           | Support Tier               |
-| :------------------ | :----------------------------------------------------------------------------------------------------- | :------------------------- |
-| `google` / `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`                                                                     | Tested (Primary reference) |
-| `google-cloud`      | Application Default Credentials (ADC), `AGY_ADC_AUTH`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | Tested (Agent Platform)    |
+| Provider            | Credentials / Injected Environment Variables                                                                                     | Support Tier                 |
+| :------------------ | :------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- |
+| `google` / `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`                                                                                               | Tested (Primary reference)   |
+| `google-cloud`      | Application Default Credentials (ADC), `AGY_ADC_AUTH`, `GOOGLE_GENAI_USE_ENTERPRISE`, `GOOGLE_CLOUD_PROJECT`                     | Tested (Agent Platform)      |
+| `anthropic`         | `ANTHROPIC_API_KEY` (or Vertex AI Model Garden via `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`) | Supported                    |
+| `openai`            | `OPENAI_API_KEY`                                                                                                                 | Supported (CLI pass-through) |
 
-> [!NOTE]
-> **Provider Support Status**: Google Gemini (via Developer API keys) and Google Cloud Agent Platform / Model Garden (via Application Default Credentials) are the tested and benchmarked authentication paths for Reach. For `antigravity-cli` and `antigravity-sdk`, set `vertex = true` under `[runtime.options]` or export `AGY_ADC_AUTH=true` / `GOOGLE_GENAI_USE_ENTERPRISE=true`. For Claude Code, configure Google Cloud Model Garden on Agent Platform (`CLAUDE_CODE_USE_VERTEX=1` or `vertex = true`).
+/// note | Provider Support Status
+Google Gemini (via Developer API keys) and Google Cloud Agent Platform / Model Garden (via Application Default Credentials) are the primary benchmarked authentication paths for Reach. For `antigravity-cli` and `antigravity-sdk`, set `vertex = true` under `[runtime.options]` or export `AGY_ADC_AUTH=true` / `GOOGLE_GENAI_USE_ENTERPRISE=true`. For Claude Code, configure Google Cloud Model Garden on Vertex AI (`CLAUDE_CODE_USE_VERTEX=1` or `vertex = true`) or set `ANTHROPIC_API_KEY`.
+///
 
 If an unrecognized provider name is specified via options, Reach raises an error rather than mapping credentials to an unintended provider. For custom, local, or self-hosted model engines (such as Ollama, vLLM, or Mistral), set the provider's expected environment variables directly in your shell or CI workflow.
-
----
-
-## Execution Security & Trust Boundary
-
-Reach executes agent command-line interfaces (CLIs) and tools directly with the host permissions of the running user. Child agent processes inherit the host environment so tools, compilers, language runtimes, and local developer configuration remain operational.
-
-> [!WARNING]
-> **Evaluating Untrusted Skills**: Agent runtimes possess tool-use capabilities that can access the local filesystem and network. When benchmarking or evaluating skills from untrusted third-party repositories, public pull requests, or external registries, run Reach inside an isolated container (such as Docker), a disposable virtual machine, or a dedicated CI runner.
