@@ -1,0 +1,62 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: reach-eval-job
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: 1800
+          containers:
+            - name: reach-eval
+              image: LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-runner:latest
+              sandboxLauncher: true
+              volumeMounts:
+                - name: gemini-secret
+                  mountPath: /secrets
+                  readOnly: true
+                # Optional: mount a Cloud Storage bucket at /workspace/.reach (and pass
+                # --mount type=bind,source=/workspace/.reach,destination=/workspace/.reach)
+                # to persist evaluation artifacts beyond ephemeral sandbox exit.
+              command:
+                - /usr/local/gcp/bin/sandbox
+              args:
+                - do
+                - --allow-egress
+                - --write
+                - --env
+                - PATH=/opt/venv/bin:/usr/local/gcp/bin:/usr/local/bin:/usr/bin:/bin
+                - --env
+                - REACH_YES=1
+                - --env
+                - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
+                - --mount
+                - type=bind,source=/secrets,destination=/secrets,readonly
+                - --workdir
+                - /workspace
+                - --
+                - reach
+                - eval
+                - --agent
+                - antigravity-sdk
+                - --auto
+                - --yes
+              # Scale cpu/memory (e.g. 4 vCPU / 4Gi) for large multi-worker sweeps
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+              env:
+                - name: REACH_YES
+                  value: "1"
+          volumes:
+            - name: gemini-secret
+              secret:
+                secretName: GEMINI_API_KEY
+                items:
+                  - key: latest
+                    path: GEMINI_API_KEY

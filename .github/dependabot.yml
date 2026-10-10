@@ -33,3 +33,13 @@ updates:
       - github_actions
     cooldown:
       default-days: 7
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - npm
+    cooldown:
+      default-days: 7

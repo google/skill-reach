@@ -40,7 +40,7 @@ from reach.config import (
     resolve_path,
 )
 from reach.registry import find_adc_path
-from reach.runtime._env import _AGY_VERTEX_ENV_VARS, is_truthy_env
+from reach.runtime._env import _AGY_VERTEX_ENV_VARS, is_truthy_env, resolve_env_secret
 from reach.views import (
     CheckCategory,
     CheckResult,
@@ -161,8 +161,8 @@ def _check_env_var(
     *,
     alternates: Sequence[str] = (),
 ) -> CheckResult:
-    """Check if an environment variable or any of its fallback aliases is configured."""
-    if os.environ.get(var_name):
+    """Check if an environment variable, its ``*_FILE`` path, or aliases are configured."""
+    if resolve_env_secret(os.environ, var_name):
         return CheckResult(
             category=CheckCategory.CREDENTIALS,
             name=var_name,
@@ -170,7 +170,7 @@ def _check_env_var(
             detail="configured",
         )
     for alt in alternates:
-        if os.environ.get(alt):
+        if resolve_env_secret(os.environ, alt):
             return CheckResult(
                 category=CheckCategory.CREDENTIALS,
                 name=var_name,

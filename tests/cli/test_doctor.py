@@ -347,6 +347,44 @@ def test_check_env_var_states_and_redaction(
     assert "secret-key" not in res.detail
 
 
+@pytest.mark.parametrize("use_file", [False, True], ids=["env_var", "file_pointer"])
+@pytest.mark.parametrize("is_fallback", [False, True], ids=["primary", "fallback"])
+def test_check_env_var_supports_file_pointer_and_redacts_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    doctor_env: Path,
+    use_file: bool,
+    is_fallback: bool,
+) -> None:
+    """Verify _check_env_var confirms direct and *_FILE config for primary and fallback vars."""
+    assert doctor_env.is_dir()
+    dummy_payload = "dummy-value-12345"
+    key_prefix = "GOOGLE_API_KEY" if is_fallback else "GEMINI_API_KEY"
+    expected_detail = "configured via GOOGLE_API_KEY" if is_fallback else "configured"
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY_FILE", raising=False)
+
+    if use_file:
+        secret_file = tmp_path / "secret.txt"
+        secret_file.write_text(f"{dummy_payload}\n", encoding="utf-8")
+        monkeypatch.setenv(f"{key_prefix}_FILE", str(secret_file))
+    else:
+        monkeypatch.setenv(key_prefix, dummy_payload)
+
+    res = _check_env_var(
+        "GEMINI_API_KEY",
+        "Google Gemini model completions",
+        alternates=("GOOGLE_API_KEY",),
+    )
+    assert res.category == CheckCategory.CREDENTIALS
+    assert res.status is CheckStatus.OK
+    assert res.detail == expected_detail
+    assert dummy_payload not in res.detail
+
+
 def test_check_google_adc_valid_custom_and_tilde_expansion(
     doctor_env: Path,
     monkeypatch: pytest.MonkeyPatch,

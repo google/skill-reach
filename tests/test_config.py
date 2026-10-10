@@ -27,16 +27,19 @@ from pydantic import ValidationError
 
 from reach.cli import StudyFlags, build_config
 from reach.config import (
+    BUNDLED_CONFIG_PATH,
     DEFAULT_ATTEMPTS,
     QuerySettings,
     RunConfig,
     RuntimeSettings,
     StudySettings,
     expand_path,
+    load_config,
 )
 from reach.models import CatalogMode
 from reach.run import ProbeHarness, load_corpus, plan_probes
 from reach.runtime import FAKE_AGENT, known_agents
+from reach.runtime.profiles import model_profile
 
 _EXECUTION_AGENTS = tuple(a for a in known_agents() if a not in ("keyword", FAKE_AGENT))
 
@@ -1908,3 +1911,15 @@ def test_run_config_from_toml_defaults_to_discovered_config(
     discovered_cfg = RunConfig.from_toml()
     assert discovered_cfg.study.skills == (tmp_path / "my_corpus").resolve()
     assert discovered_cfg.plan.attempts == 7
+
+
+def test_bundled_config_exists_and_provides_baseline_models() -> None:
+    """Verify that bundled reach.toml exists and provides required default profiles."""
+    assert BUNDLED_CONFIG_PATH.is_file(), f"Missing bundled config: {BUNDLED_CONFIG_PATH}"
+    config = load_config(None)
+    assert "models" in config
+    assert "claude-sonnet-5" in config["models"]
+
+    profile = model_profile("claude-sonnet-5")
+    assert profile.completion_window is not None
+    assert profile.context_window > 0
