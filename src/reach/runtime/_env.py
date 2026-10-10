@@ -60,17 +60,31 @@ _AGY_VERTEX_ENV_VARS: tuple[str, ...] = (
 )
 
 
-def resolve_env_secret(env: Mapping[str, str], *var_names: str) -> str | None:
+_ALL_PROVIDER_KEY_ENV_VARS: tuple[str, ...] = tuple(
+    dict.fromkeys(var for env_vars in _PROVIDER_KEY_ENV_VARS.values() for var in env_vars)
+)
+
+
+def resolve_env_secret(
+    env: Mapping[str, str],
+    *var_names: str,
+    max_bytes: int = 16384,
+) -> str | None:
     """Resolve a secret value from direct environment variables or ``*_FILE`` paths."""
     for name in var_names:
         if val := env.get(name):
             return val
+    for name in var_names:
         if file_path := env.get(f"{name}_FILE"):
             try:
-                content = Path(file_path).expanduser().read_text(encoding="utf-8").strip()
+                path = Path(file_path).expanduser()
+                if not path.is_file():
+                    continue
+                with path.open("rb") as fh:
+                    content = fh.read(max_bytes).decode("utf-8").strip()
                 if content:
                     return content
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
     return None
 
@@ -94,11 +108,16 @@ def sanitize_subprocess_env(
     keep: Iterable[str] = (),
     blocked_env_vars: Iterable[str] | None = None,
 ) -> dict[str, str]:
-    """Strip sensitive ambient credentials and tokens from child process environment."""
+    """Resolve ``*_FILE`` provider secrets and strip blocked ambient credentials."""
     keep_set = set(keep)
     vertex_env_active = env.get("CLAUDE_CODE_USE_VERTEX") == "1" or has_agy_vertex_env(env)
     if blocked_env_vars is None and vertex_env_active:
         keep_set.add("GOOGLE_APPLICATION_CREDENTIALS")
+
+    for key in _ALL_PROVIDER_KEY_ENV_VARS:
+        if not env.get(key) and (resolved := resolve_env_secret(env, key)):
+            env[key] = resolved
+        env.pop(f"{key}_FILE", None)
 
     effective_blocked = (
         set(blocked_env_vars) if blocked_env_vars is not None else _DEFAULT_BLOCKED_SET
@@ -114,19 +133,19 @@ def sanitize_subprocess_env(
 def sync_google_and_gemini_keys(env: dict[str, str]) -> dict[str, str]:
     """Synchronize GEMINI_API_KEY and GOOGLE_API_KEY bidirectionally in environment dict."""
     if (
-        "GEMINI_API_KEY" not in env
-        and "GOOGLE_API_KEY" not in env
+        not env.get("GEMINI_API_KEY")
+        and not env.get("GOOGLE_API_KEY")
         and (resolved := resolve_env_secret(env, "GEMINI_API_KEY", "GOOGLE_API_KEY"))
     ):
         env["GEMINI_API_KEY"] = resolved
         env["GOOGLE_API_KEY"] = resolved
+    elif env.get("GEMINI_API_KEY") and not env.get("GOOGLE_API_KEY"):
+        env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
+    elif env.get("GOOGLE_API_KEY") and not env.get("GEMINI_API_KEY"):
+        env["GEMINI_API_KEY"] = env["GOOGLE_API_KEY"]
+    if env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY"):
         env.pop("GEMINI_API_KEY_FILE", None)
         env.pop("GOOGLE_API_KEY_FILE", None)
-        return env
-    if "GEMINI_API_KEY" in env and "GOOGLE_API_KEY" not in env:
-        env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
-    elif "GOOGLE_API_KEY" in env and "GEMINI_API_KEY" not in env:
-        env["GEMINI_API_KEY"] = env["GOOGLE_API_KEY"]
     return env
 
 

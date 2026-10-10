@@ -171,8 +171,8 @@ ENV PATH="/opt/venv/bin:/usr/local/gcp/bin:$PATH" \
 RUN groupadd -g 10001 reach && \
     useradd -u 10001 -g reach -m -d /home/reach reach && \
     mkdir -p /workspace && \
-    chown -R reach:reach /workspace && \
-    chmod 1777 /workspace
+    chown -R reach:root /workspace && \
+    chmod 0775 /workspace
 
 WORKDIR /workspace
 COPY --chown=reach:reach .agents/ /workspace/.agents/
@@ -235,8 +235,6 @@ spec:
                 - REACH_YES=1
                 - --env
                 - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
-                - --mount
-                - type=bind,source=/workspace,destination=/workspace
                 - --mount
                 - type=bind,source=/secrets,destination=/secrets,readonly
                 - --workdir
@@ -327,12 +325,11 @@ Once enabled, invoke the `sandbox do` command from within your container to run 
 ///
 
 ```bash
-# Execute reach eval in an ephemeral sandbox with outbound API access, writable workspace, and mounted secret
+# Execute reach eval in an ephemeral sandbox with outbound API access, writable overlay, and mounted secret
 sandbox do --allow-egress --write \
   --env PATH="$PATH" \
   --env REACH_YES="1" \
   --env GEMINI_API_KEY_FILE="/secrets/GEMINI_API_KEY" \
-  --mount type=bind,source=/workspace,destination=/workspace \
   --mount type=bind,source=/secrets,destination=/secrets,readonly \
   --workdir /workspace \
   -- reach eval --agent antigravity-sdk --yes

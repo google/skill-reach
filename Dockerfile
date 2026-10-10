@@ -37,13 +37,13 @@ ENV PATH="/opt/venv/bin:/usr/local/gcp/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
 # Create unprivileged user (UID 10001) and prepare isolated workspace.
-# Mode 1777 on /workspace allows both `--user reach` (UID 10001) and Cloud Run's
-# user-namespace-mapped sandbox user to write `.reach/` evaluation artifacts.
+# Group root (GID 0) with mode 0775 allows both `--user reach` (UID 10001) and
+# rootless/user-namespace sandboxes to write `.reach/` evaluation artifacts.
 RUN groupadd -g 10001 reach && \
     useradd -u 10001 -g reach -m -d /home/reach reach && \
     mkdir -p /workspace && \
-    chown -R reach:reach /workspace && \
-    chmod 1777 /workspace
+    chown -R reach:root /workspace && \
+    chmod 0775 /workspace
 
 WORKDIR /workspace
 

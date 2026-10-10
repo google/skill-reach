@@ -2,7 +2,7 @@
 .git
 .gitignore
 
-# Inherit rules from .gitignore
+# Inherit rules from .gitignore (#!include: is an active gcloud directive)
 #!include:.gitignore
 
 # Ensure bundled config and skill definitions are packaged into runner build context

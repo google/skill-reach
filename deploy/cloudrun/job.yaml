@@ -32,8 +32,6 @@ spec:
                 - --env
                 - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
                 - --mount
-                - type=bind,source=/workspace,destination=/workspace
-                - --mount
                 - type=bind,source=/secrets,destination=/secrets,readonly
                 - --workdir
                 - /workspace

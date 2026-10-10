@@ -640,6 +640,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
     name: str
     settings: RuntimeSettings | None = None
     options: OptionsT = cast("Any", AgentOptions())
+    api_key_env_var: str | None = None
     _resident: tuple[str, ...] = ()
     is_dynamic: bool = False
 
@@ -827,9 +828,18 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         """Release any isolated temporary resources owned by this runtime."""
 
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
-        """Assemble process environment for agent execution."""
+        """Assemble process environment with API keys and workspace overrides."""
         del workdir
-        return sanitize_subprocess_env(dict(os.environ), blocked_env_vars=self.blocked_env_vars)
+        env = dict(os.environ)
+        if (home_dir := getattr(self.options, "home_dir", None)) is not None:
+            env["HOME"] = str(home_dir)
+        if api_key_var := self.api_key_env_var:
+            if (api_key := self.api_key) is not None:
+                env[api_key_var] = str(api_key)
+            elif not env.get(api_key_var) and (resolved := resolve_env_secret(env, api_key_var)):
+                env[api_key_var] = resolved
+            env.pop(f"{api_key_var}_FILE", None)
+        return sanitize_subprocess_env(env, blocked_env_vars=self.blocked_env_vars)
 
     def _make_tracker(self, target_skill: str | None = None) -> TrajectoryTracker:
         """Create a TrajectoryTracker configured with this runtime's turn and early-exit options."""
@@ -889,7 +899,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
     """Abstract base runtime for command-line interface agent drivers."""
 
     options: CliOptionsT
-    api_key_env_var: str | None = None
 
     def __init__(
         self,
@@ -938,24 +947,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
         """Extract invoked skill name from an event line for early-exit detection."""
         del line
         return None
-
-    @override
-    def build_env(self, workdir: Path | None = None) -> dict[str, str]:
-        """Assemble process environment with API keys and workspace overrides."""
-        del workdir
-        env = dict(os.environ)
-        if (home_dir := getattr(self.options, "home_dir", None)) is not None:
-            env["HOME"] = str(home_dir)
-        if (api_key := getattr(self.options, "api_key", None)) is not None and self.api_key_env_var:
-            env[self.api_key_env_var] = str(api_key)
-        elif (
-            self.api_key_env_var
-            and self.api_key_env_var not in env
-            and (resolved := resolve_env_secret(env, self.api_key_env_var))
-        ):
-            env[self.api_key_env_var] = resolved
-            env.pop(f"{self.api_key_env_var}_FILE", None)
-        return sanitize_subprocess_env(env, blocked_env_vars=self.blocked_env_vars)
 
     def validate_outcome(
         self,

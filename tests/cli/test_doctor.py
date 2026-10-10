@@ -136,25 +136,33 @@ def test_check_sdk_importability(
         assert expected_detail in res.detail
 
 
+@pytest.mark.parametrize(
+    ("use_file", "secret_val"),
+    [
+        (False, "super-secret-key-12345"),
+        (True, "file-secret-key-67890"),
+    ],
+)
 def test_check_env_var_reports_configured_without_displaying_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    use_file: bool,
+    secret_val: str,
 ) -> None:
     """Verify that _check_env_var confirms direct and *_FILE config without leaking keys."""
-    monkeypatch.setenv("TEST_API_KEY", "super-secret-key-12345")
+    monkeypatch.delenv("TEST_API_KEY", raising=False)
+    monkeypatch.delenv("TEST_API_KEY_FILE", raising=False)
+    if use_file:
+        secret_file = tmp_path / "secret.txt"
+        secret_file.write_text(f"{secret_val}\n", encoding="utf-8")
+        monkeypatch.setenv("TEST_API_KEY_FILE", str(secret_file))
+    else:
+        monkeypatch.setenv("TEST_API_KEY", secret_val)
+
     res = _check_env_var("TEST_API_KEY", "testing purpose")
     assert res.status == "ok"
     assert res.detail == "configured"
-    assert "super-secret-key" not in res.detail
-
-    monkeypatch.delenv("TEST_API_KEY")
-    secret_file = tmp_path / "secret.txt"
-    secret_file.write_text("file-secret-key-67890\n", encoding="utf-8")
-    monkeypatch.setenv("TEST_API_KEY_FILE", str(secret_file))
-    res_file = _check_env_var("TEST_API_KEY", "testing purpose")
-    assert res_file.status == "ok"
-    assert res_file.detail == "configured"
-    assert "file-secret-key" not in res_file.detail
+    assert secret_val not in res.detail
 
 
 def test_check_google_adc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

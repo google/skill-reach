@@ -2152,62 +2152,172 @@ def test_all_agents_parse_stream_malformed_input(agent: str, tmp_path: Path) -> 
     assert isinstance(summary, SessionSummary)
 
 
-def test_sync_google_and_gemini_keys_bidirectional() -> None:
+@pytest.mark.parametrize(
+    ("initial_env", "expected_env"),
+    [
+        (
+            {"GEMINI_API_KEY": "secret-1"},
+            {"GEMINI_API_KEY": "secret-1", "GOOGLE_API_KEY": "secret-1"},
+        ),
+        (
+            {"GOOGLE_API_KEY": "secret-2"},
+            {"GEMINI_API_KEY": "secret-2", "GOOGLE_API_KEY": "secret-2"},
+        ),
+        (
+            {"GEMINI_API_KEY": "gemini-orig", "GOOGLE_API_KEY": "google-orig"},
+            {"GEMINI_API_KEY": "gemini-orig", "GOOGLE_API_KEY": "google-orig"},
+        ),
+        (
+            {"OTHER_KEY": "other"},
+            {"OTHER_KEY": "other"},
+        ),
+    ],
+)
+def test_sync_google_and_gemini_keys_bidirectional(
+    initial_env: dict[str, str],
+    expected_env: dict[str, str],
+) -> None:
     """Verify sync_google_and_gemini_keys synchronizes keys in both directions."""
-    # GEMINI -> GOOGLE
-    env1 = {"GEMINI_API_KEY": "secret-1"}
-    sync_google_and_gemini_keys(env1)
-    assert env1 == {"GEMINI_API_KEY": "secret-1", "GOOGLE_API_KEY": "secret-1"}
-
-    # GOOGLE -> GEMINI
-    env2 = {"GOOGLE_API_KEY": "secret-2"}
-    sync_google_and_gemini_keys(env2)
-    assert env2 == {"GEMINI_API_KEY": "secret-2", "GOOGLE_API_KEY": "secret-2"}
-
-    # Both present -> preserve existing
-    env3 = {"GEMINI_API_KEY": "gemini-orig", "GOOGLE_API_KEY": "google-orig"}
-    sync_google_and_gemini_keys(env3)
-    assert env3 == {"GEMINI_API_KEY": "gemini-orig", "GOOGLE_API_KEY": "google-orig"}
-
-    # Neither present -> no changes
-    env4 = {"OTHER_KEY": "other"}
-    sync_google_and_gemini_keys(env4)
-    assert env4 == {"OTHER_KEY": "other"}
+    env = dict(initial_env)
+    sync_google_and_gemini_keys(env)
+    assert env == expected_env
 
 
-def test_resolve_env_secret_and_sync_file_keys(tmp_path: Path) -> None:
-    """Verify that resolve_env_secret and sync_google_and_gemini_keys load from *_FILE paths."""
+@pytest.mark.parametrize(
+    ("base_env", "expected_val"),
+    [
+        ({"GOOGLE_API_KEY_FILE": "/nonexistent"}, "mounted-secret-val"),
+        ({"GEMINI_API_KEY": "direct-val"}, "direct-val"),
+        ({"GEMINI_API_KEY": ""}, "mounted-secret-val"),
+    ],
+)
+def test_sync_google_and_gemini_keys_file_resolution_and_scrubbing(
+    tmp_path: Path,
+    base_env: dict[str, str],
+    expected_val: str,
+) -> None:
+    """Verify sync_google_and_gemini_keys resolves *_FILE secrets and scrubs file pointers."""
     secret_file = tmp_path / "gemini_secret"
     secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
 
-    # File fallback populates both keys and strips *_FILE pointers
-    env_file = {"GEMINI_API_KEY_FILE": str(secret_file), "GOOGLE_API_KEY_FILE": "/nonexistent"}
-    sync_google_and_gemini_keys(env_file)
-    assert env_file == {
-        "GEMINI_API_KEY": "mounted-secret-val",
-        "GOOGLE_API_KEY": "mounted-secret-val",
+    env = {"GEMINI_API_KEY_FILE": str(secret_file), **base_env}
+    sync_google_and_gemini_keys(env)
+    assert env == {
+        "GEMINI_API_KEY": expected_val,
+        "GOOGLE_API_KEY": expected_val,
     }
 
-    # Direct environment variable takes precedence over *_FILE
-    assert (
-        resolve_env_secret(
-            {"GEMINI_API_KEY": "direct-val", "GEMINI_API_KEY_FILE": str(secret_file)},
-            "GEMINI_API_KEY",
-        )
-        == "direct-val"
-    )
 
-    # Missing or empty file returns None gracefully
+@pytest.mark.parametrize(
+    ("scenario", "var_names", "max_bytes", "expected"),
+    [
+        ("direct_primary", ("GEMINI_API_KEY",), 16384, "direct-val"),
+        (
+            "direct_secondary_over_file",
+            ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+            16384,
+            "direct-google",
+        ),
+        (
+            "invalid_utf8_fallback",
+            ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+            16384,
+            "mounted-secret-val",
+        ),
+        (
+            "missing_empty_or_dir",
+            ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"),
+            16384,
+            None,
+        ),
+        ("bounded_read", ("GEMINI_API_KEY",), 10, "mounted-"),
+    ],
+)
+def test_resolve_env_secret_scenarios(
+    tmp_path: Path,
+    scenario: str,
+    var_names: tuple[str, ...],
+    max_bytes: int,
+    expected: str | None,
+) -> None:
+    """Verify resolve_env_secret precedence, error recovery, and byte-bounded reads."""
+    secret_file = tmp_path / "gemini_secret"
+    secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
     empty_file = tmp_path / "empty_secret"
     empty_file.write_text("   \n", encoding="utf-8")
-    assert (
-        resolve_env_secret(
-            {"GEMINI_API_KEY_FILE": str(empty_file), "GOOGLE_API_KEY_FILE": str(tmp_path / "nope")},
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-        )
-        is None
-    )
+    dir_path = tmp_path / "secret_dir"
+    dir_path.mkdir()
+    bad_utf8 = tmp_path / "bad_utf8"
+    bad_utf8.write_bytes(b"\xff\xfe\xfd")
+
+    envs: dict[str, dict[str, str]] = {
+        "direct_primary": {
+            "GEMINI_API_KEY": "direct-val",
+            "GEMINI_API_KEY_FILE": str(secret_file),
+        },
+        "direct_secondary_over_file": {
+            "GOOGLE_API_KEY": "direct-google",
+            "GEMINI_API_KEY_FILE": str(secret_file),
+        },
+        "invalid_utf8_fallback": {
+            "GEMINI_API_KEY_FILE": str(bad_utf8),
+            "GOOGLE_API_KEY_FILE": str(secret_file),
+        },
+        "missing_empty_or_dir": {
+            "GEMINI_API_KEY_FILE": str(empty_file),
+            "GOOGLE_API_KEY_FILE": str(dir_path),
+            "ANTHROPIC_API_KEY_FILE": str(tmp_path / "nope"),
+        },
+        "bounded_read": {
+            "GEMINI_API_KEY_FILE": str(secret_file),
+        },
+    }
+    assert resolve_env_secret(envs[scenario], *var_names, max_bytes=max_bytes) == expected
+
+
+@pytest.mark.parametrize(
+    ("agent", "file_var", "expected_var", "explicit_api_key", "expected_val"),
+    [
+        ("claude-code", "ANTHROPIC_API_KEY_FILE", "ANTHROPIC_API_KEY", None, "mounted-secret-val"),
+        (
+            "claude-code",
+            "ANTHROPIC_API_KEY_FILE",
+            "ANTHROPIC_API_KEY",
+            "explicit-anthropic-key",
+            "explicit-anthropic-key",
+        ),
+        ("goose", "OPENAI_API_KEY_FILE", "OPENAI_API_KEY", None, "mounted-secret-val"),
+        ("pi", "GEMINI_API_KEY_FILE", "GEMINI_API_KEY", None, "mounted-secret-val"),
+        ("antigravity-cli", "GEMINI_API_KEY_FILE", "GEMINI_API_KEY", None, "mounted-secret-val"),
+        ("antigravity-sdk", "GEMINI_API_KEY_FILE", "GEMINI_API_KEY", None, "mounted-secret-val"),
+    ],
+)
+def test_runtime_and_generator_build_env_resolves_and_scrubs_file_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    clean_api_keys: None,
+    agent: str,
+    file_var: str,
+    expected_var: str,
+    explicit_api_key: str | None,
+    expected_val: str,
+) -> None:
+    """Verify runtime and generator build_env resolves *_FILE secrets and scrubs pointers."""
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
+    monkeypatch.setenv(file_var, str(secret_file))
+
+    options = {"api_key": explicit_api_key} if explicit_api_key else {}
+    rt = build_runtime(RuntimeSettings(agent=agent, options=options))
+    built_env = rt.build_env(tmp_path)
+    assert built_env[expected_var] == expected_val
+    assert file_var not in built_env
+
+    if explicit_api_key is None and agent == "claude-code":
+        claude_gen = build_text_generator("claude-sonnet-4-5", agent="claude-code")
+        gen_env = claude_gen.build_env()
+        assert gen_env[expected_var] == expected_val
+        assert file_var not in gen_env
 
 
 @pytest.mark.parametrize(
@@ -2230,29 +2340,38 @@ def test_apply_provider_api_key_known_providers(
         assert env[var] == "test-key"
 
 
-def test_apply_provider_api_key_fallback_and_empty() -> None:
-    """Verify provider mapping handles missing key, default provider, and unknown fallbacks."""
-    # Empty / None key does not modify env
-    env1 = {"EXISTING": "val"}
-    apply_provider_api_key(env1, provider="google", api_key=None)
-    assert env1 == {"EXISTING": "val"}
-    apply_provider_api_key(env1, provider="google", api_key="")
-    assert env1 == {"EXISTING": "val"}
+@pytest.mark.parametrize(
+    ("initial_env", "provider", "api_key", "default_provider", "expected_env"),
+    [
+        ({"EXISTING": "val"}, "google", None, "google", {"EXISTING": "val"}),
+        ({"EXISTING": "val"}, "google", "", "google", {"EXISTING": "val"}),
+        ({}, None, "k1", "openai", {"OPENAI_API_KEY": "k1"}),
+        ({}, None, "k2", "google", {"GEMINI_API_KEY": "k2", "GOOGLE_API_KEY": "k2"}),
+    ],
+)
+def test_apply_provider_api_key_fallback_and_empty(
+    initial_env: dict[str, str],
+    provider: str | None,
+    api_key: str | None,
+    default_provider: str,
+    expected_env: dict[str, str],
+) -> None:
+    """Verify provider mapping handles missing key and default provider fallbacks."""
+    env = dict(initial_env)
+    apply_provider_api_key(
+        env,
+        provider=provider,
+        api_key=api_key,
+        default_provider=default_provider,
+    )
+    assert env == expected_env
 
-    # None provider uses default_provider
-    env2: dict[str, str] = {}
-    apply_provider_api_key(env2, provider=None, api_key="k1", default_provider="openai")
-    assert env2 == {"OPENAI_API_KEY": "k1"}
 
-    env3: dict[str, str] = {}
-    apply_provider_api_key(env3, provider=None, api_key="k2", default_provider="google")
-    assert env3 == {"GEMINI_API_KEY": "k2", "GOOGLE_API_KEY": "k2"}
-
-    # Explicit unknown provider raises ValueError to avoid secret leakage
-    env4: dict[str, str] = {}
+def test_apply_provider_api_key_rejects_unknown_provider() -> None:
+    """Verify explicit unknown provider raises ValueError to avoid secret leakage."""
     with pytest.raises(ValueError, match="Unrecognized provider 'unknown-custom'"):
         apply_provider_api_key(
-            env4,
+            {},
             provider="unknown-custom",
             api_key="k3",
             default_provider="openai",
