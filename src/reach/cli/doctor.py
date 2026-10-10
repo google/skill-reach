@@ -24,7 +24,7 @@ import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from cyclopts import Parameter
 from pydantic import ValidationError as PydanticValidationError
@@ -53,7 +53,7 @@ from reach.views import (
 
 from .app import SETUP, app
 from .clean import _BYTES_PER_KB, _format_size
-from .flags import SWITCH, Format, Global, Quiet
+from .flags import SWITCH, Global, Quiet
 
 __all__ = [
     "CheckCategory",
@@ -243,13 +243,12 @@ def _format_skill_location_label(cand: Path, workdir: Path, *, global_scope: boo
     """Format a human-readable relative path label for a discovered skill directory."""
     base = Path.home().expanduser() if global_scope else workdir.expanduser()
     prefix = "~/" if global_scope else ""
-    for cand_p, base_p in (
-        (cand.expanduser(), base),
-        (cand.expanduser().resolve(), base.resolve()),
-    ):
-        with contextlib.suppress(ValueError):
-            rel = cand_p.relative_to(base_p)
-            return f"{prefix}{rel}/"
+    with contextlib.suppress(ValueError, OSError):
+        rel = cand.expanduser().relative_to(base)
+        return f"{prefix}{rel}/"
+    with contextlib.suppress(ValueError, OSError):
+        rel = cand.expanduser().resolve().relative_to(base.resolve())
+        return f"{prefix}{rel}/"
     return f"{cand}/"
 
 
@@ -323,7 +322,7 @@ def _check_skills(
         if not global_scope and canonical == resolved_workdir:
             manifest = cand / "SKILL.md"
             if manifest.is_file():
-                with contextlib.suppress(OSError, ValueError):
+                with contextlib.suppress(OSError, ValueError, PydanticValidationError):
                     skill = parse_frontmatter(manifest.read_text(encoding="utf-8"), manifest)
                     if skill is not None:
                         seen_resolved.add(canonical)
@@ -557,11 +556,11 @@ def _doctor(
     quiet: Quiet = False,
     global_: Global = False,
     format: Annotated[
-        Format,
+        Literal["json", "jsonl", "csv"] | None,
         Parameter(
-            help="Output format: text, json, jsonl, csv",
+            help="Output format: json, jsonl, csv (default: table view)",
         ),
-    ] = "text",
+    ] = None,
     config: Annotated[
         Path | None,
         Parameter(
@@ -573,7 +572,7 @@ def _doctor(
     """Inspect local development environment, runtime agent binaries, keys, and skill catalogs."""
     results = run_doctor_checks(workdir=path, config_path=config, global_scope=global_)
     report = DoctorReport(checks=tuple(results))
-    if format != "text":
+    if format is not None:
         sys.stdout.write(f"{render_doctor(report, format).rstrip()}\n")
         return 1 if report.has_failures else 0
     console = build_console(quiet=quiet)

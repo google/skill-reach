@@ -39,6 +39,7 @@ from reach.cli.doctor import (
     _check_python,
     _check_sdk,
     _check_skills,
+    _format_skill_location_label,
     run_doctor_checks,
 )
 from reach.views import (
@@ -1021,3 +1022,49 @@ def test_doctor_cli_structured_formats_and_config_flag(
     else:
         rows = list(csv.DictReader(io.StringIO(out)))
         assert any(r["name"] == "custom.toml" for r in rows)
+
+
+def test_views_init_exports_check_row_tuple() -> None:
+    """Verify CheckRowTuple is re-exported from reach.views top-level package."""
+    import reach.views
+
+    assert "CheckRowTuple" in reach.views.__all__
+    assert hasattr(reach.views, "CheckRowTuple")
+
+
+def test_format_skill_location_label_handles_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Verify _format_skill_location_label gracefully falls back on OSError during resolution."""
+    cand = Path("/nonexistent/external/skills")
+
+    def fail_resolve(self: Path) -> Path:
+        msg = "Permission denied or broken link"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+    label = _format_skill_location_label(cand, tmp_path, global_scope=False)
+    assert label == f"{cand}/"
+
+
+def test_check_skills_handles_root_skill_validation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _check_skills suppresses PydanticValidationError when parsing root SKILL.md."""
+    manifest = tmp_path / "SKILL.md"
+    manifest.write_text("---\nname: valid\n---\nbody\n", encoding="utf-8")
+
+    from pydantic import BaseModel
+
+    class DummyModel(BaseModel):
+        must_be_int: int
+
+    def raise_validation_err(*_args: object, **_kwargs: object) -> None:
+        DummyModel.model_validate({"must_be_int": "not_an_int"})
+
+    monkeypatch.setattr("reach.cli.doctor.parse_frontmatter", raise_validation_err)
+    res = _check_skills(tmp_path, global_scope=False)
+    assert res.status == CheckStatus.WARN
+    assert "No skills detected" in res.detail

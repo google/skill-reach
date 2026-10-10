@@ -67,7 +67,7 @@ class CheckCategory(StrEnum):
 
 
 class CheckResult(BaseModel):
-    """Represent the validated diagnostic result of a single environment check."""
+    """Hold validated diagnostic results for a single environment check."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -95,7 +95,7 @@ class CheckResult(BaseModel):
 
 
 class DoctorReport(BaseModel):
-    """Aggregate diagnostic check results for serialization and rendering."""
+    """Contain aggregated diagnostic check results for serialization and rendering."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

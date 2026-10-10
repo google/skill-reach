@@ -72,5 +72,5 @@ reach doctor --format json
 | `--verbose`, `-v`        | Flag   | `false`           | Display detailed diagnostics and recommended remediation steps.    |
 | `--quiet`, `-q`          | Flag   | `false`           | Mute the terminal table view.                                      |
 | `--global`, `-g`         | Flag   | `false`           | Discover and inspect skills from user global configuration (`~/`). |
-| `--format`               | Choice | `text`            | Output format: `text`, `json`, `jsonl`, `csv`.                     |
+| `--format`               | Choice | None              | Output format: `json`, `jsonl`, `csv` (default: terminal table).   |
 | `--config`, `-c`         | Path   | `reach.toml`      | Path to `reach.toml` configuration file.                           |
