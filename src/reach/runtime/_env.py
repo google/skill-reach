@@ -77,7 +77,7 @@ def resolve_env_secret(
     for name in var_names:
         if file_path := env.get(f"{name}_FILE"):
             try:
-                path = Path(file_path).expanduser()
+                path = Path(file_path).expanduser().resolve()
                 if not path.is_file():
                     continue
                 with path.open("rb") as fh:
@@ -114,18 +114,23 @@ def sanitize_subprocess_env(
     if blocked_env_vars is None and vertex_env_active:
         keep_set.add("GOOGLE_APPLICATION_CREDENTIALS")
 
-    for key in _ALL_PROVIDER_KEY_ENV_VARS:
-        if not env.get(key) and (resolved := resolve_env_secret(env, key)):
-            env[key] = resolved
-        env.pop(f"{key}_FILE", None)
-
     effective_blocked = (
         set(blocked_env_vars) if blocked_env_vars is not None else _DEFAULT_BLOCKED_SET
     )
+    for key in _ALL_PROVIDER_KEY_ENV_VARS:
+        if (
+            (key not in effective_blocked or key in keep_set)
+            and not env.get(key)
+            and (resolved := resolve_env_secret(env, key))
+        ):
+            env[key] = resolved
+        env.pop(f"{key}_FILE", None)
+
+    blocked_with_files = effective_blocked | {f"{var}_FILE" for var in effective_blocked}
     for key in list(env.keys()):
         if key in keep_set:
             continue
-        if key in effective_blocked:
+        if key in blocked_with_files:
             env.pop(key, None)
     return env
 

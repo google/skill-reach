@@ -352,7 +352,10 @@ The following options configure process containment when running `sandbox do`:
 
 ### Persisting Reports to Cloud Storage
 
-Because Cloud Run containers and sandboxes are ephemeral, stream evaluation reports (`.reach/eval.json`, `report.html`) to Google Cloud Storage using `gcloud storage`:
+Because Cloud Run containers and `sandbox do --write` overlays are ephemeral, artifacts written to `/workspace/.reach/` are discarded when the container exits unless persisted:
+
+1. **Cloud Storage Volume Mount (Batch Cloud Run Jobs)**: Mount a Cloud Storage bucket via Cloud Storage FUSE at `/workspace/.reach` on the job container and pass `--mount type=bind,source=/workspace/.reach,destination=/workspace/.reach` to `sandbox do` so `.artifact.json` and HTML reports are written directly to your bucket.
+2. **Post-Run Upload (`gcloud storage`)**: In custom wrapper scripts or CI steps, upload `.reach/` artifacts after `sandbox do` (with `--export-tar` or a bind-mounted output directory) completes:
 
 ```bash
 # Upload evaluation artifacts to Cloud Storage

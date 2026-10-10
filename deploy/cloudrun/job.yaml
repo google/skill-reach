@@ -19,6 +19,9 @@ spec:
                 - name: gemini-secret
                   mountPath: /secrets
                   readOnly: true
+                # Optional: mount a Cloud Storage bucket at /workspace/.reach (and pass
+                # --mount type=bind,source=/workspace/.reach,destination=/workspace/.reach)
+                # to persist evaluation artifacts beyond ephemeral sandbox exit.
               command:
                 - /usr/local/gcp/bin/sandbox
               args:

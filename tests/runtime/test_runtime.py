@@ -2231,6 +2231,7 @@ def test_sync_google_and_gemini_keys_file_resolution_and_scrubbing(
             None,
         ),
         ("bounded_read", ("GEMINI_API_KEY",), 10, "mounted-"),
+        ("symlink_path", ("GEMINI_API_KEY",), 16384, "mounted-secret-val"),
     ],
 )
 def test_resolve_env_secret_scenarios(
@@ -2243,6 +2244,8 @@ def test_resolve_env_secret_scenarios(
     """Verify resolve_env_secret precedence, error recovery, and byte-bounded reads."""
     secret_file = tmp_path / "gemini_secret"
     secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
+    symlink_file = tmp_path / "gemini_secret_link"
+    symlink_file.symlink_to(secret_file)
     empty_file = tmp_path / "empty_secret"
     empty_file.write_text("   \n", encoding="utf-8")
     dir_path = tmp_path / "secret_dir"
@@ -2270,6 +2273,9 @@ def test_resolve_env_secret_scenarios(
         },
         "bounded_read": {
             "GEMINI_API_KEY_FILE": str(secret_file),
+        },
+        "symlink_path": {
+            "GEMINI_API_KEY_FILE": str(symlink_file),
         },
     }
     assert resolve_env_secret(envs[scenario], *var_names, max_bytes=max_bytes) == expected
@@ -2306,18 +2312,21 @@ def test_runtime_and_generator_build_env_resolves_and_scrubs_file_secrets(
     secret_file = tmp_path / "secret"
     secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
     monkeypatch.setenv(file_var, str(secret_file))
+    monkeypatch.setenv("GITHUB_TOKEN_FILE", str(secret_file))
 
     options = {"api_key": explicit_api_key} if explicit_api_key else {}
     rt = build_runtime(RuntimeSettings(agent=agent, options=options))
     built_env = rt.build_env(tmp_path)
     assert built_env[expected_var] == expected_val
     assert file_var not in built_env
+    assert "GITHUB_TOKEN_FILE" not in built_env
 
     if explicit_api_key is None and agent == "claude-code":
         claude_gen = build_text_generator("claude-sonnet-4-5", agent="claude-code")
         gen_env = claude_gen.build_env()
         assert gen_env[expected_var] == expected_val
         assert file_var not in gen_env
+        assert "GITHUB_TOKEN_FILE" not in gen_env
 
 
 @pytest.mark.parametrize(
@@ -2775,16 +2784,25 @@ def test_resolve_options_propagates_blocked_env_vars() -> None:
 
 
 def test_base_text_generator_build_env_sanitizes_via_options(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify BaseTextGenerator.build_env strips blocked env vars specified in options."""
+    """Verify BaseTextGenerator.build_env strips blocked env vars and *_FILE pointers."""
+    secret_file = tmp_path / "blocked_secret"
+    secret_file.write_text("should-not-resolve", encoding="utf-8")
     monkeypatch.setenv("SECRET_TOKEN", "sensitive")
+    monkeypatch.setenv("SECRET_TOKEN_FILE", str(secret_file))
+    monkeypatch.setenv("OPENAI_API_KEY_FILE", str(secret_file))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("PUBLIC_VAR", "harmless")
 
-    opts = FakeOptions(model="test-model", blocked_env_vars=("SECRET_TOKEN",))
+    opts = FakeOptions(model="test-model", blocked_env_vars=("SECRET_TOKEN", "OPENAI_API_KEY"))
     gen = FakeGenerator(model="test-model", options=opts)
     env = gen.build_env()
     assert "SECRET_TOKEN" not in env
+    assert "SECRET_TOKEN_FILE" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert "OPENAI_API_KEY_FILE" not in env
     assert env.get("PUBLIC_VAR") == "harmless"
 
 
