@@ -112,27 +112,57 @@ def test_check_cli_binary_found_and_missing(
         assert expected_sub in res.detail
 
 
-def test_check_sdk_installed_and_missing() -> None:
-    """Verify SDK module checks reflect importability."""
-    with patch("importlib.util.find_spec", return_value=object()):
-        res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
-        assert res.status == "ok"
-
-    with patch("importlib.util.find_spec", return_value=None):
-        res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
-        assert res.status == "warn"
-        assert "not installed" in res.detail
-
-
-def test_check_env_var_reports_configured_without_displaying_key(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("side_effect", "return_value", "expected_status", "expected_detail"),
+    [
+        (None, object(), "ok", "installed and importable"),
+        (None, None, "warn", "not installed"),
+        (ModuleNotFoundError("No module named 'google'"), None, "warn", "not installed"),
+        (ImportError("Broken parent import"), None, "warn", "not installed"),
+        (AttributeError("Parent is not a package"), None, "warn", "not installed"),
+        (ValueError("Empty module name"), None, "warn", "not installed"),
+    ],
+)
+def test_check_sdk_importability(
+    side_effect: Exception | None,
+    return_value: object | None,
+    expected_status: str,
+    expected_detail: str,
 ) -> None:
-    """Verify environment check confirms configuration without leaking API keys."""
-    monkeypatch.setenv("TEST_API_KEY", "super-secret-key-12345")
+    """Verify that SDK module checks handle found, missing, and broken parent packages."""
+    with patch("importlib.util.find_spec", return_value=return_value, side_effect=side_effect):
+        res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
+        assert res.status == expected_status
+        assert expected_detail in res.detail
+
+
+@pytest.mark.parametrize(
+    ("use_file", "secret_val"),
+    [
+        (False, "super-secret-key-12345"),
+        (True, "file-secret-key-67890"),
+    ],
+)
+def test_check_env_var_reports_configured_without_displaying_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    use_file: bool,
+    secret_val: str,
+) -> None:
+    """Verify that _check_env_var confirms direct and *_FILE config without leaking keys."""
+    monkeypatch.delenv("TEST_API_KEY", raising=False)
+    monkeypatch.delenv("TEST_API_KEY_FILE", raising=False)
+    if use_file:
+        secret_file = tmp_path / "secret.txt"
+        secret_file.write_text(f"{secret_val}\n", encoding="utf-8")
+        monkeypatch.setenv("TEST_API_KEY_FILE", str(secret_file))
+    else:
+        monkeypatch.setenv("TEST_API_KEY", secret_val)
+
     res = _check_env_var("TEST_API_KEY", "testing purpose")
     assert res.status == "ok"
     assert res.detail == "configured"
-    assert "super-secret-key" not in res.detail
+    assert secret_val not in res.detail
 
 
 def test_check_google_adc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

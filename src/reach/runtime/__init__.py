@@ -43,6 +43,7 @@ from reach.runtime._env import (
     has_agy_vertex_env,
     raise_missing_agent_dependency,
     resolve_blocked_env_vars,
+    resolve_env_secret,
     sanitize_subprocess_env,
 )
 from reach.runtime._fs import (
@@ -148,7 +149,7 @@ class AntigravityOptions(VertexOptions):
         if has_agy_vertex_env(os.environ):
             return True
         has_api_key = bool(
-            self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            self.api_key or resolve_env_secret(os.environ, "GEMINI_API_KEY", "GOOGLE_API_KEY")
         )
         return not has_api_key and bool(self.project or resolve_registry_project(self.project))
 
@@ -187,7 +188,7 @@ class AntigravityOptions(VertexOptions):
             return self.api_key
         if self.effective_vertex:
             return None
-        return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        return resolve_env_secret(os.environ, "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
     def resolve_model_provider(self, model: str = "") -> str | None:
         """Resolve model provider unless Vertex/ADC mode is active without explicit provider."""
@@ -639,6 +640,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
     name: str
     settings: RuntimeSettings | None = None
     options: OptionsT = cast("Any", AgentOptions())
+    api_key_env_var: str | None = None
     _resident: tuple[str, ...] = ()
     is_dynamic: bool = False
 
@@ -826,9 +828,18 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         """Release any isolated temporary resources owned by this runtime."""
 
     def build_env(self, workdir: Path | None = None) -> dict[str, str]:
-        """Assemble process environment for agent execution."""
+        """Assemble process environment with API keys and workspace overrides."""
         del workdir
-        return sanitize_subprocess_env(dict(os.environ), blocked_env_vars=self.blocked_env_vars)
+        env = dict(os.environ)
+        if (home_dir := getattr(self.options, "home_dir", None)) is not None:
+            env["HOME"] = str(home_dir)
+        if api_key_var := self.api_key_env_var:
+            if (api_key := self.api_key) is not None:
+                env[api_key_var] = str(api_key)
+            elif not env.get(api_key_var) and (resolved := resolve_env_secret(env, api_key_var)):
+                env[api_key_var] = resolved
+            env.pop(f"{api_key_var}_FILE", None)
+        return sanitize_subprocess_env(env, blocked_env_vars=self.blocked_env_vars)
 
     def _make_tracker(self, target_skill: str | None = None) -> TrajectoryTracker:
         """Create a TrajectoryTracker configured with this runtime's turn and early-exit options."""
@@ -888,7 +899,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
     """Abstract base runtime for command-line interface agent drivers."""
 
     options: CliOptionsT
-    api_key_env_var: str | None = None
 
     def __init__(
         self,
@@ -937,17 +947,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
         """Extract invoked skill name from an event line for early-exit detection."""
         del line
         return None
-
-    @override
-    def build_env(self, workdir: Path | None = None) -> dict[str, str]:
-        """Assemble process environment with API keys and workspace overrides."""
-        del workdir
-        env = dict(os.environ)
-        if (home_dir := getattr(self.options, "home_dir", None)) is not None:
-            env["HOME"] = str(home_dir)
-        if (api_key := getattr(self.options, "api_key", None)) is not None and self.api_key_env_var:
-            env[self.api_key_env_var] = str(api_key)
-        return sanitize_subprocess_env(env, blocked_env_vars=self.blocked_env_vars)
 
     def validate_outcome(
         self,

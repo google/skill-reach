@@ -41,6 +41,7 @@ skills-lock.json
 CONTEXT.md
 reach.toml
 reach.local.toml
+!src/reach/reach.toml
 studies/
 .reach/
 

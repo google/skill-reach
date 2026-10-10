@@ -1,4 +1,4 @@
-# Sandboxing & Execution Safety
+# Sandboxing
 
 When evaluating, probing, or optimizing skill catalogs, live agent runtimes (such as Claude Code, Goose, Pi, or Google Antigravity CLI) execute real tools, file operations, and shell commands on the host machine. If an agent probes a third-party, unvetted, or untrusted skill, instructions inside that skill's `SKILL.md` could attempt unauthorized filesystem access, network exfiltration, or script execution.
 
@@ -33,7 +33,7 @@ Proceed with execution? [y/N]:
 
 ## Safe Offline Evaluation: The Keyword Driver
 
-If you want to benchmark skill reachability or run CI checks on unvetted skills without executing any host code or calling external language models, use the **deterministic keyword driver**:
+To benchmark reachability or run CI checks without executing host code or calling external language models, use the **keyword driver**:
 
 ```bash
 reach eval --agent keyword
@@ -41,14 +41,7 @@ reach check --agent keyword
 reach sweep --agent keyword
 ```
 
-The keyword driver is an in-memory lexical matching engine that matches query terms against skill names and descriptions using compiled word-boundary regular expressions and BM25 scoring, simulating agent routing decisions without running subprocesses, executing tools, or making network calls.
-
-### Why `--agent keyword` is Safe
-
-1. **Zero Process Execution**: Operates purely in Python memory using compiled word-boundary regular expressions. It never invokes `subprocess` or shell commands.
-2. **Zero Tool Execution**: Does not run scripts, shell tools, or instructions defined inside skills.
-3. **Zero Network & Token Cost**: Requires no model credentials, produces no HTTP network calls, and costs $0.00.
-4. **Automatic Safety Bypass**: Because no subprocesses or tools are invoked, Reach automatically skips safety prompts when `--agent keyword` is active.
+The keyword driver is an in-memory lexical matching engine using compiled word-boundary regular expressions and BM25 scoring. It operates with zero subprocess calls, zero tool executions, zero network requests, and $0.00 token cost—automatically bypassing safety confirmation prompts.
 
 ## Agent Runtime Isolation & Memory Boundaries
 
@@ -79,31 +72,39 @@ Reach tailors isolation mechanisms to the execution model of each supported agen
 
 ---
 
-## Containerized Sandboxing (Docker & Podman)
+## Container Sandboxing
 
-For live agent runtimes probing untrusted or community skills, run Reach inside a containerized sandbox. This restricts tool access, file system modifications, and environment variable visibility to the container boundary.
+For live agent runtimes probing untrusted or community skills, run Reach inside a container sandbox. This restricts tool execution, filesystem modifications, and environment visibility to the container boundary.
 
-### Running with Docker
+### Running with Docker or Podman
 
-Mount your skill catalog into an ephemeral container and pass your model provider API key:
+Mount your skill catalog into an ephemeral container and forward your model provider API key:
 
 ```bash
 docker run --rm -it \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
   -v "$PWD:/workspace" \
   -w /workspace \
-  python:3.13-slim \
+  python:3.12-slim \
   bash -c "pip install skill-reach && reach eval"
 ```
 
-### Running with Docker Compose
+/// tip
 
-Define an isolated sandbox service in `docker-compose.yml`:
+- **Podman**: Replace `docker` with `podman` (on macOS, run `podman machine init --now` first).
+- **Apple Container (macOS 26+)**: Replace `docker` with `container` after running `container system start --enable-kernel-install`.
+- **macOS Providers**: The `docker` CLI works identically with Docker Desktop, [Colima](https://github.com/abiosoft/colima) (`colima start`), or OrbStack.
+
+///
+
+### Docker Compose
+
+For automated multi-container environments, declare a sandbox service in `docker-compose.yml`:
 
 ```yaml
 services:
   reach-sandbox:
-    image: python:3.13-slim
+    image: python:3.12-slim
     volumes:
       - .:/workspace:ro
       - reach-scratch:/tmp
@@ -133,24 +134,72 @@ Standard container runners share the host kernel and instance resources. Cloud R
 4. **Read-Only Filesystem with Isolated Mounts**: The host container filesystem is mounted read-only. Writable workspaces are restricted to ephemeral tmpfs overlays (`--write`) or designated bind mounts (`--mount`).
 5. **Fast Local Launch**: Sandboxes spin up in milliseconds inside the active container instance without provisioning new virtual machines or deploying new container revisions.
 
+### Building the Runner Container Image
+
+To run Reach on Cloud Run, package your skill catalog or benchmark workspace into a container image using the multi-stage `Dockerfile` in the repository root:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+
+# ── Stage 1: Build virtual environment with uv ──────────────────────────────
+FROM python:3.12-slim AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+WORKDIR /build
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml README.md ./
+COPY src/ src/
+
+RUN uv venv /opt/venv && \
+    uv pip install --no-cache-dir ".[antigravity-sdk]"
+
+# ── Stage 2: Minimal Runtime ────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:/usr/local/gcp/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+RUN groupadd -g 10001 reach && \
+    useradd -u 10001 -g reach -m -d /home/reach reach && \
+    mkdir -p /workspace && \
+    chown -R reach:root /workspace && \
+    chmod 0775 /workspace
+
+WORKDIR /workspace
+COPY --chown=reach:reach .agents/ /workspace/.agents/
+
+# Cloud Run's /usr/local/gcp/bin/sandbox requires UID 0 in the outer container
+# to initialize /var/run/netns before dropping privileges inside the sandbox jail.
+# For standalone local Docker runs without `sandbox do`, pass `--user reach`.
+CMD ["reach", "eval", "--agent", "antigravity-sdk", "--yes"]
+```
+
+Build and push the image to Google Cloud Artifact Registry:
+
+```bash
+gcloud builds submit --tag "LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-runner:latest"
+```
+
+/// tip
+**Build Context Optimization**: Maintain a `.gcloudignore` and `.dockerignore` in your repository root so local virtual environments (`.venv/`), git history (`.git/`), and benchmark runs (`.reach/`) are not uploaded to Cloud Build or baked into the container image.
+///
+
 ### Enabling the Sandbox Launcher
 
-To enable sandboxes, deploy your Cloud Run service or job with the `--sandbox-launcher` flag or configure `sandboxLauncher: true` in your container specification. This injects the `sandbox` CLI binary at `/usr/local/gcp/bin/sandbox`.
+To enable sandboxes on Cloud Run, configure the second-generation execution environment with the sandbox launcher enabled via the `gcloud beta` CLI (`--sandbox-launcher`) or declaratively in YAML (`sandboxLauncher: true`). When enabled, Cloud Run injects the `sandbox` CLI binary inside the container at `/usr/local/gcp/bin/sandbox`.
 
 #### Cloud Run Jobs (Batch Evaluation & Sweeps)
 
-For scheduled regression tests or CI-triggered scaling sweeps, deploy Reach as a Cloud Run Job:
-
-```bash
-# Create a Cloud Run Job with the sandbox launcher enabled
-gcloud beta run jobs create reach-eval-job \
-  --image "LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-runner:latest" \
-  --sandbox-launcher \
-  --set-env-vars "REACH_YES=1" \
-  --region us-central1
-```
-
-Or declare the job in YAML (`job.yaml`):
+For scheduled regression tests, CI-triggered scaling sweeps, or overnight batch evaluations, Cloud Run Jobs run to completion and terminate. Declare the job specification in YAML (`deploy/cloudrun/job.yaml`):
 
 ```yaml
 apiVersion: run.googleapis.com/v1
@@ -164,28 +213,78 @@ spec:
     spec:
       template:
         spec:
+          maxRetries: 0
+          timeoutSeconds: 1800
           containers:
             - name: reach-eval
               image: LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-runner:latest
               sandboxLauncher: true
+              volumeMounts:
+                - name: gemini-secret
+                  mountPath: /secrets
+                  readOnly: true
+              command:
+                - /usr/local/gcp/bin/sandbox
+              args:
+                - do
+                - --allow-egress
+                - --write
+                - --env
+                - PATH=/opt/venv/bin:/usr/local/gcp/bin:/usr/local/bin:/usr/bin:/bin
+                - --env
+                - REACH_YES=1
+                - --env
+                - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
+                - --mount
+                - type=bind,source=/secrets,destination=/secrets,readonly
+                - --workdir
+                - /workspace
+                - --
+                - reach
+                - eval
+                - --agent
+                - antigravity-sdk
+                - --auto
+                - --yes
+              # Scale cpu/memory (e.g. 4 vCPU / 4Gi) for large multi-worker sweeps
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
               env:
                 - name: REACH_YES
                   value: "1"
+          volumes:
+            - name: gemini-secret
+              secret:
+                secretName: GEMINI_API_KEY
+                items:
+                  - key: latest
+                    path: GEMINI_API_KEY
 ```
 
-Deploy the job configuration:
+Deploy and execute the job:
 
 ```bash
-gcloud run jobs replace job.yaml
-gcloud run jobs execute reach-eval-job --wait
+gcloud run jobs replace deploy/cloudrun/job.yaml --region us-central1
+gcloud run jobs execute reach-eval-job --wait --region us-central1
 ```
+
+/// tip
+**Secret Safety in Sandboxes**: The Cloud Run sandbox launcher (`sandbox do`) logs its startup arguments to `/var/log/sandbox.log`. Avoid passing raw secrets via `--env KEY="$KEY"` or shell command substitutions (`$(cat ...)`). Instead, mount the secret as a read-only volume (`/secrets/GEMINI_API_KEY`) and pass `--env GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY` so Reach reads the credential directly in Python without spawning subshells or exposing keys in CLI arguments or logs.
+///
 
 #### Cloud Run Services (Evaluation Webhook / API)
 
-If hosting an automated skill verification service or pull request webhook:
+If hosting an automated skill verification service or pull request webhook triggered via HTTP:
+
+/// note
+Cloud Run Services require a container that listens for incoming HTTP requests on `$PORT` (default `8080`). Your service container runs a lightweight web framework (e.g. FastAPI) that handles webhook events and dispatches isolated evaluation runs using `sandbox do` via subprocess.
+///
+
+Deploy a Cloud Run service with the sandbox launcher enabled:
 
 ```bash
-# Deploy a Cloud Run service with the sandbox launcher enabled
 gcloud beta run deploy reach-eval-service \
   --image "LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-service:latest" \
   --sandbox-launcher \
@@ -209,6 +308,10 @@ spec:
         - name: reach-service
           image: LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-service:latest
           sandboxLauncher: true
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
           ports:
             - containerPort: 8080
 ```
@@ -217,45 +320,19 @@ spec:
 
 Once enabled, invoke the `sandbox do` command from within your container to run Reach or agent runtimes in an isolated sandbox. The `sandbox do` command automatically provisions the sandbox, executes the command, and cleans up the sandbox on exit:
 
+/// important
+**Environment Variable Isolation**: Cloud Run sandboxes do not inherit environment variables from the host container, including `PATH`. Always explicitly forward `--env PATH="$PATH"` so Reach and agent runtime binaries are discoverable.
+///
+
 ```bash
-# Execute reach eval in an ephemeral sandbox with outbound API access and writable workspace
+# Execute reach eval in an ephemeral sandbox with outbound API access, writable overlay, and mounted secret
 sandbox do --allow-egress --write \
-  --env GEMINI_API_KEY="$GEMINI_API_KEY" \
+  --env PATH="$PATH" \
   --env REACH_YES="1" \
-  --mount type=bind,source=/workspace,destination=/workspace \
+  --env GEMINI_API_KEY_FILE="/secrets/GEMINI_API_KEY" \
+  --mount type=bind,source=/secrets,destination=/secrets,readonly \
   --workdir /workspace \
-  -- reach eval --yes
-```
-
-#### Python Subprocess Wrapper
-
-If your evaluation runner is written in Python, execute the sandbox binary via `subprocess`:
-
-```python
-import subprocess
-import sys
-
-
-def run_sandboxed_reach(cmd: list[str], api_key: str, workspace: str) -> int:
-    """Execute Reach commands inside an isolated Cloud Run sandbox."""
-    sandbox_cmd = [
-        "sandbox",
-        "do",
-        "--allow-egress",
-        "--write",
-        f"--env=GEMINI_API_KEY={api_key}",
-        "--env=REACH_YES=1",
-        f"--mount=type=bind,source={workspace},destination=/workspace",
-        "--workdir=/workspace",
-        "--",
-        *cmd,
-    ]
-    result = subprocess.run(sandbox_cmd, stdout=sys.stdout, stderr=sys.stderr)
-    return result.returncode
-
-
-# Example: execute check inside sandbox
-exit_code = run_sandboxed_reach(["reach", "check", "--yes"], api_key="...", workspace="/workspace")
+  -- reach eval --agent antigravity-sdk --yes
 ```
 
 ### Sandbox CLI Flag Reference
@@ -275,7 +352,10 @@ The following options configure process containment when running `sandbox do`:
 
 ### Persisting Reports to Cloud Storage
 
-Because Cloud Run containers and sandboxes are ephemeral, stream evaluation reports (`.reach/eval.json`, `report.html`) to Google Cloud Storage using `gcloud storage`:
+Because Cloud Run containers and `sandbox do --write` overlays are ephemeral, artifacts written to `/workspace/.reach/` are discarded when the container exits unless persisted:
+
+1. **Cloud Storage Volume Mount (Batch Cloud Run Jobs)**: Mount a Cloud Storage bucket via Cloud Storage FUSE at `/workspace/.reach` on the job container and pass `--mount type=bind,source=/workspace/.reach,destination=/workspace/.reach` to `sandbox do` so `.artifact.json` and HTML reports are written directly to your bucket.
+2. **Post-Run Upload (`gcloud storage`)**: In custom wrapper scripts or CI steps, upload `.reach/` artifacts after `sandbox do` (with `--export-tar` or a bind-mounted output directory) completes:
 
 ```bash
 # Upload evaluation artifacts to Cloud Storage
@@ -284,41 +364,16 @@ gcloud storage cp -r .reach/ "gs://my-evaluation-bucket/runs/$(date +%Y%m%d-%H%M
 
 ---
 
-## Bypassing Prompts in CI/CD & Automated Scripts
+## Bypassing Prompts in CI/CD
 
 To run automated pipelines without interactive prompts, Reach provides three equivalent bypass mechanisms:
 
-### 1. CLI Flag (`--yes` / `-y`)
-
-Pass `--yes` or `-y` to any command that probes agents:
-
-```bash
-reach eval --yes
-reach sweep -y
-reach check --yes
-reach optimize --skill my-skill --yes
-```
+| Mechanism                | Syntax                        | Scope & Usage                                                                                                         |
+| :----------------------- | :---------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| **CLI Flag**             | `reach eval --yes` (`-y`)     | Single execution across any probe command (`eval`, `sweep`, `check`, `optimize`).                                     |
+| **Environment Variable** | `export REACH_YES=1`          | Current shell session, container runner, or CI/CD workflow pipeline.                                                  |
+| **Repository Config**    | `[study]`<br>`trusted = true` | Repository-wide setting in `reach.toml`. Excluded from `config_fingerprint` to keep historical benchmarks comparable. |
 
 /// note
-`--yes` / `-y` specifically bypasses safety confirmation prompts. On `reach optimize`, `--force` / `-f` remains exclusively dedicated to force-applying candidate descriptions even when empirical recall does not improve.
+`--yes` / `-y` specifically bypasses safety confirmation prompts. On `reach optimize`, `--force` / `-f` remains dedicated to force-applying candidate descriptions even when empirical recall does not improve.
 ///
-
-### 2. Environment Variable (`REACH_YES=1`)
-
-Export `REACH_YES=1` in your shell or CI workflow configuration:
-
-```bash
-export REACH_YES=1
-reach eval
-```
-
-### 3. Repository Configuration (`trusted = true`)
-
-For trusted private codebases where all skills are vetted, set `trusted = true` under `[study]` in `reach.toml`:
-
-```toml
-[study]
-trusted = true
-```
-
-Setting `trusted = true` bypasses safety confirmation for all runs using that configuration. Reach excludes `trusted` from the experiment `config_fingerprint`, ensuring your historical diffs, run records, and benchmarks remain fully comparable.
