@@ -14,11 +14,13 @@ reach doctor [PATH] [OPTIONS]
 
 ## Diagnostics Checked
 
-1. **Python Environment**: Verifies Python `>= 3.12` and runtime platform details.
-2. **Agent Runtime Drivers**: Checks for installed agent CLI executables (`claude`, `agy`, `goose`, `pi`) and SDK packages (`google.antigravity`, `keyword`).
-3. **Credentials & Keys**: Checks for configured API key (`GEMINI_API_KEY`), Google Cloud Application Default Credentials (ADC), and Agent Registry target configuration.
-4. **Skill Directories & Cache**: Scans for resident skills across standard workspace paths (`.agents/skills`, `.claude/skills`, etc.) and cached Agent Registry bundles.
-5. **Project Configuration**: Validates the syntax, schema, and active settings in `reach.toml`.
+1. **Environment**: Verifies Python `>= 3.12` runtime/platform details and checks whether optional `Semantic Scoring (model2vec)` (`skill-reach[semantic]`) is installed.
+2. **Runtimes**: Checks for installed agent CLI executables (`claude`, `agy` / `antigravity`, `goose`, `pi`), the `Antigravity SDK` (`google.antigravity`), and the built-in `Keyword Runtime (BM25)`.
+3. **Credentials**: Verifies configured API keys (`GEMINI_API_KEY` or `GOOGLE_API_KEY`), Google Cloud Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` or standard `gcloud` ADC paths plus active Vertex flags `AGY_ADC_AUTH`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE`), and Google Cloud Agent Registry project and cache state.
+4. **Skills**: Discovers and counts resident skills across workspace paths (respecting `reach.toml` `[discovery].precedence`, `[study].skills`, root `SKILL.md`, and canonical symlink deduplication), plus optional user-global directories (`~/`) when `--global` (`-g`) is enabled.
+5. **Configuration**: Validates the TOML syntax, Pydantic schema, and active settings in `reach.toml`.
+
+`reach doctor` exits `0` when all checks pass or warn (`OK` / `WARN`) and exits `1` when any check fails (`FAIL`), making it suitable as a preflight health gate in CI/CD pipelines.
 
 ---
 
@@ -34,10 +36,28 @@ reach doctor
 ///
 
 /// tab | Verbose diagnostics with remedies
-Include detailed remediation steps for missing keys and CLIs:
+Include detailed remediation steps for warnings and missing dependencies:
 
 ```bash
 reach doctor --verbose
+```
+
+///
+
+/// tab | Inspect workspace and global skills
+Include user-level skill directories (`~/.agents/skills`, `~/.claude/skills`, etc.) alongside workspace skills:
+
+```bash
+reach doctor --global
+```
+
+///
+
+/// tab | Export structured JSON or CSV diagnostics
+Emit machine-readable diagnostic reports for CI/CD preflight checks:
+
+```bash
+reach doctor --format json
 ```
 
 ///
@@ -46,7 +66,11 @@ reach doctor --verbose
 
 ## Options
 
-| Option           | Type   | Default           | Description                                                     |
-| :--------------- | :----- | :---------------- | :-------------------------------------------------------------- |
-| `PATH`, `--path` | `PATH` | Current directory | Target workspace directory to inspect.                          |
-| `--verbose`      | `flag` | `false`           | Display detailed diagnostic info and recommended action panels. |
+| Option                   | Type   | Default           | Description                                                        |
+| :----------------------- | :----- | :---------------- | :----------------------------------------------------------------- |
+| `[PATH]`, `--path`, `-p` | Path   | Current directory | Target workspace directory to inspect.                             |
+| `--verbose`, `-v`        | Flag   | `false`           | Display detailed diagnostics and recommended remediation steps.    |
+| `--quiet`, `-q`          | Flag   | `false`           | Mute the terminal table view.                                      |
+| `--global`, `-g`         | Flag   | `false`           | Discover and inspect skills from user global configuration (`~/`). |
+| `--format`               | Choice | `text`            | Output format: `text`, `json`, `jsonl`, `csv`.                     |
+| `--config`, `-c`         | Path   | `reach.toml`      | Path to `reach.toml` configuration file.                           |
