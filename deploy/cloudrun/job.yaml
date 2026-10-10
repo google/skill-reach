@@ -1,0 +1,48 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: reach-eval-job
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: 1800
+          containers:
+            - name: reach-eval
+              image: LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-runner:latest
+              sandboxLauncher: true
+              volumeMounts:
+                - name: gemini-secret
+                  mountPath: /secrets
+                  readOnly: true
+              command:
+                - /bin/bash
+                - -c
+                - >-
+                  /usr/local/gcp/bin/sandbox do
+                  --allow-egress
+                  --write
+                  --env PATH="$PATH"
+                  --env REACH_YES="1"
+                  --mount type=bind,source=/workspace,destination=/workspace
+                  --mount type=bind,source=/secrets,destination=/secrets,readonly
+                  --workdir /workspace
+                  -- /bin/bash -c 'export GEMINI_API_KEY="$(cat /secrets/GEMINI_API_KEY)" && reach eval --auto --yes'
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+              env:
+                - name: REACH_YES
+                  value: "1"
+          volumes:
+            - name: gemini-secret
+              secret:
+                secretName: GEMINI_API_KEY
+                items:
+                  - key: latest
+                    path: GEMINI_API_KEY

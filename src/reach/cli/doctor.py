@@ -103,7 +103,11 @@ def _check_cli_binary(
 
 def _check_sdk(name: str, module_name: str, required_by: str) -> CheckResult:
     """Check whether a Python SDK dependency is importable."""
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ModuleNotFoundError, ValueError):
+        spec = None
+
     if spec is None:
         return CheckResult(
             category="Agent Runtime Drivers",

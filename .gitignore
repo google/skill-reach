@@ -39,8 +39,8 @@ skills-lock.json
 # Project Specific
 *.partial
 CONTEXT.md
-reach.toml
-reach.local.toml
+/reach.toml
+/reach.local.toml
 studies/
 .reach/
 

@@ -1908,3 +1908,18 @@ def test_run_config_from_toml_defaults_to_discovered_config(
     discovered_cfg = RunConfig.from_toml()
     assert discovered_cfg.study.skills == (tmp_path / "my_corpus").resolve()
     assert discovered_cfg.plan.attempts == 7
+
+
+def test_bundled_config_exists_and_provides_baseline_models() -> None:
+    """Verify that bundled reach.toml exists and provides required default profiles."""
+    from reach.config import BUNDLED_CONFIG_PATH, load_config
+    from reach.runtime.profiles import model_profile
+
+    assert BUNDLED_CONFIG_PATH.is_file(), f"Missing bundled config: {BUNDLED_CONFIG_PATH}"
+    config = load_config(None)
+    assert "models" in config
+    assert "claude-sonnet-5" in config["models"]
+
+    profile = model_profile("claude-sonnet-5")
+    assert profile.completion_window is not None
+    assert profile.context_window > 0

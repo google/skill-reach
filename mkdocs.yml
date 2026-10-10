@@ -98,26 +98,26 @@ extra_javascript:
 nav:
   - Overview: index.md
   - Getting Started: getting-started.md
-  - Concepts:
-      - How Reachability Works: concepts/how-it-works.md
-      - Progressive Disclosure: concepts/progressive-disclosure.md
   - Guides:
-      - Sandboxing & Safety: guides/sandboxing.md
+      - Concepts:
+          - How Reachability Works: concepts/how-it-works.md
+          - Progressive Disclosure: concepts/progressive-disclosure.md
+      - Sandboxing: guides/sandboxing.md
   - CLI Reference:
       - Overview: cli/index.md
-      - Evaluation & CI:
+      - Evaluation:
           - reach eval: cli/eval.md
           - reach check: cli/check.md
           - reach diff: cli/diff.md
           - reach sweep: cli/sweep.md
           - reach view: cli/view.md
-      - Catalog & Optimization:
+      - Optimization:
           - reach lint: cli/lint.md
           - reach overlap: cli/overlap.md
           - reach cluster: cli/cluster.md
           - reach optimize: cli/optimize.md
           - reach query: cli/query.md
-      - Setup & Maintenance:
+      - Setup:
           - reach init: cli/init.md
           - reach doctor: cli/doctor.md
           - reach clean: cli/clean.md

@@ -1,0 +1,34 @@
+.gcloudignore
+.git
+.gitignore
+
+# Inherit rules from .gitignore
+#!include:.gitignore
+
+# Ensure skill definitions are packaged into runner build context
+!.agents/
+!.agents/skills/
+!.agents/skills/**
+
+# CI/CD and repository metadata
+.github/
+
+# Virtual environments & local caches
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+
+# Local evaluation runs and artifacts
+.reach/
+studies/
+dist/
+build/
+*.egg-info/
+node_modules/

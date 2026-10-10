@@ -112,16 +112,26 @@ def test_check_cli_binary_found_and_missing(
         assert expected_sub in res.detail
 
 
-def test_check_sdk_installed_and_missing() -> None:
-    """Verify SDK module checks reflect importability."""
-    with patch("importlib.util.find_spec", return_value=object()):
+@pytest.mark.parametrize(
+    ("side_effect", "return_value", "expected_status", "expected_detail"),
+    [
+        (None, object(), "ok", "installed and importable"),
+        (None, None, "warn", "not installed"),
+        (ModuleNotFoundError("No module named 'google'"), None, "warn", "not installed"),
+        (ValueError("Empty module name"), None, "warn", "not installed"),
+    ],
+)
+def test_check_sdk_importability(
+    side_effect: Exception | None,
+    return_value: object | None,
+    expected_status: str,
+    expected_detail: str,
+) -> None:
+    """Verify SDK module checks handle found, missing, and uninstalled namespaces."""
+    with patch("importlib.util.find_spec", return_value=return_value, side_effect=side_effect):
         res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
-        assert res.status == "ok"
-
-    with patch("importlib.util.find_spec", return_value=None):
-        res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
-        assert res.status == "warn"
-        assert "not installed" in res.detail
+        assert res.status == expected_status
+        assert expected_detail in res.detail
 
 
 def test_check_env_var_reports_configured_without_displaying_key(
