@@ -118,6 +118,8 @@ def test_check_cli_binary_found_and_missing(
         (None, object(), "ok", "installed and importable"),
         (None, None, "warn", "not installed"),
         (ModuleNotFoundError("No module named 'google'"), None, "warn", "not installed"),
+        (ImportError("Broken parent import"), None, "warn", "not installed"),
+        (AttributeError("Parent is not a package"), None, "warn", "not installed"),
         (ValueError("Empty module name"), None, "warn", "not installed"),
     ],
 )
@@ -127,7 +129,7 @@ def test_check_sdk_importability(
     expected_status: str,
     expected_detail: str,
 ) -> None:
-    """Verify SDK module checks handle found, missing, and uninstalled namespaces."""
+    """Verify that SDK module checks handle found, missing, and broken parent packages."""
     with patch("importlib.util.find_spec", return_value=return_value, side_effect=side_effect):
         res = _check_sdk("Antigravity SDK", "google.antigravity", "antigravity-sdk")
         assert res.status == expected_status
@@ -135,14 +137,24 @@ def test_check_sdk_importability(
 
 
 def test_check_env_var_reports_configured_without_displaying_key(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify environment check confirms configuration without leaking API keys."""
+    """Verify that _check_env_var confirms direct and *_FILE config without leaking keys."""
     monkeypatch.setenv("TEST_API_KEY", "super-secret-key-12345")
     res = _check_env_var("TEST_API_KEY", "testing purpose")
     assert res.status == "ok"
     assert res.detail == "configured"
     assert "super-secret-key" not in res.detail
+
+    monkeypatch.delenv("TEST_API_KEY")
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("file-secret-key-67890\n", encoding="utf-8")
+    monkeypatch.setenv("TEST_API_KEY_FILE", str(secret_file))
+    res_file = _check_env_var("TEST_API_KEY", "testing purpose")
+    assert res_file.status == "ok"
+    assert res_file.detail == "configured"
+    assert "file-secret-key" not in res_file.detail
 
 
 def test_check_google_adc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

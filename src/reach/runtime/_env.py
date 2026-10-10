@@ -60,6 +60,21 @@ _AGY_VERTEX_ENV_VARS: tuple[str, ...] = (
 )
 
 
+def resolve_env_secret(env: Mapping[str, str], *var_names: str) -> str | None:
+    """Resolve a secret value from direct environment variables or ``*_FILE`` paths."""
+    for name in var_names:
+        if val := env.get(name):
+            return val
+        if file_path := env.get(f"{name}_FILE"):
+            try:
+                content = Path(file_path).expanduser().read_text(encoding="utf-8").strip()
+                if content:
+                    return content
+            except OSError:
+                continue
+    return None
+
+
 def is_truthy_env(env: Mapping[str, str], key: str) -> bool:
     """Return True if the specified environment variable is set to 'true', '1', or 'yes'."""
     return env.get(key, "").strip().lower() in ("true", "1", "yes")
@@ -69,7 +84,7 @@ def has_agy_vertex_env(env: Mapping[str, str]) -> bool:
     """Return True if any Antigravity Vertex/Enterprise/ADC environment variable is enabled."""
     if any(is_truthy_env(env, key) for key in _AGY_VERTEX_ENV_VARS):
         return True
-    has_api_key = bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY"))
+    has_api_key = bool(resolve_env_secret(env, "GEMINI_API_KEY", "GOOGLE_API_KEY"))
     return bool(env.get("GOOGLE_CLOUD_PROJECT")) and not has_api_key
 
 
@@ -98,6 +113,16 @@ def sanitize_subprocess_env(
 
 def sync_google_and_gemini_keys(env: dict[str, str]) -> dict[str, str]:
     """Synchronize GEMINI_API_KEY and GOOGLE_API_KEY bidirectionally in environment dict."""
+    if (
+        "GEMINI_API_KEY" not in env
+        and "GOOGLE_API_KEY" not in env
+        and (resolved := resolve_env_secret(env, "GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    ):
+        env["GEMINI_API_KEY"] = resolved
+        env["GOOGLE_API_KEY"] = resolved
+        env.pop("GEMINI_API_KEY_FILE", None)
+        env.pop("GOOGLE_API_KEY_FILE", None)
+        return env
     if "GEMINI_API_KEY" in env and "GOOGLE_API_KEY" not in env:
         env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
     elif "GOOGLE_API_KEY" in env and "GEMINI_API_KEY" not in env:
@@ -261,7 +286,7 @@ def detect_model_provider(
         return explicit_provider
     active_env = os.environ if env is None else env
     has_gemini_key = bool(
-        api_key or active_env.get("GEMINI_API_KEY") or active_env.get("GOOGLE_API_KEY")
+        api_key or resolve_env_secret(active_env, "GEMINI_API_KEY", "GOOGLE_API_KEY")
     )
     if model.lower().startswith("gemini") and has_gemini_key:
         return "gemini"

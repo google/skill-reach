@@ -5,7 +5,8 @@
 # Inherit rules from .gitignore
 #!include:.gitignore
 
-# Ensure skill definitions are packaged into runner build context
+# Ensure bundled config and skill definitions are packaged into runner build context
+!src/reach/reach.toml
 !.agents/
 !.agents/skills/
 !.agents/skills/**

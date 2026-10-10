@@ -241,6 +241,8 @@ def _apply_agy_cli_env(
         if not options.api_key:
             env.pop("GEMINI_API_KEY", None)
             env.pop("GOOGLE_API_KEY", None)
+            env.pop("GEMINI_API_KEY_FILE", None)
+            env.pop("GOOGLE_API_KEY_FILE", None)
     else:
         env.pop("AGY_ADC_AUTH", None)
         effective_blocked = (

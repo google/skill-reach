@@ -62,6 +62,7 @@ from reach.runtime._env import (
     apply_provider_api_key,
     has_agy_vertex_env,
     is_truthy_env,
+    resolve_env_secret,
     sanitize_subprocess_env,
     sync_claude_settings_env,
     sync_google_and_gemini_keys,
@@ -2172,6 +2173,41 @@ def test_sync_google_and_gemini_keys_bidirectional() -> None:
     env4 = {"OTHER_KEY": "other"}
     sync_google_and_gemini_keys(env4)
     assert env4 == {"OTHER_KEY": "other"}
+
+
+def test_resolve_env_secret_and_sync_file_keys(tmp_path: Path) -> None:
+    """Verify that resolve_env_secret and sync_google_and_gemini_keys load from *_FILE paths."""
+    secret_file = tmp_path / "gemini_secret"
+    secret_file.write_text("  mounted-secret-val \n", encoding="utf-8")
+
+    # File fallback populates both keys and strips *_FILE pointers
+    env_file = {"GEMINI_API_KEY_FILE": str(secret_file), "GOOGLE_API_KEY_FILE": "/nonexistent"}
+    sync_google_and_gemini_keys(env_file)
+    assert env_file == {
+        "GEMINI_API_KEY": "mounted-secret-val",
+        "GOOGLE_API_KEY": "mounted-secret-val",
+    }
+
+    # Direct environment variable takes precedence over *_FILE
+    assert (
+        resolve_env_secret(
+            {"GEMINI_API_KEY": "direct-val", "GEMINI_API_KEY_FILE": str(secret_file)},
+            "GEMINI_API_KEY",
+        )
+        == "direct-val"
+    )
+
+    # Missing or empty file returns None gracefully
+    empty_file = tmp_path / "empty_secret"
+    empty_file.write_text("   \n", encoding="utf-8")
+    assert (
+        resolve_env_secret(
+            {"GEMINI_API_KEY_FILE": str(empty_file), "GOOGLE_API_KEY_FILE": str(tmp_path / "nope")},
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

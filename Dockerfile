@@ -36,12 +36,22 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/gcp/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
-# Prepare workspace directory
-RUN mkdir -p /workspace
+# Create unprivileged user (UID 10001) and prepare isolated workspace.
+# Mode 1777 on /workspace allows both `--user reach` (UID 10001) and Cloud Run's
+# user-namespace-mapped sandbox user to write `.reach/` evaluation artifacts.
+RUN groupadd -g 10001 reach && \
+    useradd -u 10001 -g reach -m -d /home/reach reach && \
+    mkdir -p /workspace && \
+    chown -R reach:reach /workspace && \
+    chmod 1777 /workspace
 
 WORKDIR /workspace
 
-# Copy skill catalog and configuration
-COPY . /workspace
+# Copy only resident skill catalog (avoid copying src/ or tests/ into runtime workspace)
+COPY --chown=reach:reach .agents/ /workspace/.agents/
 
-CMD ["reach", "eval", "--yes"]
+# Security note: Cloud Run's /usr/local/gcp/bin/sandbox launcher requires UID 0 in the
+# outer container to initialize /var/run/netns network namespaces before dropping privileges
+# to a non-root user inside the sandbox jail (and Cloud Run does not support runAsUser
+# overrides). For standalone local Docker runs without `sandbox do`, pass `--user reach`.
+CMD ["reach", "eval", "--agent", "antigravity-sdk", "--yes"]

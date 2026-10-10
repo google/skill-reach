@@ -540,6 +540,8 @@ def _apply_agy_sdk_env(
     elif options.effective_vertex and not options.api_key:
         env.pop("GEMINI_API_KEY", None)
         env.pop("GOOGLE_API_KEY", None)
+        env.pop("GEMINI_API_KEY_FILE", None)
+        env.pop("GOOGLE_API_KEY_FILE", None)
 
     blocked = set(blocked_env_vars or ())
     if (

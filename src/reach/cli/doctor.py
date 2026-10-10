@@ -31,7 +31,7 @@ from cyclopts import Parameter
 from reach.catalog import load_skills
 from reach.config import RunConfig
 from reach.registry import find_adc_path
-from reach.runtime._env import is_truthy_env
+from reach.runtime._env import is_truthy_env, resolve_env_secret
 from reach.views import build_console, render_doctor_table
 
 from .app import SETUP, app
@@ -105,7 +105,7 @@ def _check_sdk(name: str, module_name: str, required_by: str) -> CheckResult:
     """Check whether a Python SDK dependency is importable."""
     try:
         spec = importlib.util.find_spec(module_name)
-    except (ModuleNotFoundError, ValueError):
+    except (ImportError, AttributeError, ValueError):
         spec = None
 
     if spec is None:
@@ -125,8 +125,8 @@ def _check_sdk(name: str, module_name: str, required_by: str) -> CheckResult:
 
 
 def _check_env_var(var_name: str, purpose: str) -> CheckResult:
-    """Check if an environment variable is configured in the current shell."""
-    val = os.environ.get(var_name)
+    """Check if an environment variable or its ``*_FILE`` path is configured."""
+    val = resolve_env_secret(os.environ, var_name)
     if val:
         return CheckResult(
             category="Credentials & Environment",

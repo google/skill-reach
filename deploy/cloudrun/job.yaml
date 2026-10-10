@@ -20,18 +20,31 @@ spec:
                   mountPath: /secrets
                   readOnly: true
               command:
-                - /bin/bash
-                - -c
-                - >-
-                  /usr/local/gcp/bin/sandbox do
-                  --allow-egress
-                  --write
-                  --env PATH="$PATH"
-                  --env REACH_YES="1"
-                  --mount type=bind,source=/workspace,destination=/workspace
-                  --mount type=bind,source=/secrets,destination=/secrets,readonly
-                  --workdir /workspace
-                  -- /bin/bash -c 'export GEMINI_API_KEY="$(cat /secrets/GEMINI_API_KEY)" && reach eval --auto --yes'
+                - /usr/local/gcp/bin/sandbox
+              args:
+                - do
+                - --allow-egress
+                - --write
+                - --env
+                - PATH=/opt/venv/bin:/usr/local/gcp/bin:/usr/local/bin:/usr/bin:/bin
+                - --env
+                - REACH_YES=1
+                - --env
+                - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
+                - --mount
+                - type=bind,source=/workspace,destination=/workspace
+                - --mount
+                - type=bind,source=/secrets,destination=/secrets,readonly
+                - --workdir
+                - /workspace
+                - --
+                - reach
+                - eval
+                - --agent
+                - antigravity-sdk
+                - --auto
+                - --yes
+              # Scale cpu/memory (e.g. 4 vCPU / 4Gi) for large multi-worker sweeps
               resources:
                 limits:
                   cpu: "2"

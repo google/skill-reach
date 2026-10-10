@@ -43,6 +43,7 @@ from reach.runtime._env import (
     has_agy_vertex_env,
     raise_missing_agent_dependency,
     resolve_blocked_env_vars,
+    resolve_env_secret,
     sanitize_subprocess_env,
 )
 from reach.runtime._fs import (
@@ -148,7 +149,7 @@ class AntigravityOptions(VertexOptions):
         if has_agy_vertex_env(os.environ):
             return True
         has_api_key = bool(
-            self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            self.api_key or resolve_env_secret(os.environ, "GEMINI_API_KEY", "GOOGLE_API_KEY")
         )
         return not has_api_key and bool(self.project or resolve_registry_project(self.project))
 
@@ -187,7 +188,7 @@ class AntigravityOptions(VertexOptions):
             return self.api_key
         if self.effective_vertex:
             return None
-        return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        return resolve_env_secret(os.environ, "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
     def resolve_model_provider(self, model: str = "") -> str | None:
         """Resolve model provider unless Vertex/ADC mode is active without explicit provider."""
@@ -947,6 +948,13 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
             env["HOME"] = str(home_dir)
         if (api_key := getattr(self.options, "api_key", None)) is not None and self.api_key_env_var:
             env[self.api_key_env_var] = str(api_key)
+        elif (
+            self.api_key_env_var
+            and self.api_key_env_var not in env
+            and (resolved := resolve_env_secret(env, self.api_key_env_var))
+        ):
+            env[self.api_key_env_var] = resolved
+            env.pop(f"{self.api_key_env_var}_FILE", None)
         return sanitize_subprocess_env(env, blocked_env_vars=self.blocked_env_vars)
 
     def validate_outcome(

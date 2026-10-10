@@ -90,9 +90,11 @@ docker run --rm -it \
 ```
 
 /// tip
+
 - **Podman**: Replace `docker` with `podman` (on macOS, run `podman machine init --now` first).
 - **Apple Container (macOS 26+)**: Replace `docker` with `container` after running `container system start --enable-kernel-install`.
 - **macOS Providers**: The `docker` CLI works identically with Docker Desktop, [Colima](https://github.com/abiosoft/colima) (`colima start`), or OrbStack.
+
 ///
 
 ### Docker Compose
@@ -166,12 +168,19 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/gcp/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
-RUN mkdir -p /workspace
+RUN groupadd -g 10001 reach && \
+    useradd -u 10001 -g reach -m -d /home/reach reach && \
+    mkdir -p /workspace && \
+    chown -R reach:reach /workspace && \
+    chmod 1777 /workspace
 
 WORKDIR /workspace
-COPY . /workspace
+COPY --chown=reach:reach .agents/ /workspace/.agents/
 
-CMD ["reach", "eval", "--yes"]
+# Cloud Run's /usr/local/gcp/bin/sandbox requires UID 0 in the outer container
+# to initialize /var/run/netns before dropping privileges inside the sandbox jail.
+# For standalone local Docker runs without `sandbox do`, pass `--user reach`.
+CMD ["reach", "eval", "--agent", "antigravity-sdk", "--yes"]
 ```
 
 Build and push the image to Google Cloud Artifact Registry:
@@ -186,18 +195,11 @@ gcloud builds submit --tag "LOCATION-docker.pkg.dev/PROJECT_ID/REPO_NAME/reach-r
 
 ### Enabling the Sandbox Launcher
 
-To enable sandboxes on Cloud Run, configure the second-generation execution environment with the sandbox launcher enabled:
-
-- **Cloud Run Jobs**: Sandboxes must be configured declaratively via YAML specification (`sandboxLauncher: true`). The `gcloud run jobs create` CLI subcommand does not expose a `--sandbox-launcher` flag.
-- **Cloud Run Services**: Sandboxes can be enabled either via the CLI flag (`--sandbox-launcher`) or in YAML (`sandboxLauncher: true`).
-
-When enabled, Cloud Run injects the `sandbox` CLI binary inside the container at `/usr/local/gcp/bin/sandbox`.
+To enable sandboxes on Cloud Run, configure the second-generation execution environment with the sandbox launcher enabled via the `gcloud beta` CLI (`--sandbox-launcher`) or declaratively in YAML (`sandboxLauncher: true`). When enabled, Cloud Run injects the `sandbox` CLI binary inside the container at `/usr/local/gcp/bin/sandbox`.
 
 #### Cloud Run Jobs (Batch Evaluation & Sweeps)
 
-For scheduled regression tests, CI-triggered scaling sweeps, or overnight batch evaluations, Cloud Run Jobs run to completion and terminate:
-
-Declare the job specification in YAML (`deploy/cloudrun/job.yaml`):
+For scheduled regression tests, CI-triggered scaling sweeps, or overnight batch evaluations, Cloud Run Jobs run to completion and terminate. Declare the job specification in YAML (`deploy/cloudrun/job.yaml`):
 
 ```yaml
 apiVersion: run.googleapis.com/v1
@@ -222,18 +224,31 @@ spec:
                   mountPath: /secrets
                   readOnly: true
               command:
-                - /bin/bash
-                - -c
-                - >-
-                  /usr/local/gcp/bin/sandbox do
-                  --allow-egress
-                  --write
-                  --env PATH="$PATH"
-                  --env REACH_YES="1"
-                  --mount type=bind,source=/workspace,destination=/workspace
-                  --mount type=bind,source=/secrets,destination=/secrets,readonly
-                  --workdir /workspace
-                  -- /bin/bash -c 'export GEMINI_API_KEY="$(cat /secrets/GEMINI_API_KEY)" && reach eval --auto --yes'
+                - /usr/local/gcp/bin/sandbox
+              args:
+                - do
+                - --allow-egress
+                - --write
+                - --env
+                - PATH=/opt/venv/bin:/usr/local/gcp/bin:/usr/local/bin:/usr/bin:/bin
+                - --env
+                - REACH_YES=1
+                - --env
+                - GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY
+                - --mount
+                - type=bind,source=/workspace,destination=/workspace
+                - --mount
+                - type=bind,source=/secrets,destination=/secrets,readonly
+                - --workdir
+                - /workspace
+                - --
+                - reach
+                - eval
+                - --agent
+                - antigravity-sdk
+                - --auto
+                - --yes
+              # Scale cpu/memory (e.g. 4 vCPU / 4Gi) for large multi-worker sweeps
               resources:
                 limits:
                   cpu: "2"
@@ -258,7 +273,7 @@ gcloud run jobs execute reach-eval-job --wait --region us-central1
 ```
 
 /// tip
-**Secret Safety in Sandboxes**: The Cloud Run sandbox launcher (`sandbox do`) logs its startup arguments to `/var/log/sandbox.log`. Avoid passing secrets via `--env KEY="$KEY"` because the expanded secret string will appear in Cloud Logging. Mounting the secret as a read-only volume (`/secrets/GEMINI_API_KEY`) and exporting it inside the single-quoted sandbox command keeps credential values entirely out of CLI arguments and logs.
+**Secret Safety in Sandboxes**: The Cloud Run sandbox launcher (`sandbox do`) logs its startup arguments to `/var/log/sandbox.log`. Avoid passing raw secrets via `--env KEY="$KEY"` or shell command substitutions (`$(cat ...)`). Instead, mount the secret as a read-only volume (`/secrets/GEMINI_API_KEY`) and pass `--env GEMINI_API_KEY_FILE=/secrets/GEMINI_API_KEY` so Reach reads the credential directly in Python without spawning subshells or exposing keys in CLI arguments or logs.
 ///
 
 #### Cloud Run Services (Evaluation Webhook / API)
@@ -316,10 +331,11 @@ Once enabled, invoke the `sandbox do` command from within your container to run 
 sandbox do --allow-egress --write \
   --env PATH="$PATH" \
   --env REACH_YES="1" \
+  --env GEMINI_API_KEY_FILE="/secrets/GEMINI_API_KEY" \
   --mount type=bind,source=/workspace,destination=/workspace \
   --mount type=bind,source=/secrets,destination=/secrets,readonly \
   --workdir /workspace \
-  -- /bin/bash -c 'export GEMINI_API_KEY="$(cat /secrets/GEMINI_API_KEY)" && reach eval --yes'
+  -- reach eval --agent antigravity-sdk --yes
 ```
 
 ### Sandbox CLI Flag Reference
@@ -352,11 +368,11 @@ gcloud storage cp -r .reach/ "gs://my-evaluation-bucket/runs/$(date +%Y%m%d-%H%M
 
 To run automated pipelines without interactive prompts, Reach provides three equivalent bypass mechanisms:
 
-| Mechanism | Syntax | Scope & Usage |
-| :--- | :--- | :--- |
-| **CLI Flag** | `reach eval --yes` (`-y`) | Single execution across any probe command (`eval`, `sweep`, `check`, `optimize`). |
-| **Environment Variable** | `export REACH_YES=1` | Current shell session, container runner, or CI/CD workflow pipeline. |
-| **Repository Config** | `[study]`<br>`trusted = true` | Repository-wide setting in `reach.toml`. Excluded from `config_fingerprint` to keep historical benchmarks comparable. |
+| Mechanism                | Syntax                        | Scope & Usage                                                                                                         |
+| :----------------------- | :---------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| **CLI Flag**             | `reach eval --yes` (`-y`)     | Single execution across any probe command (`eval`, `sweep`, `check`, `optimize`).                                     |
+| **Environment Variable** | `export REACH_YES=1`          | Current shell session, container runner, or CI/CD workflow pipeline.                                                  |
+| **Repository Config**    | `[study]`<br>`trusted = true` | Repository-wide setting in `reach.toml`. Excluded from `config_fingerprint` to keep historical benchmarks comparable. |
 
 /// note
 `--yes` / `-y` specifically bypasses safety confirmation prompts. On `reach optimize`, `--force` / `-f` remains dedicated to force-applying candidate descriptions even when empirical recall does not improve.
