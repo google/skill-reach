@@ -356,6 +356,7 @@ def test_full_model_ids_have_profiles_in_reach_toml() -> None:
         "claude-sonnet-5",
         "claude-opus-5",
         "claude-haiku-4-5",
+        "gemini-4-argon",
         "gemini-3.8-flash",
         "gemini-3.7-flash",
         "gemini-3.5-flash-lite",

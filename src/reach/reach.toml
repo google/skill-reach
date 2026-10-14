@@ -81,3 +81,6 @@ effort = "low"
 
 [models.gemini-3-flash-preview]
 effort = "low"
+
+[models.gemini-4-argon]
+effort = "low"
