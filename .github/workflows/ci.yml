@@ -58,11 +58,14 @@ jobs:
           node-version: "24"
           cache: "npm"
 
+      - name: Install Node.js dependencies
+        run: npm ci
+
       - name: Check web assets with Biome
-        run: npx --yes @biomejs/biome ci
+        run: npx --no-install biome ci
 
       - name: Check Markdown formatting
-        run: npx --yes prettier --check "**/*.md"
+        run: npx --no-install prettier --check "**/*.md"
 
       - name: Lint
         run: uv run ruff check .
