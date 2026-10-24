@@ -1925,25 +1925,3 @@ def test_bundled_config_exists_and_provides_baseline_models() -> None:
     profile = model_profile("claude-sonnet-5")
     assert profile.completion_window is not None
     assert profile.context_window > 0
-
-
-def test_lint_settings_inherits_antigravity_catalog_budget_chars() -> None:
-    """Verify LintSettings.from_settings inherits catalog_budget_chars from Antigravity options."""
-    from reach.config import DEFAULT_CATALOG_BUDGET_CHARS, LintSettings
-
-    # Inherits explicit catalog_budget_chars from antigravity-sdk options
-    lint_custom = LintSettings.from_settings(
-        {
-            "runtime": {
-                "agent": "antigravity-sdk",
-                "options": {"catalog_budget_chars": 1800},
-            }
-        }
-    )
-    assert lint_custom.catalog_budget_chars == 1800
-
-    # Preserves default budget when catalog_budget_chars is omitted from antigravity-sdk options
-    lint_default = LintSettings.from_settings(
-        {"runtime": {"agent": "antigravity-sdk", "options": {"model": "gemini-3.8-flash"}}}
-    )
-    assert lint_default.catalog_budget_chars == DEFAULT_CATALOG_BUDGET_CHARS

@@ -28,7 +28,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from reach.catalog import load_skills
 from reach.config import (
@@ -136,7 +136,6 @@ class AntigravityOptions(VertexOptions):
     """Configure common options for Antigravity-ecosystem agent runtimes."""
 
     use_symlinks: bool = False
-    catalog_budget_chars: PositiveInt | None = None
 
     @property
     def effective_vertex(self) -> bool:
@@ -1104,32 +1103,6 @@ class AntigravityRuntime[AntigravityOptionsT: AntigravityOptions](
         """Return standard inspection tool identifiers permitted during skill selection."""
         return self.ANTIGRAVITY_SELECTION_TOOLS
 
-    @property
-    def rations_catalog(self) -> bool:
-        """Return True if this runtime actively rations skill listing budgets."""
-        return self.options.catalog_budget_chars is not None
-
-    @override
-    def fit(self, catalog: Catalog, skills: Iterable[Skill]) -> CatalogFit:
-        """Evaluate whether a catalog fits listing budgets without materializing."""
-        if self.options.catalog_budget_chars is None:
-            return CatalogFit()
-        from reach.catalog import resident_skills
-        from reach.runtime.claude_listing import fit_skill_listing
-
-        resident = resident_skills(catalog, list(skills))
-        listing = fit_skill_listing(
-            resident,
-            budget_chars=self.options.catalog_budget_chars,
-        )
-        return CatalogFit(
-            allowed=listing.budget_chars,
-            asked=listing.full_chars,
-            unit="characters",
-            truncated=len(listing.name_only),
-            elided_skills=listing.name_only,
-        )
-
     @classmethod
     def selection_schema(cls, resident: Sequence[str]) -> type[SkillSelectionBase]:
         """Generate dynamic Pydantic model constraining selection to resident skills."""
@@ -1186,21 +1159,9 @@ class AntigravityRuntime[AntigravityOptionsT: AntigravityOptions](
             "Available skills:"
         )
         skills_lines = [header]
-        name_only_set: set[str] = set()
-        if self.options.catalog_budget_chars is not None:
-            from reach.runtime.claude_listing import fit_skill_listing
-
-            listing = fit_skill_listing(
-                installed_skills,
-                budget_chars=self.options.catalog_budget_chars,
-            )
-            name_only_set = set(listing.name_only)
         for s in installed_skills:
             skill_md_path = skills_dir / s.name / "SKILL.md"
-            if s.name in name_only_set:
-                skills_lines.append(f"- {s.name} ({skill_md_path})")
-            else:
-                skills_lines.append(f"- {s.name} ({skill_md_path}): {s.description}")
+            skills_lines.append(f"- {s.name} ({skill_md_path}): {s.description}")
         return "\n".join(skills_lines)
 
 
