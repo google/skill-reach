@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser
 
 from reach.models import Query, QueryKind, Skill
 from reach.queries import QuerySet
@@ -93,7 +93,7 @@ def test_render_query_review_html_skill_and_territory_cards(
     """Verify target skill context, rival selector, territory cards, summary, and controls."""
     target, rival, qs = sample_review_bundle
     html = render_query_review_html(qs, target, [rival])
-    tree = HTMLParser(html)
+    tree = LexborHTMLParser(html)
 
     # 1. Target skill context card displays name and description in designated semantic elements
     target_name = tree.css_first("#skill-name")
@@ -162,7 +162,7 @@ def test_render_query_review_html_empty_queries(
         queries=(),
     )
     html = render_query_review_html(qs, target, [])
-    tree = HTMLParser(html)
+    tree = LexborHTMLParser(html)
     body = tree.css_first("body")
     assert body is not None
     assert body.attributes.get("data-catalog-id") == "test-cat"
@@ -261,7 +261,7 @@ def _assert_review_server_endpoints(url: str) -> None:
     with urllib.request.urlopen(url) as resp:  # noqa: S310
         assert resp.status == 200
         html_text = resp.read().decode("utf-8")
-        resp_tree = HTMLParser(html_text)
+        resp_tree = LexborHTMLParser(html_text)
         skill_name = resp_tree.css_first("#skill-name")
         assert skill_name is not None
         assert "t-skill" in skill_name.text()

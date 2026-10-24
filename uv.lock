@@ -2336,7 +2336,7 @@ dev = [
     { name = "ruff", specifier = ">=0.16.6" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
     { name = "scipy", specifier = ">=1.18.1" },
-    { name = "selectolax", specifier = ">=0.4.11" },
+    { name = "selectolax", specifier = ">=1.0.0" },
     { name = "syrupy", specifier = ">=6.0.0" },
     { name = "ty", specifier = ">=0.0.84" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },

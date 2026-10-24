@@ -21,7 +21,7 @@ import re
 from typing import TYPE_CHECKING, Never
 
 import pytest
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser
 
 from reach.artifact import Artifact, write_artifact
 from reach.cli import main
@@ -133,7 +133,7 @@ def test_format_html_prints_a_self_contained_report_instead_of_the_scorecard(
     assert main(["view", str(recorded), "--format", "html"]) == 0
     out = capsys.readouterr().out
     assert out.lstrip().startswith("<!DOCTYPE html>")
-    tree = HTMLParser(out)
+    tree = LexborHTMLParser(out)
     assert tree.css_first("html") is not None
     skill_cells = [td.text().strip() for td in tree.css("#skills-table tbody td:first-child")]
     assert "gcs-lifecycle-rules" in skill_cells
@@ -226,7 +226,7 @@ def test_the_document_is_one_self_contained_file_with_matrix_and_queries(
     """Verify render_view_html generates self-contained HTML with confusion matrix and queries."""
     out = render_view_html(artifact)
     assert out.lstrip().startswith("<!DOCTYPE html>")
-    tree = HTMLParser(out)
+    tree = LexborHTMLParser(out)
     assert tree.css_first("html") is not None
     assert tree.css_first("style") is not None
     assert tree.css_first("script") is not None
@@ -297,7 +297,7 @@ def test_confusion_matrix_and_collisions_show_reasoning_when_present(
             ),
         },
     )
-    tree = HTMLParser(render_view_html(test_artifact))
+    tree = LexborHTMLParser(render_view_html(test_artifact))
     assert "thought: Thinking about bucket retention rules." in tree.text()
     assert "names target" in tree.text()
     assert tree.css_first("#collisions-table") is not None
@@ -308,7 +308,7 @@ def test_an_unprobed_artifact_says_so_rather_than_rendering_an_empty_table(
 ) -> None:
     """Verify HTML rendering outputs fallback message when artifact has no recorded probes."""
     empty = artifact.model_copy(update={"confusion": (), "queries": ()})
-    tree = HTMLParser(render_view_html(empty))
+    tree = LexborHTMLParser(render_view_html(empty))
     text = tree.text()
     assert "No probes were recorded." in text
     assert "No queries were recorded." in text
@@ -349,7 +349,7 @@ def test_query_text_is_escaped_not_executed(corpus, whole_catalog, make_config) 
         results,
     )
     out = render_view_html(built)
-    tree = HTMLParser(out)
+    tree = LexborHTMLParser(out)
     # Ensure no executable script tag was injected into DOM
     assert all("alert(1)" not in (s.text() or "") for s in tree.css("script"))
     # Ensure safely rendered text in DOM
@@ -387,7 +387,7 @@ def test_skills_table_renders_dash_for_missing_and_explicit_absorbed_zero(
         absorbed=0,
     )
     art = artifact.model_copy(update={"skills": (mock_skill,)})
-    tree = HTMLParser(render_view_html(art))
+    tree = LexborHTMLParser(render_view_html(art))
     row = tree.css_first("#skills-table tbody tr")
     assert row is not None
     dash = row.css_first("td span.dim")
@@ -413,7 +413,7 @@ def test_collisions_html_renders_individual_query_probe_count(artifact: Artifact
         },
     )
     test_artifact = artifact.model_copy(update={"confusion": (updated_pair,)})
-    tree = HTMLParser(render_view_html(test_artifact))
+    tree = LexborHTMLParser(render_view_html(test_artifact))
     rows = tree.css("#collisions-table tbody tr")
     assert len(rows) == 2
     assert rows[0].css("td")[2].text().strip() == "2"
@@ -533,7 +533,7 @@ def test_html_view_renders_consistency_dash_when_no_repeated_queries(
             ),
         },
     )
-    tree = HTMLParser(render_view_html(single_attempt))
+    tree = LexborHTMLParser(render_view_html(single_attempt))
     cells = tree.css(".figures .figure-cell")
     consistency_cell = next(
         c
