@@ -126,6 +126,7 @@ def install_skills(
     destination: Path,
     *,
     use_symlinks: bool = False,
+    manifest_only: bool = False,
 ) -> tuple[str, ...]:
     """Copy or symlink skill directories for a catalog into destination workspace."""
     resolved_dest = destination.resolve()
@@ -138,11 +139,33 @@ def install_skills(
         if not resolved_src.is_dir():
             msg = f"Skill source directory not found: {src}"
             raise ValueError(msg)
-        _validate_skill_symlinks(resolved_src)
         dst = (resolved_dest / name).resolve()
         if not dst.is_relative_to(resolved_dest) or dst == resolved_dest:
             msg = f"Skill destination path escapes destination directory: {name!r}"
             raise ValueError(msg)
+        if manifest_only:
+            manifest_candidate = resolved_src / "SKILL.md"
+            if not manifest_candidate.is_file():
+                manifest_candidate = resolved_src / "skill.md"
+            if not manifest_candidate.is_file():
+                msg = f"Skill manifest not found in {resolved_src}"
+                raise ValueError(msg)
+            if manifest_candidate.is_symlink():
+                try:
+                    target = manifest_candidate.resolve(strict=True)
+                    if not target.is_relative_to(resolved_src) or target == manifest_candidate:
+                        msg = (
+                            f"Skill contains symlink escaping skill directory: "
+                            f"{manifest_candidate} -> {target}"
+                        )
+                        raise ValueError(msg)
+                except (OSError, RuntimeError) as exc:
+                    msg = f"Skill contains broken or cyclical symlink: {manifest_candidate}"
+                    raise ValueError(msg) from exc
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(manifest_candidate, dst / "SKILL.md")
+            continue
+        _validate_skill_symlinks(resolved_src)
         if use_symlinks:
             try:
                 dst.symlink_to(resolved_src, target_is_directory=True)

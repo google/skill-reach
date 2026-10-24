@@ -3265,7 +3265,163 @@ def test_detect_replicate_collisions_identifies_flipped_queries_and_suspect_dist
     assert collisions[0].scale == 4
     assert collisions[0].failed_replicates == (0,)
     assert collisions[0].passed_replicates == (1,)
+    assert collisions[0].invoked_distractors == ("rival-x",)
     assert collisions[0].suspect_distractors == ("rival-x",)
+
+
+def test_resolve_collision_suspects_prioritizes_invoked_and_bm25_abstention(
+    make_probe_result: Callable[..., Any],
+) -> None:
+    """Verify suspect distractors prioritize invoked wrong skills and fall back to BM25."""
+    from pathlib import Path
+
+    from reach.models import Catalog, CatalogMode, Query, Skill
+    from reach.sweep import _detect_replicate_collisions, _QueryOutcome, _ScaleReplicateRecord
+
+    # Case 1: Invoked distractor present in both failed and passed catalog is still captured
+    cat_r0 = Catalog(
+        id="sweep:corpus:4", mode=CatalogMode.SWEEP, skills=("s1", "distractor-common", "other-f")
+    )
+    cat_r1 = Catalog(
+        id="sweep:corpus:4-r1",
+        mode=CatalogMode.SWEEP,
+        skills=("s1", "distractor-common", "other-p"),
+    )
+    q1 = Query(query_id="q1", text="deploy container on cloud", expected_skill="s1")
+    replicates_case1 = {
+        3: (
+            _ScaleReplicateRecord(
+                catalog=cat_r0,
+                results=(make_probe_result(query_id="q1", invoked="distractor-common"),),
+                outcomes={"q1": _QueryOutcome(tp=0, fp=1, fn=1, hits=0, total=1)},
+            ),
+            _ScaleReplicateRecord(
+                catalog=cat_r1,
+                results=(make_probe_result(query_id="q1", invoked="s1"),),
+                outcomes={"q1": _QueryOutcome(tp=1, fp=0, fn=0, hits=1, total=1)},
+            ),
+        )
+    }
+    cols1 = _detect_replicate_collisions(
+        scales=(3,),
+        replicates_by_scale=replicates_case1,
+        queries_by_id={"q1": q1},
+    )
+    assert len(cols1) == 1
+    assert cols1[0].invoked_distractors == ("distractor-common",)
+    assert cols1[0].suspect_distractors == ("distractor-common",)
+
+    # Case 2: Abstention (no wrong skill invoked) falls back to BM25-ranked candidates
+    s_db = Skill(
+        name="cloud-sql",
+        description="Postgres and MySQL managed database on Google Cloud",
+        path=Path("skills/cloud-sql"),
+    )
+    s_gke = Skill(
+        name="gke-deploy",
+        description="Deploy container workloads to Kubernetes cluster on cloud",
+        path=Path("skills/gke-deploy"),
+    )
+    s_auth = Skill(
+        name="auth-tokens",
+        description="JWT token verification and IAM authorization",
+        path=Path("skills/auth-tokens"),
+    )
+    cat_abstain = Catalog(
+        id="sweep:corpus:4",
+        mode=CatalogMode.SWEEP,
+        skills=("s1", "cloud-sql", "gke-deploy", "auth-tokens"),
+    )
+    cat_pass = Catalog(id="sweep:corpus:4-r1", mode=CatalogMode.SWEEP, skills=("s1",))
+    replicates_case2 = {
+        4: (
+            _ScaleReplicateRecord(
+                catalog=cat_abstain,
+                results=(make_probe_result(query_id="q1", invoked=None),),
+                outcomes={"q1": _QueryOutcome(tp=0, fp=0, fn=1, hits=0, total=1)},
+            ),
+            _ScaleReplicateRecord(
+                catalog=cat_pass,
+                results=(make_probe_result(query_id="q1", invoked="s1"),),
+                outcomes={"q1": _QueryOutcome(tp=1, fp=0, fn=0, hits=1, total=1)},
+            ),
+        )
+    }
+    cols2 = _detect_replicate_collisions(
+        scales=(4,),
+        replicates_by_scale=replicates_case2,
+        queries_by_id={"q1": q1},
+        resolved_skills={"cloud-sql": s_db, "gke-deploy": s_gke, "auth-tokens": s_auth},
+    )
+    assert len(cols2) == 1
+    assert cols2[0].invoked_distractors == ()
+    # gke-deploy matches query terms "deploy", "container", "cloud" best
+    assert cols2[0].suspect_distractors[0] == "gke-deploy"
+
+
+def test_scaling_study_entrypoint_knee_calculation(
+    make_scaling_point: Callable[..., Any],
+) -> None:
+    """Verify _assemble_scaling_study computes entrypoint_knee_scale and respects knee_metric."""
+    from reach.config import StudySettings
+    from reach.sweep import _assemble_scaling_study
+
+    p1 = make_scaling_point(scale=5, pass_rate=1.0, f1_score=1.0, entrypoint_f1_score=1.0)
+    p2 = make_scaling_point(scale=10, pass_rate=0.98, f1_score=0.98, entrypoint_f1_score=0.55)
+    p3 = make_scaling_point(scale=20, pass_rate=0.96, f1_score=0.96, entrypoint_f1_score=0.52)
+    p4 = make_scaling_point(scale=40, pass_rate=0.50, f1_score=0.50, entrypoint_f1_score=0.50)
+
+    # 1. Trajectory knee_metric: knee_scale uses f1_score (20), entrypoint knee is 10
+    study_traj = _assemble_scaling_study(
+        target=None,
+        is_corpus=True,
+        actual_scales=(5, 10, 20, 40),
+        points=(p1, p2, p3, p4),
+        noise_floor=0.05,
+        baseline_count=20,
+        total_skills=40,
+        decomp=None,
+        anchor_skills=("s1",),
+        study_config=StudySettings(knee_metric="trajectory"),
+    )
+    assert study_traj.knee_scale == 20
+    assert study_traj.entrypoint_knee_scale == 10
+    assert study_traj.knee_metric == "trajectory"
+
+    # 2. Entrypoint knee_metric: knee_scale uses entrypoint curve (10)
+    study_entry = _assemble_scaling_study(
+        target=None,
+        is_corpus=True,
+        actual_scales=(5, 10, 20, 40),
+        points=(p1, p2, p3, p4),
+        noise_floor=0.05,
+        baseline_count=20,
+        total_skills=40,
+        decomp=None,
+        anchor_skills=("s1",),
+        study_config=StudySettings(knee_metric="entrypoint"),
+    )
+    assert study_entry.knee_scale == 10
+    assert study_entry.entrypoint_knee_scale == 10
+    assert study_entry.knee_metric == "entrypoint"
+
+    # 3. When no entrypoint metrics are populated, entrypoint_knee_scale is None
+    pts_no_entry = tuple(
+        pt.model_copy(update={"entrypoint_f1_score": None}) for pt in (p1, p2, p3, p4)
+    )
+    study_no_entry = _assemble_scaling_study(
+        target=None,
+        is_corpus=True,
+        actual_scales=(5, 10, 20, 40),
+        points=pts_no_entry,
+        noise_floor=0.05,
+        baseline_count=20,
+        total_skills=40,
+        decomp=None,
+        anchor_skills=("s1",),
+    )
+    assert study_no_entry.knee_scale == 20
+    assert study_no_entry.entrypoint_knee_scale is None
 
 
 def test_print_corpus_capacity_sweep_renders_all_summary_lines(
@@ -3423,7 +3579,7 @@ def test_resolve_collision_suspects_out_of_bounds() -> None:
     """Verify out-of-bounds replicate indices safely resolve to empty suspects."""
     from reach.sweep import _resolve_collision_suspects
 
-    assert _resolve_collision_suspects("q1", "s1", [5, 6], [0], ()) == ()
+    assert _resolve_collision_suspects("q1", "s1", [5, 6], [0], ()) == ((), ())
 
 
 def test_scaling_study_load_and_save(

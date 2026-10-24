@@ -1410,6 +1410,35 @@ def test_generate_adversarial_for_skill_out_of_scope(target: Skill) -> None:
     assert q.query_id == "adv-target-skill-1"
 
 
+def test_generate_adversarial_sweep_mode_defaults_to_out_of_scope(target: Skill) -> None:
+    """Verify generate_adversarial_for_skill defaults to out_of_scope=True for sweep catalogs."""
+    from reach.generate import generate_adversarial_for_skill
+
+    runtime = FakeGenerator()
+    runtime.completion = json.dumps(
+        {
+            "queries": [
+                {
+                    "text": "unsupported external task",
+                    "citation": "identity control",
+                    "reason": "Out of scope",
+                },
+            ],
+        },
+    )
+    sweep_cat = Catalog(id="sweep:corpus:1", mode=CatalogMode.SWEEP, skills=("target-skill",))
+    queries = generate_adversarial_for_skill(
+        "target-skill",
+        sweep_cat,
+        [target],
+        count=1,
+        runtime=runtime,
+    )
+    assert len(queries) == 1
+    assert queries[0].kind is QueryKind.OUT_OF_SCOPE
+    assert queries[0].expected_skill is None
+
+
 def test_generate_adversarial_drops_ungrounded_citations(target: Skill, rival: Skill) -> None:
     """Verify adversarial queries with invalid/fabricated citations are rejected."""
     from reach.generate import generate_adversarial_for_skill

@@ -469,18 +469,35 @@ def test_view_scaling_study_out_file(tmp_path: Path, sample_scaling_study: Scali
     assert "scale" in out_file.read_text(encoding="utf-8")
 
 
-def test_view_scaling_study_rejects_html_and_slice(
+def test_view_scaling_study_supports_html_and_rejects_slice(
     tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Verify reach view raises ValueError when HTML or slicing flags are passed with sweep."""
+    """Verify reach view generates HTML report for sweep and rejects slicing flags."""
     sweep_path = tmp_path / "sweep.json"
     sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
 
-    assert main(["view", str(sweep_path), "--format", "html"]) == 2
-    assert "HTML format is not supported for sweep artifacts" in capsys.readouterr().err
+    assert main(["view", str(sweep_path), "--format", "html"]) == 0
+    captured = capsys.readouterr()
+    assert "<!DOCTYPE html>" in captured.out
+    assert "<svg" in captured.out
 
     assert main(["view", str(sweep_path), "--filter-skill", "skill-a"]) == 2
     assert "Slicing flags" in capsys.readouterr().err
+
+
+def test_view_scaling_study_compare_html(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view with --compare generates HTML overlay."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+    compare_path = tmp_path / "sweep_compare.json"
+    compare_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path), "--compare", str(compare_path), "--format", "html"]) == 0
+    captured = capsys.readouterr()
+    assert "<!DOCTYPE html>" in captured.out
+    assert "Comparison Baseline" in captured.out
 
 
 def test_view_defaults_to_sweep_json_when_eval_absent(

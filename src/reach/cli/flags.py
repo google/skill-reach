@@ -488,6 +488,16 @@ class RuntimeFlags(Flags):
             help="Agent option as key=value; repeatable",
         ),
     ] = ()
+    manifest_only: Annotated[
+        bool | None,
+        Parameter(
+            show_default=False,
+            help=(
+                "Install only SKILL.md for each skill into agent workspace, "
+                "ignoring subdirectories and sibling symlinks"
+            ),
+        ),
+    ] = None
 
     @override
     def overrides(self) -> dict[str, Any]:
@@ -498,6 +508,7 @@ class RuntimeFlags(Flags):
         parsed.pop("early_exit", None)
         parsed.pop("model", None)
         parsed.pop("effort", None)
+        parsed.pop("manifest_only", None)
         options: dict[str, object] = {}
         if self.model is not None:
             options["model"] = self.model
@@ -509,6 +520,9 @@ class RuntimeFlags(Flags):
         if self.early_exit is not None:
             options["early_exit"] = self.early_exit
             parsed["early_exit"] = self.early_exit
+        if self.manifest_only is not None:
+            options["manifest_only"] = self.manifest_only
+            parsed["manifest_only"] = self.manifest_only
         if self.opt:
             options.update(parse_agent_options(self.opt))
         if options:
@@ -683,6 +697,13 @@ class GenerateFlags(BaseModel):
             help="Number of adversarial negative queries to synthesize per target",
         ),
     ] = 1
+    out_of_scope: Annotated[
+        bool | None,
+        Parameter(
+            show_default=False,
+            help="Draft out-of-scope negative queries without resident skill citations",
+        ),
+    ] = None
 
     @classmethod
     def from_query_settings(

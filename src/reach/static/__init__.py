@@ -24,6 +24,8 @@ __all__ = [
     "get_review_css",
     "get_review_js",
     "get_review_template",
+    "get_sweep_css",
+    "get_sweep_template",
     "get_view_css",
     "get_view_js",
     "get_view_template",
@@ -87,3 +89,13 @@ def get_review_template() -> str:
 def get_view_template() -> str:
     """Load the outer HTML template skeleton for diagnostic workbench reports."""
     return load_static_asset("view.html")
+
+
+def get_sweep_css() -> str:
+    """Combine tokens, base, and sweep CSS into a single self-contained stylesheet."""
+    return _bundle_css("sweep.css")
+
+
+def get_sweep_template() -> str:
+    """Load the outer HTML template skeleton for scaling sweep reports."""
+    return load_static_asset("sweep.html")

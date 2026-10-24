@@ -668,6 +668,34 @@ def test_install_skills_copies_when_use_symlinks_is_false(
     assert (dest / skills[0].name / "SKILL.md").is_file()
 
 
+def test_install_skills_manifest_only_copies_only_skill_md(
+    tmp_path: Path,
+) -> None:
+    """Verify install_skills with manifest_only=True copies only SKILL.md."""
+    skill_dir = tmp_path / "repo" / "skill-test"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: skill-test\ndescription: Test description.\n---\nBody",
+        encoding="utf-8",
+    )
+    (skill_dir / "scripts").mkdir()
+    (skill_dir / "scripts" / "run.sh").write_text("#!/bin/bash\necho ok", encoding="utf-8")
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("secret", encoding="utf-8")
+    (skill_dir / "leak_symlink").symlink_to(outside_file)
+
+    skill = Skill(name="skill-test", description="Test description.", path=skill_dir)
+    catalog = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("skill-test",))
+    dest = tmp_path / "installed_skills"
+
+    installed = install_skills(catalog, {"skill-test": skill}, dest, manifest_only=True)
+    assert installed == ("skill-test",)
+    installed_skill = dest / "skill-test"
+    assert (installed_skill / "SKILL.md").is_file()
+    assert not (installed_skill / "scripts").exists()
+    assert not (installed_skill / "leak_symlink").exists()
+
+
 def test_install_skills_falls_back_to_copy_on_symlink_error(
     skill_repo: Path,
     tmp_path: Path,

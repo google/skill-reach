@@ -24,9 +24,10 @@ import random
 import statistics
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Self
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, Self
 
 from pydantic import (
     BaseModel,
@@ -71,7 +72,7 @@ from reach.uncertainty import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
 __all__ = [
     "PairedTrialOutcomes",
@@ -93,11 +94,12 @@ class ReplicateCollisionDiagnostic(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     query_id: NonEmptyStr
-    expected_skill: str | None = None
+    expected_skill: NonEmptyStr | None = None
     scale: PositiveInt
     failed_replicates: tuple[NonNegativeInt, ...]
     passed_replicates: tuple[NonNegativeInt, ...]
-    suspect_distractors: tuple[str, ...] = ()
+    invoked_distractors: tuple[NonEmptyStr, ...] = ()
+    suspect_distractors: tuple[NonEmptyStr, ...] = ()
 
     @model_validator(mode="after")
     def _validate_replicate_partition(self) -> Self:
@@ -226,15 +228,17 @@ class ScalingStudy(BaseModel):
     # 1. Corpus & runtime metadata
     agent: NonEmptyStr | None = None
     model: NonEmptyStr | None = None
-    target_skill: str | None = None
+    target_skill: NonEmptyStr | None = None
     is_corpus_sweep: bool = False
     catalog_replicates: PositiveInt = 1
-    total_corpus_skills: int = 0
-    scales: tuple[int, ...]
+    total_corpus_skills: NonNegativeInt = 0
+    scales: tuple[PositiveInt, ...]
 
     # 2. Executive knee & drop findings
-    knee_scale: int | None = None
-    knee_scale_interval: tuple[int, int] | None = None
+    knee_scale: PositiveInt | None = None
+    knee_scale_interval: tuple[PositiveInt, PositiveInt] | None = None
+    entrypoint_knee_scale: PositiveInt | None = None
+    knee_metric: Literal["trajectory", "entrypoint"] = "trajectory"
     knee_upper_censored: bool = False
     cliff_probability: UnitInterval | None = None
     drop_probability: UnitInterval | None = None
@@ -1361,6 +1365,7 @@ def _prepare_sweep_config(
     bootstrap_iterations: int | None = None,
     seed: int | None = None,
     catalog_replicates: int | None = None,
+    knee_metric: Literal["trajectory", "entrypoint"] | None = None,
 ) -> RunConfig:
     """Apply CLI overrides to execution configuration."""
     cfg = config or RunConfig()
@@ -1372,6 +1377,8 @@ def _prepare_sweep_config(
         study_update["bootstrap_seed"] = seed
     if catalog_replicates is not None:
         study_update["catalog_replicates"] = catalog_replicates
+    if knee_metric is not None:
+        study_update["knee_metric"] = knee_metric
 
     cfg = cfg.model_copy(update={"plan": cfg.plan.model_copy(update=plan_update)})
     if study_update:
@@ -1419,6 +1426,8 @@ def _build_study_result(
     replicate_collisions: Sequence[ReplicateCollisionDiagnostic] = (),
     agent: str | None = None,
     model: str | None = None,
+    entrypoint_knee_scale: int | None = None,
+    knee_metric: Literal["trajectory", "entrypoint"] = "trajectory",
 ) -> ScalingStudy:
     """Construct finished ScalingStudy data model."""
     b_rate = points[0].pass_rate if points else 0.0
@@ -1451,6 +1460,8 @@ def _build_study_result(
         scales=tuple(evaluated_scales),
         knee_scale=knee,
         knee_scale_interval=boot.interval,
+        entrypoint_knee_scale=entrypoint_knee_scale,
+        knee_metric=knee_metric,
         knee_upper_censored=boot.upper_censored,
         cliff_probability=boot.cliff_probability,
         drop_probability=boot.drop_probability,
@@ -1943,6 +1954,42 @@ def _bootstrap_knee_summary(
 
 
 _MIN_REPLICATES_FOR_COLLISION: int = 2
+_MAX_ABSTENTION_SUSPECTS: int = 3
+
+
+def _rank_abstention_candidates(
+    candidates: Iterable[str],
+    query: Query | None,
+    resolved_skills: Mapping[str, Skill] | Sequence[Skill] | None,
+) -> tuple[str, ...]:
+    """Rank set-difference candidates by BM25 similarity against query text, capped at top 3."""
+    sorted_candidates = sorted(candidates)
+    if not sorted_candidates:
+        return ()
+    if query is None or not query.text or resolved_skills is None:
+        return tuple(sorted_candidates[:_MAX_ABSTENTION_SUSPECTS])
+
+    skill_map: Mapping[str, Skill] = (
+        resolved_skills
+        if isinstance(resolved_skills, Mapping)
+        else {s.name: s for s in resolved_skills}
+    )
+    available = [skill_map[c] for c in sorted_candidates if c in skill_map]
+    if not available:
+        return tuple(sorted_candidates[:_MAX_ABSTENTION_SUSPECTS])
+
+    try:
+        from reach.retrieval import Bm25Scorer, tokenize
+
+        scorer = Bm25Scorer.from_skills(available)
+        q_tokens = tuple(tokenize(query.text))
+        scored = [(scorer.score(q_tokens, s.name), s.name) for s in available]
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        ranked_names = [name for _, name in scored]
+        missing = [c for c in sorted_candidates if c not in skill_map]
+        return tuple((ranked_names + missing)[:_MAX_ABSTENTION_SUSPECTS])
+    except (OSError, ValueError, KeyError, RuntimeError):
+        return tuple(sorted_candidates[:_MAX_ABSTENTION_SUSPECTS])
 
 
 def _resolve_collision_suspects(
@@ -1951,11 +1998,18 @@ def _resolve_collision_suspects(
     failed_reps: Sequence[int],
     passed_reps: Sequence[int],
     replicates: Sequence[_ScaleReplicateRecord],
-) -> tuple[str, ...]:
-    """Identify suspect distractors present in failed replicates only."""
+    *,
+    query: Query | None = None,
+    resolved_skills: Mapping[str, Skill] | Sequence[Skill] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Identify invoked and suspect distractors across failed and passed replicates.
+
+    Returns:
+        A tuple of (invoked_distractors, suspect_distractors).
+    """
     valid_failed = [rep_idx for rep_idx in failed_reps if 0 <= rep_idx < len(replicates)]
     if not valid_failed:
-        return ()
+        return (), ()
 
     passed_skills: set[str] = {
         sk
@@ -1963,7 +2017,7 @@ def _resolve_collision_suspects(
         if 0 <= rep_idx < len(replicates)
         for sk in replicates[rep_idx].catalog.skills
     }
-    invoked_suspects: set[str] = set()
+    invoked_wrong: set[str] = set()
     for rep_idx in valid_failed:
         for r in replicates[rep_idx].results:
             if r.query_id != qid or r.error:
@@ -1973,26 +2027,37 @@ def _resolve_collision_suspects(
                 if r.invoked_skills
                 else ((r.invoked_skill,) if r.invoked_skill is not None else ())
             )
-            invoked_suspects.update(
-                sk for sk in invoked_seq if sk != expected_skill and sk not in passed_skills
-            )
+            invoked_wrong.update(sk for sk in invoked_seq if sk != expected_skill)
 
-    if not invoked_suspects:
+    invoked_distractors = tuple(sorted(invoked_wrong))
+
+    if invoked_wrong:
+        absent = sorted(sk for sk in invoked_wrong if sk not in passed_skills)
+        present = sorted(sk for sk in invoked_wrong if sk in passed_skills)
+        suspect_distractors = tuple(absent + present)
+    else:
         failed_common = set(replicates[valid_failed[0]].catalog.skills)
         for rep_idx in valid_failed[1:]:
             failed_common &= set(replicates[rep_idx].catalog.skills)
         excluded = passed_skills | ({expected_skill} if expected_skill else set())
-        invoked_suspects = failed_common - excluded
+        candidates = failed_common - excluded
+        suspect_distractors = _rank_abstention_candidates(candidates, query, resolved_skills)
 
-    return tuple(sorted(invoked_suspects))
+    return invoked_distractors, suspect_distractors
 
 
 def _detect_replicate_collisions(
     scales: Sequence[int],
     replicates_by_scale: Mapping[int, Sequence[_ScaleReplicateRecord]],
     queries_by_id: Mapping[str, Query],
+    resolved_skills: Mapping[str, Skill] | Sequence[Skill] | None = None,
 ) -> tuple[ReplicateCollisionDiagnostic, ...]:
     """Identify queries whose pass/fail outcome flips across catalog replicates at scale K."""
+    skill_map: Mapping[str, Skill] | None = (
+        resolved_skills
+        if resolved_skills is None or isinstance(resolved_skills, Mapping)
+        else {s.name: s for s in resolved_skills}
+    )
     diagnostics: list[ReplicateCollisionDiagnostic] = []
     for scale in scales:
         replicates = replicates_by_scale.get(scale, ())
@@ -2017,8 +2082,14 @@ def _detect_replicate_collisions(
 
             q_obj = queries_by_id.get(qid)
             expected_skill = q_obj.expected_skill if q_obj is not None else None
-            suspects = _resolve_collision_suspects(
-                qid, expected_skill, failed_reps, passed_reps, replicates
+            invoked_distractors, suspects = _resolve_collision_suspects(
+                qid,
+                expected_skill,
+                failed_reps,
+                passed_reps,
+                replicates,
+                query=q_obj,
+                resolved_skills=skill_map,
             )
             diagnostics.append(
                 ReplicateCollisionDiagnostic(
@@ -2027,6 +2098,7 @@ def _detect_replicate_collisions(
                     scale=scale,
                     failed_replicates=tuple(failed_reps),
                     passed_replicates=tuple(passed_reps),
+                    invoked_distractors=invoked_distractors,
                     suspect_distractors=suspects,
                 )
             )
@@ -2054,7 +2126,18 @@ def _assemble_scaling_study(
     model: str | None = None,
 ) -> ScalingStudy:
     """Compute effective noise floor and knee and construct a ScalingStudy."""
-    rate_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
+    knee_metric = study_config.knee_metric if study_config is not None else "trajectory"
+    traj_curve = [p.f1_score for p in points] if is_corpus else [p.pass_rate for p in points]
+    entry_curve = (
+        [p.entrypoint_f1_score if p.entrypoint_f1_score is not None else p.f1_score for p in points]
+        if is_corpus
+        else [
+            p.entrypoint_pass_rate if p.entrypoint_pass_rate is not None else p.pass_rate
+            for p in points
+        ]
+    )
+    evaluated_scales = actual_scales[: len(points)]
+    rate_curve = entry_curve if knee_metric == "entrypoint" else traj_curve
     effective_noise_floor = _compute_effective_noise_floor(
         noise_floor,
         points,
@@ -2062,7 +2145,6 @@ def _assemble_scaling_study(
         paired_outcomes=paired_outcomes,
         rate_curve=rate_curve,
     )
-    evaluated_scales = actual_scales[: len(points)]
     steepest_scales, steepest_delta = _find_steepest_drop(evaluated_scales, rate_curve)
     ci_span = ci_span_sigmas(DEFAULT_CONFIDENCE)
     active_intervals = (
@@ -2075,6 +2157,20 @@ def _assemble_scaling_study(
         noise_floor=effective_noise_floor,
         weights=weights,
         auto_smooth=True,
+    )
+    has_entrypoint_metrics = any(
+        (p.entrypoint_f1_score if is_corpus else p.entrypoint_pass_rate) is not None for p in points
+    )
+    entrypoint_knee_scale = (
+        find_kneedle_knee(
+            evaluated_scales,
+            entry_curve,
+            noise_floor=effective_noise_floor,
+            weights=weights,
+            auto_smooth=True,
+        )
+        if has_entrypoint_metrics
+        else None
     )
     bootstrap_iterations = study_config.bootstrap_iterations if study_config is not None else 200
     bootstrap_seed = study_config.bootstrap_seed if study_config is not None else 42
@@ -2106,6 +2202,8 @@ def _assemble_scaling_study(
         evaluated_scales=evaluated_scales,
         points=points,
         knee=knee,
+        entrypoint_knee_scale=entrypoint_knee_scale,
+        knee_metric=knee_metric,
         noise_floor=effective_noise_floor,
         total_skills=total_skills,
         decomp=decomp,
@@ -2298,6 +2396,7 @@ def _snapshot_scaling_study(
             actual_scales[: len(points)],
             replicates_by_scale,
             ctx.raw_query_map,
+            resolved_skills=ctx.resolved_skills,
         ),
     )
 
@@ -2319,6 +2418,7 @@ def run_scaling_sweep(
     bootstrap_iterations: int | None = None,
     seed: int | None = None,
     catalog_replicates: int | None = None,
+    knee_metric: Literal["trajectory", "entrypoint"] | None = None,
     on_scale_complete: Callable[[int, int, ScalingPoint, ScalingStudy], None] | None = None,
 ) -> ScalingStudy:
     """Execute multi-scale catalog evaluation sweep and return scaling analysis."""
@@ -2328,6 +2428,7 @@ def run_scaling_sweep(
         bootstrap_iterations=bootstrap_iterations,
         seed=seed,
         catalog_replicates=catalog_replicates,
+        knee_metric=knee_metric,
     )
     resolved_skills = (
         list(skills) if skills is not None else load_skills(effective_config.require_skills())
@@ -2456,6 +2557,7 @@ def run_scaling_sweep(
             installed_union,
             target_skill=scoped_target,
             queries_by_id=scale_query_map,
+            trajectory=(effective_config.study.knee_metric == "trajectory"),
         )
 
         if scale == actual_scales[0]:

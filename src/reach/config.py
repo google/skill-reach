@@ -24,13 +24,14 @@ from copy import deepcopy
 from enum import StrEnum
 from functools import cache, cached_property
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, NamedTuple, Self, cast
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self, cast
 
 from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
     Field,
+    PositiveInt,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -450,6 +451,7 @@ class RuntimeSettings(BaseModel):
     timeout_s: int = Field(default=200, gt=0)
     max_turns: int = Field(default=3, ge=1)
     early_exit: bool = True
+    manifest_only: bool = False
 
     @model_validator(mode="after")
     def _options_match_the_agent(self) -> Self:
@@ -590,6 +592,7 @@ class LintSettings(BaseModel):
         lint_section = settings.get("lint", {}) if isinstance(settings, Mapping) else {}
         retrieval_section = settings.get("retrieval", {}) if isinstance(settings, Mapping) else {}
         catalog_section = settings.get("catalog", {}) if isinstance(settings, Mapping) else {}
+        runtime_section = settings.get("runtime", {}) if isinstance(settings, Mapping) else {}
 
         payload: dict[str, Any] = dict(lint_section) if isinstance(lint_section, Mapping) else {}
         raw_rules = payload.get("rules")
@@ -606,7 +609,12 @@ class LintSettings(BaseModel):
         retrieval_cfg = RetrievalSettings.model_validate(
             retrieval_section if isinstance(retrieval_section, Mapping) else {}
         )
-        return _apply_lint_inheritance(lint_base, catalog_cfg, retrieval_cfg)
+        return _apply_lint_inheritance(
+            lint_base,
+            catalog_cfg,
+            retrieval_cfg,
+            runtime_section=runtime_section if isinstance(runtime_section, Mapping) else None,
+        )
 
 
 class CheckSettings(BaseModel):
@@ -640,10 +648,14 @@ class RetrievalSettings(BaseModel):
     bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
+_POSITIVE_INT_ADAPTER: TypeAdapter[PositiveInt] = TypeAdapter(PositiveInt)
+
+
 def _apply_lint_inheritance(
     lint: LintSettings,
     catalog: CatalogSettings,
     retrieval: RetrievalSettings,
+    runtime_section: Mapping[str, object] | None = None,
 ) -> LintSettings:
     """Propagate retrieval similarity threshold and scoped catalog mode into LintSettings."""
     original_fields_set = set(lint.model_fields_set)
@@ -653,12 +665,23 @@ def _apply_lint_inheritance(
         and "similarity_threshold" in retrieval.model_fields_set
     ):
         updates["similarity_threshold"] = retrieval.similarity_threshold
-    if (
-        "catalog_budget_chars" not in original_fields_set
-        and "mode" in catalog.model_fields_set
-        and catalog.mode in {CatalogMode.NEIGHBORHOOD, CatalogMode.SINGLETON}
-    ):
-        updates["catalog_budget_chars"] = None
+    if "catalog_budget_chars" not in original_fields_set:
+        if "mode" in catalog.model_fields_set and catalog.mode in {
+            CatalogMode.NEIGHBORHOOD,
+            CatalogMode.SINGLETON,
+        }:
+            updates["catalog_budget_chars"] = None
+        elif runtime_section and "agent" in runtime_section:
+            agent_name = str(runtime_section.get("agent") or "")
+            if agent_name and agent_name != "claude-code":
+                opts = runtime_section.get("options") or {}
+                raw_budget = opts.get("catalog_budget_chars") if isinstance(opts, Mapping) else None
+                if raw_budget is not None:
+                    updates["catalog_budget_chars"] = _POSITIVE_INT_ADAPTER.validate_python(
+                        raw_budget
+                    )
+                else:
+                    updates["catalog_budget_chars"] = None
     if not updates:
         return lint
     return lint.model_copy(update=updates)
@@ -795,6 +818,7 @@ class StudySettings(BaseModel):
     bootstrap_iterations: int = Field(default=200, ge=10)
     bootstrap_seed: int | None = Field(default=42)
     catalog_replicates: Annotated[int, Field(ge=1, le=20)] = 1
+    knee_metric: Literal["trajectory", "entrypoint"] = "trajectory"
 
     @field_validator("anchor", mode="before")
     @classmethod
