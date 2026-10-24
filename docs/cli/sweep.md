@@ -45,11 +45,12 @@ reach sweep ./skills --bootstrap-iterations 500 --catalog-replicates 3 --seed 42
 
 ///
 
-/// tab | Export sweep metrics to JSON or CSV
-Export full capacity and decomposition metrics for plotting and regression tracking:
+/// tab | Export & visualize sweep reports
+Export full capacity and decomposition metrics to JSON/CSV or render a standalone HTML scaling report via `reach view`:
 
 ```bash
-reach sweep ./skills --format json > sweep.json
+reach sweep ./skills --out .reach/sweep.json
+reach view .reach/sweep.json --format html -o sweep_report.html
 ```
 
 ///
@@ -61,7 +62,7 @@ By default, `reach sweep` evaluates a fixed anchor cohort across all library siz
 ///
 
 /// tip | Knee Uncertainty, Right-Censoring & Replicate Collision Diagnostics
-`ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision sensitivity (`replicate_collisions` when `--catalog-replicates > 1`).
+`ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), first-turn entrypoint routing knee (`entrypoint_knee_scale`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision attribution (`replicate_collisions` with `invoked_distractors` and BM25-ranked `suspect_distractors` when `--catalog-replicates > 1`).
 ///
 
 ## Options

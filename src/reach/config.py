@@ -672,16 +672,16 @@ def _apply_lint_inheritance(
         }:
             updates["catalog_budget_chars"] = None
         elif runtime_section and "agent" in runtime_section:
-            agent_name = str(runtime_section.get("agent") or "")
-            if agent_name and agent_name != "claude-code":
-                opts = runtime_section.get("options") or {}
-                raw_budget = opts.get("catalog_budget_chars") if isinstance(opts, Mapping) else None
-                if raw_budget is not None:
-                    updates["catalog_budget_chars"] = _POSITIVE_INT_ADAPTER.validate_python(
-                        raw_budget
+            agent_name = str(runtime_section.get("agent") or "").strip().lower()
+            if agent_name in {"antigravity-cli", "antigravity-sdk"}:
+                opts = runtime_section.get("options")
+                if isinstance(opts, Mapping) and "catalog_budget_chars" in opts:
+                    raw_budget = opts.get("catalog_budget_chars")
+                    updates["catalog_budget_chars"] = (
+                        _POSITIVE_INT_ADAPTER.validate_python(raw_budget)
+                        if raw_budget is not None
+                        else None
                     )
-                else:
-                    updates["catalog_budget_chars"] = None
     if not updates:
         return lint
     return lint.model_copy(update=updates)

@@ -2001,12 +2001,8 @@ def _resolve_collision_suspects(
     *,
     query: Query | None = None,
     resolved_skills: Mapping[str, Skill] | Sequence[Skill] | None = None,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Identify invoked and suspect distractors across failed and passed replicates.
-
-    Returns:
-        A tuple of (invoked_distractors, suspect_distractors).
-    """
+) -> tuple[tuple[NonEmptyStr, ...], tuple[NonEmptyStr, ...]]:
+    """Return (invoked_distractors, suspect_distractors) across failed and passed replicates."""
     valid_failed = [rep_idx for rep_idx in failed_reps if 0 <= rep_idx < len(replicates)]
     if not valid_failed:
         return (), ()

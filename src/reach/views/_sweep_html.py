@@ -31,6 +31,7 @@ _PASS_RATE_HIGH: float = 0.8
 _PASS_RATE_MID: float = 0.5
 _MIN_DROP_PROB_FOR_GRADUAL_LABEL: float = 0.50
 _MAX_DISPLAYED_SUSPECTS: int = 3
+_MIN_LINE_POINTS: int = 2
 
 
 def _format_duration_s(duration_ms: float) -> str:
@@ -90,15 +91,18 @@ def _render_sweep_html_svg(  # noqa: PLR0912, PLR0915
     x_min, x_max = 65.0, 700.0
     y_min, y_max = 42.0, 270.0
     scales = study.scales
-    min_s, max_s = min(scales), max(scales)
+    min_s = min(scales) if scales else 1
+    max_s = max(scales) if scales else 1
     effective_entry_knee = _resolve_entrypoint_knee(study)
 
     def to_x(s: int) -> float:
-        if len(scales) <= 1 or min_s == max_s:
+        if len(scales) <= 1 or min_s == max_s or min_s <= 0 or s <= 0:
             return (x_min + x_max) / 2
-        return x_min + (math.log(s) - math.log(min_s)) / (math.log(max_s) - math.log(min_s)) * (
-            x_max - x_min
-        )
+        log_min = math.log(max(1, min_s))
+        log_max = math.log(max(1, max_s))
+        if log_max == log_min:
+            return (x_min + x_max) / 2
+        return x_min + (math.log(max(1, s)) - log_min) / (log_max - log_min) * (x_max - x_min)
 
     def to_y(val: float) -> float:
         clamped = max(0.0, min(1.0, val))
@@ -146,7 +150,11 @@ def _render_sweep_html_svg(  # noqa: PLR0912, PLR0915
         ci_pts_high.append(f"{to_x(pt.scale):.1f},{to_y(interval.high):.1f}")
         ci_pts_low.append(f"{to_x(pt.scale):.1f},{to_y(interval.low):.1f}")
     ci_poly_str = " ".join(ci_pts_high + list(reversed(ci_pts_low)))
-    ci_polygon = f'<polygon points="{ci_poly_str}" fill="rgba(56, 189, 248, 0.15)"/>'
+    ci_polygon = (
+        f'<polygon points="{ci_poly_str}" fill="rgba(56, 189, 248, 0.15)"/>'
+        if len(study.points) >= _MIN_LINE_POINTS
+        else ""
+    )
 
     traj_pts = [
         (
@@ -157,8 +165,10 @@ def _render_sweep_html_svg(  # noqa: PLR0912, PLR0915
         )
         for pt in study.points
     ]
-    traj_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for _, x, y, _ in traj_pts)
-    traj_line = f'<path d="{traj_path}" fill="none" stroke="#38bdf8" stroke-width="3"/>'
+    traj_line = ""
+    if len(traj_pts) >= _MIN_LINE_POINTS:
+        traj_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for _, x, y, _ in traj_pts)
+        traj_line = f'<path d="{traj_path}" fill="none" stroke="#38bdf8" stroke-width="3"/>'
     traj_nodes = []
     for s, x, y, val in traj_pts:
         traj_nodes.append(
@@ -181,17 +191,17 @@ def _render_sweep_html_svg(  # noqa: PLR0912, PLR0915
             e_val = pt.entrypoint_f1_score if study.is_corpus_sweep else pt.entrypoint_pass_rate
             if e_val is not None:
                 entry_pts.append((pt.scale, to_x(pt.scale), to_y(e_val), e_val))
-        if entry_pts:
+        if len(entry_pts) >= _MIN_LINE_POINTS:
             e_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for _, x, y, _ in entry_pts)
             entry_elements.append(
                 f'<path d="{e_path}" fill="none" stroke="#34d399" stroke-width="2" '
                 f'stroke-dasharray="5,4"/>'
             )
-            for s, x, y, e_val in entry_pts:
-                entry_elements.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#34d399">'
-                    f"<title>Entry K={s}: {e_val * 100:.1f}%</title></circle>"
-                )
+        for s, x, y, e_val in entry_pts:
+            entry_elements.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#34d399">'
+                f"<title>Entry K={s}: {e_val * 100:.1f}%</title></circle>"
+            )
 
     knee_elements = []
     if study.knee_scale is not None and study.knee_scale in scales:
@@ -232,22 +242,22 @@ def _render_sweep_html_svg(  # noqa: PLR0912, PLR0915
             for cpt in compare.points
             if min_s <= cpt.scale <= max_s
         ]
-        if comp_pts:
+        if len(comp_pts) >= _MIN_LINE_POINTS:
             c_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for _, x, y, _ in comp_pts)
             compare_elements.append(
                 f'<path d="{c_path}" fill="none" stroke="#fbbf24" stroke-width="2.5" '
                 f'stroke-dasharray="6,4"/>'
             )
-            for s, x, y, val in comp_pts:
-                compare_elements.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#fbbf24" '
-                    f'stroke="#0f172a" stroke-width="1.5">'
-                    f"<title>Compare K={s}: {val * 100:.1f}%</title></circle>"
-                )
-                compare_elements.append(
-                    f'<text x="{x:.1f}" y="{y + 16:.1f}" text-anchor="middle" '
-                    f'fill="#fbbf24" font-size="10" font-weight="600">{val * 100:.1f}%</text>'
-                )
+        for s, x, y, val in comp_pts:
+            compare_elements.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#fbbf24" '
+                f'stroke="#0f172a" stroke-width="1.5">'
+                f"<title>Compare K={s}: {val * 100:.1f}%</title></circle>"
+            )
+            compare_elements.append(
+                f'<text x="{x:.1f}" y="{y + 16:.1f}" text-anchor="middle" '
+                f'fill="#fbbf24" font-size="10" font-weight="600">{val * 100:.1f}%</text>'
+            )
 
     metric_name = "F1 Score" if study.is_corpus_sweep else "Pass Rate"
     legend_items = [
@@ -443,6 +453,23 @@ def _render_sweep_html_table(  # noqa: PLR0912, PLR0915
     """
 
 
+def _format_distractor_list(
+    distractors: tuple[str, ...],
+    *,
+    max_items: int | None = None,
+) -> str:
+    """Format and HTML-escape a sequence of distractor skill names."""
+    if not distractors:
+        return "—"
+    shown = distractors[:max_items] if max_items is not None else distractors
+    escaped = [html.escape(d) for d in shown]
+    res = ", ".join(escaped)
+    extra = len(distractors) - len(escaped)
+    if extra > 0:
+        res += f" (+{extra} more)"
+    return res
+
+
 def _render_sweep_html_collisions(study: ScalingStudy) -> str:
     """Render collision diagnostics table if collisions are present."""
     if not study.replicate_collisions:
@@ -456,15 +483,11 @@ def _render_sweep_html_collisions(study: ScalingStudy) -> str:
             )
         else:
             target_str = html.escape(c.expected_skill or c.query_id)
-        inv_str = html.escape(", ".join(c.invoked_distractors)) if c.invoked_distractors else "—"
-        if c.suspect_distractors:
-            shown = c.suspect_distractors[:_MAX_DISPLAYED_SUSPECTS]
-            extra = len(c.suspect_distractors) - len(shown)
-            susp_str = html.escape(", ".join(shown))
-            if extra > 0:
-                susp_str += f" (+{extra} more)"
-        else:
-            susp_str = "—"
+        inv_str = _format_distractor_list(c.invoked_distractors)
+        susp_str = _format_distractor_list(
+            c.suspect_distractors,
+            max_items=_MAX_DISPLAYED_SUSPECTS,
+        )
         reps_str = f"{len(c.failed_replicates)}F / {len(c.passed_replicates)}P"
         col_rows.append(
             f"<tr>"
@@ -523,13 +546,15 @@ def render_sweep_html(
             else (study.agent or study.model or "")
         )
         badges.append(f"Agent: <strong>{html.escape(agent_label)}</strong>")
+    scale_range_str = (
+        f"{len(study.scales)} steps (K={study.scales[0]}..{study.scales[-1]})"
+        if study.scales
+        else "0 steps"
+    )
     badges.extend(
         [
             f"Corpus: <strong>{study.total_corpus_skills} skills</strong>",
-            (
-                f"Scales: <strong>{len(study.scales)} steps "
-                f"(K={study.scales[0]}..{study.scales[-1]})</strong>"
-            ),
+            f"Scales: <strong>{scale_range_str}</strong>",
             f"Replicates: <strong>{study.catalog_replicates}</strong>",
         ]
     )
@@ -541,6 +566,30 @@ def render_sweep_html(
         comp_target = html.escape(_study_label(compare, "Comparison Baseline"))
         badges.append(f"Compare: <strong>{comp_target} ({len(compare.scales)} scales)</strong>")
     badges_html = "\n".join(f'<div class="badge">{b}</div>' for b in badges)
+
+    if not study.points:
+        return get_sweep_template().format(
+            catalog_title=html.escape(catalog_title),
+            style=get_sweep_css(),
+            subtitle=html.escape(subtitle),
+            badges_html=badges_html,
+            knee_val="N/A",
+            knee_sub="No points recorded",
+            entry_knee_val="N/A",
+            entry_knee_sub="No points recorded",
+            term_label="Terminal Metric",
+            term_val="—",
+            term_sub="No evaluation points available",
+            col_val="—",
+            col_sub="—",
+            svg_content=(
+                '<p style="text-align: center; color: var(--text-muted);">'
+                "No scaling points recorded.</p>"
+            ),
+            legend_html="",
+            table_section="",
+            collision_section="",
+        )
 
     knee_val = (
         str(study.knee_scale)

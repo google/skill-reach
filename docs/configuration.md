@@ -251,8 +251,8 @@ Controls static frontmatter and budget thresholds.
 | `mutual_handoff_lexical_threshold`    | Float   | `0.35`   | Minimum lexical competition score before requiring reciprocal handoffs.                              |
 | `rules.<rule-name>`                   | String  | (varies) | Severity override for any static lint rule: `"error"`, `"warn"`, `"info"`, or `"ignore"`.            |
 
-/// note | Interaction with `[catalog]` in `reach.toml`
-When a project's `reach.toml` explicitly includes a `[catalog]` table (with the default `scorer = "hybrid"`) and omits `catalog_budget_chars` under `[lint]`, `load_config()` sets `lint.catalog_budget_chars = None` unless `catalog_budget_chars` is explicitly specified in `[lint]`.
+/// note | Interaction with `[catalog]` and `[runtime]` in `reach.toml`
+When a project's `reach.toml` explicitly sets `[catalog].mode` to `"neighborhood"` or `"singleton"` and omits `catalog_budget_chars` under `[lint]`, `load_config()` sets `lint.catalog_budget_chars = None`. When `[runtime].agent` is `"antigravity-cli"` or `"antigravity-sdk"` and `[runtime.options]` specifies `catalog_budget_chars`, `lint.catalog_budget_chars` inherits that runtime budget when omitted under `[lint]`.
 ///
 
 ### `[models.<name>]`
@@ -416,14 +416,15 @@ Driver-specific settings can be passed in `reach.toml` under `[runtime.options]`
 
 ### Google Antigravity CLI (`antigravity-cli`)
 
-| Key            | Type    | Default              | Description                                                                                                      |
-| :------------- | :------ | :------------------- | :--------------------------------------------------------------------------------------------------------------- |
-| `executable`   | String  | `"agy"`              | Path or command name for the Antigravity CLI binary.                                                             |
-| `model`        | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                    |
-| `vertex`       | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`AGY_ADC_AUTH`).  |
-| `project`      | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                           |
-| `location`     | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                 |
-| `use_symlinks` | Boolean | `false`              | Copy skill directories by default so Antigravity's workspace file watcher indexes resident `SKILL.md` manifests. |
+| Key                    | Type    | Default              | Description                                                                                                      |
+| :--------------------- | :------ | :------------------- | :--------------------------------------------------------------------------------------------------------------- |
+| `executable`           | String  | `"agy"`              | Path or command name for the Antigravity CLI binary.                                                             |
+| `model`                | String  | `"gemini-3.8-flash"` | Model identifier to evaluate.                                                                                    |
+| `vertex`               | Boolean | `None`               | Explicitly enable (`true`) or disable (`false`) Vertex AI / Agent Platform ADC authentication (`AGY_ADC_AUTH`).  |
+| `project`              | String  | Inferred             | Google Cloud project ID hosting the target Agent Platform endpoints or Agent Registry.                           |
+| `location`             | String  | `"global"`           | Google Cloud region or `"global"` endpoint location for Agent Platform requests.                                 |
+| `catalog_budget_chars` | Integer | `None`               | Character budget for system instruction skill listings, eliding descriptions to bare names when exceeded.        |
+| `use_symlinks`         | Boolean | `false`              | Copy skill directories by default so Antigravity's workspace file watcher indexes resident `SKILL.md` manifests. |
 
 ### Google Antigravity SDK (`antigravity-sdk`)
 

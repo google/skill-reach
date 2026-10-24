@@ -614,3 +614,22 @@ def test_view_browser_default_out_and_alt_artifact_fallback(
 
     # Passing a directory as artifact triggers OSError when reading text (exit 2)
     assert main(["view", str(reach_dir)]) == 2
+
+
+def test_render_sweep_html_handles_empty_points_and_single_scale(
+    sample_scaling_study: ScalingStudy,
+) -> None:
+    """Verify render_sweep_html safely renders empty points and single-scale sweeps."""
+    from reach.views.sweep import render_sweep, render_sweep_html
+
+    empty_study = sample_scaling_study.model_copy(update={"points": ()})
+    empty_html = render_sweep_html(empty_study)
+    assert "No scaling points recorded" in empty_html
+
+    single_pt = sample_scaling_study.points[0]
+    single_study = sample_scaling_study.model_copy(
+        update={"scales": (single_pt.scale,), "points": (single_pt,)}
+    )
+    single_html = render_sweep(single_study, "html", compare=single_study)
+    assert f"K={single_pt.scale}" in single_html
+    assert "<circle" in single_html

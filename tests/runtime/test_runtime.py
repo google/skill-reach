@@ -3014,3 +3014,37 @@ def test_normalize_skill_tool_args_resolves_directory_across_path_keys(
     assert normalize_skill_tool_args({arg_key: str(missing_dir)}, skill="missing-skill") == {
         arg_key: str(missing_dir / "SKILL.md")
     }
+
+
+def test_install_skills_manifest_only_validates_manifest_symlink(tmp_path: Path) -> None:
+    """Verify manifest_only rejects escaping or broken SKILL.md symlinks while ignoring siblings."""
+    secret_file = tmp_path / "secret.md"
+    secret_file.write_text("secret", encoding="utf-8")
+
+    # 1. Escaping SKILL.md symlink is rejected
+    escape_dir = tmp_path / "escape-skill"
+    escape_dir.mkdir()
+    (escape_dir / "SKILL.md").symlink_to(secret_file)
+    escape_skill = Skill(name="escape-skill", description="Escape", path=escape_dir)
+    catalog_esc = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("escape-skill",))
+    with pytest.raises(ValueError, match="escaping skill directory"):
+        install_skills(
+            catalog_esc,
+            {"escape-skill": escape_skill},
+            tmp_path / "dest_esc",
+            manifest_only=True,
+        )
+
+    # 2. Broken SKILL.md symlink is rejected
+    broken_dir = tmp_path / "broken-skill"
+    broken_dir.mkdir()
+    (broken_dir / "SKILL.md").symlink_to(broken_dir / "missing.md")
+    broken_skill = Skill(name="broken-skill", description="Broken", path=broken_dir)
+    catalog_brk = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("broken-skill",))
+    with pytest.raises(ValueError, match="broken or cyclical symlink"):
+        install_skills(
+            catalog_brk,
+            {"broken-skill": broken_skill},
+            tmp_path / "dest_brk",
+            manifest_only=True,
+        )

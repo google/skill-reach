@@ -708,6 +708,13 @@ SWEEP_RENDERERS = {
 }
 
 
-def render_sweep(study: ScalingStudy, fmt: str) -> str:
+def render_sweep(
+    study: ScalingStudy,
+    fmt: str,
+    *,
+    compare: ScalingStudy | None = None,
+) -> str:
     """Render ScalingStudy into the requested format."""
+    if fmt == "html" and compare is not None:
+        return render_sweep_html(study, compare=compare)
     return dispatch_render(SWEEP_RENDERERS, fmt, study)

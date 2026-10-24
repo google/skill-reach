@@ -92,13 +92,19 @@ Output:
 ///
 
 /// tab | Scaling sweep study
-Render recorded capacity decay, knee metrics, and scaling curves from a sweep artifact:
+Render recorded capacity decay, knee metrics, and scaling curves from a sweep artifact in the terminal:
 
 ```bash
 reach view .reach/sweep.json
 ```
 
-Or export to CSV format:
+Generate a standalone HTML scaling report with an inline SVG capacity curve, 95% bootstrap CI band, first-turn entrypoint curve, per-scale scorecard, and replicate collision attribution (optionally overlaying a baseline sweep via `--compare`):
+
+```bash
+reach view .reach/sweep.json --compare .reach/sweep_keyword.json --format html -o sweep_report.html
+```
+
+Or export per-scale metrics to CSV format:
 
 ```bash
 reach view .reach/sweep.json --format csv > sweep.csv

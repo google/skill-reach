@@ -145,25 +145,29 @@ def install_skills(
             raise ValueError(msg)
         if manifest_only:
             manifest_candidate = resolved_src / "SKILL.md"
-            if not manifest_candidate.is_file():
+            if not manifest_candidate.is_file() and not manifest_candidate.is_symlink():
                 manifest_candidate = resolved_src / "skill.md"
-            if not manifest_candidate.is_file():
+            if not manifest_candidate.is_file() and not manifest_candidate.is_symlink():
                 msg = f"Skill manifest not found in {resolved_src}"
                 raise ValueError(msg)
-            if manifest_candidate.is_symlink():
-                try:
-                    target = manifest_candidate.resolve(strict=True)
-                    if not target.is_relative_to(resolved_src) or target == manifest_candidate:
-                        msg = (
-                            f"Skill contains symlink escaping skill directory: "
-                            f"{manifest_candidate} -> {target}"
-                        )
-                        raise ValueError(msg)
-                except (OSError, RuntimeError) as exc:
-                    msg = f"Skill contains broken or cyclical symlink: {manifest_candidate}"
-                    raise ValueError(msg) from exc
+
+            canonical_src = resolved_src.resolve(strict=True)
+            try:
+                target = manifest_candidate.resolve(strict=True)
+                if not target.is_relative_to(canonical_src) or (
+                    target == manifest_candidate and manifest_candidate.is_symlink()
+                ):
+                    msg = (
+                        f"Skill contains symlink escaping skill directory: "
+                        f"{manifest_candidate} -> {target}"
+                    )
+                    raise ValueError(msg)
+            except (OSError, RuntimeError) as exc:
+                msg = f"Skill contains broken or cyclical symlink: {manifest_candidate}"
+                raise ValueError(msg) from exc
+
             dst.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(manifest_candidate, dst / "SKILL.md")
+            shutil.copy2(target, dst / "SKILL.md", follow_symlinks=False)
             continue
         _validate_skill_symlinks(resolved_src)
         if use_symlinks:
