@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser
 
 from reach.models import Query, QueryKind, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance
@@ -136,18 +136,18 @@ def sample_queryset() -> QuerySet:
 def review_html_tree(
     sample_skills: tuple[Skill, Skill, Skill],
     sample_queryset: QuerySet,
-) -> HTMLParser:
+) -> LexborHTMLParser:
     """Render query review HTML and return parsed selectolax tree."""
     target, rival_docker, rival_git = sample_skills
     html = render_query_review_html(sample_queryset, target, [rival_docker, rival_git])
-    return HTMLParser(html)
+    return LexborHTMLParser(html)
 
 
 @pytest.fixture
-def view_html_tree(artifact: Artifact) -> HTMLParser:
+def view_html_tree(artifact: Artifact) -> LexborHTMLParser:
     """Render diagnostic workbench HTML and return parsed selectolax tree."""
     html = render_view_html(artifact)
-    return HTMLParser(html)
+    return LexborHTMLParser(html)
 
 
 # --- 1. ID & Hook Point Contracts ---
@@ -169,7 +169,7 @@ def test_html_contains_required_interactive_element_ids(
 ) -> None:
     """Verify rendered HTML includes all element IDs actively required by client JS."""
     tree = request.getfixturevalue(tree_fixture_name)
-    assert isinstance(tree, HTMLParser)
+    assert isinstance(tree, LexborHTMLParser)
     js_code = js_loader()
 
     # 1. Ensure the contract IDs are actively referenced in client JS (prevent stale rules)
@@ -202,7 +202,7 @@ def test_html_inline_event_handlers_exist_in_js(
 ) -> None:
     """Verify every onclick/oninput handler in HTML maps to a function in companion JS."""
     tree = request.getfixturevalue(tree_fixture_name)
-    assert isinstance(tree, HTMLParser)
+    assert isinstance(tree, LexborHTMLParser)
     js_code = js_loader()
 
     unresolved_handlers: list[str] = []
@@ -234,7 +234,7 @@ def test_html_inline_event_handlers_exist_in_js(
 
 
 def test_view_html_table_structures_match_interactive_event_delegations(
-    view_html_tree: HTMLParser,
+    view_html_tree: LexborHTMLParser,
 ) -> None:
     """Verify confusion, collisions, and skills tables contain expected DOM cells for filtering."""
     matrix = view_html_tree.css_first("#confusion-table")
@@ -264,7 +264,7 @@ def test_view_html_table_structures_match_interactive_event_delegations(
         assert first_cell.text().strip(), "Skill cell must contain text for click filter"
 
 
-def test_view_html_queries_container_and_details_items(view_html_tree: HTMLParser) -> None:
+def test_view_html_queries_container_and_details_items(view_html_tree: LexborHTMLParser) -> None:
     """Verify queries container and child query details match expected filtering structure."""
     container = view_html_tree.css_first("#queries-container")
     assert container is not None
@@ -282,7 +282,7 @@ def test_view_html_queries_container_and_details_items(view_html_tree: HTMLParse
 
 
 def test_review_html_body_dataset_contract(
-    review_html_tree: HTMLParser,
+    review_html_tree: LexborHTMLParser,
     sample_skills: tuple[Skill, Skill, Skill],
 ) -> None:
     """Verify body element exposes target, rivals, and out-of-scope dataset attributes."""
@@ -304,7 +304,7 @@ def test_review_html_body_dataset_contract(
 
 
 def test_review_html_query_card_component_contract(
-    review_html_tree: HTMLParser,
+    review_html_tree: LexborHTMLParser,
     sample_queryset: QuerySet,
 ) -> None:
     """Verify query cards contain all interactive sub-components without asserting exact layout."""
@@ -336,7 +336,7 @@ def test_review_html_query_card_component_contract(
 
 
 def test_review_html_rival_select_options(
-    review_html_tree: HTMLParser,
+    review_html_tree: LexborHTMLParser,
     sample_skills: tuple[Skill, Skill, Skill],
 ) -> None:
     """Verify rival select dropdowns contain options matching passed rival skills."""
@@ -364,7 +364,7 @@ def test_review_html_renders_empty_state_cleanly(
         provenance=QuerySetProvenance(origin=Origin.AUTHORED),
     )
     html = render_query_review_html(empty_qs, target, [rival_docker])
-    tree = HTMLParser(html)
+    tree = LexborHTMLParser(html)
 
     # Empty containers should be present
     assert tree.css_first("#empty-state") is not None
