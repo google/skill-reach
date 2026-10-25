@@ -2341,8 +2341,10 @@ def run_scaling_sweep(
     )
 
     is_corpus = target_skill is None
-    requested_scales = scales if scales is not None else effective_config.study.scales
-    actual_scales = resolve_sweep_scales(len(resolved_skills), requested_scales)
+    actual_scales = resolve_sweep_scales(
+        len(resolved_skills),
+        scales if scales is not None else effective_config.study.scales,
+    )
 
     replicate_setups = [
         _setup_sweep_execution(
@@ -2364,112 +2366,109 @@ def run_scaling_sweep(
         for rep_idx in range(effective_config.study.catalog_replicates)
     ]
     primary_setup = replicate_setups[0]
+    resolved_runtime = runtime if runtime is not None else build_runtime(effective_config.runtime)
+    try:
+        if not allow_truncation and resolved_runtime.rations_catalog:
+            for setup in replicate_setups:
+                for cat in setup.catalogs:
+                    validate_catalog_fit(
+                        resolved_runtime,
+                        cat,
+                        resolved_skills,
+                        allow_truncation=False,
+                    )
+        baseline_results: tuple[ProbeResult, ...] = ()
+        latest_results: tuple[ProbeResult, ...] = ()
+        points: list[ScalingPoint] = []
+        final_decomp: DecompositionResult | None = None
+        work_dir, temp_dir_obj = _resolve_sweep_work_dir(effective_config.study.workdir)
 
-    resolved_runtime = runtime or build_runtime(effective_config.runtime)
-    if not allow_truncation and resolved_runtime.rations_catalog:
-        for setup in replicate_setups:
-            for cat in setup.catalogs:
-                validate_catalog_fit(
-                    resolved_runtime,
-                    cat,
-                    resolved_skills,
-                    allow_truncation=False,
-                )
-    baseline_results: tuple[ProbeResult, ...] = ()
-    latest_results: tuple[ProbeResult, ...] = ()
-    points: list[ScalingPoint] = []
-    final_decomp: DecompositionResult | None = None
-
-    work_dir, temp_dir_obj = _resolve_sweep_work_dir(effective_config.study.workdir)
-
-    ctx = _SweepContext(
-        effective_config=effective_config,
-        work_dir=work_dir,
-        corpus_plan=primary_setup.corpus_plan,
-        raw_query_set=raw_query_set,
-        resolved_query_set=primary_setup.query_set,
-        resolved_skills=resolved_skills,
-        raw_query_map={q.query_id: q for q in raw_query_set.queries},
-        is_corpus=is_corpus,
-    )
-
-    total_scales = len(actual_scales)
-    shared_outcome_cache: dict[Any, Any] = {}
-    scale_query_sums: dict[int, dict[str, _QueryOutcome]] = {}
-    replicates_by_scale: dict[int, tuple[_ScaleReplicateRecord, ...]] = {}
-    scoped_target = primary_setup.target if not is_corpus else None
-    scale_workers = max(1, workers)
-
-    agent_val = (resolved_runtime.name or "").strip() or None
-    model_val = (resolved_runtime.model or "").strip() or None
-
-    def _take_snapshot() -> ScalingStudy:
-        return _snapshot_scaling_study(
-            ctx=ctx,
-            primary_setup=primary_setup,
-            agent=agent_val,
-            model=model_val,
-            actual_scales=actual_scales,
-            points=points,
-            noise_floor=noise_floor,
-            baseline_results=baseline_results,
-            latest_results=latest_results,
-            decomp=final_decomp,
-            scale_query_sums=scale_query_sums,
-            replicates_by_scale=replicates_by_scale,
+        ctx = _SweepContext(
+            effective_config=effective_config,
+            work_dir=work_dir,
+            corpus_plan=primary_setup.corpus_plan,
+            raw_query_set=raw_query_set,
+            resolved_query_set=primary_setup.query_set,
+            resolved_skills=resolved_skills,
+            raw_query_map={q.query_id: q for q in raw_query_set.queries},
+            is_corpus=is_corpus,
         )
 
-    for step_idx, scale in enumerate(actual_scales, start=1):
-        (
-            combined_results,
-            installed_union,
-            primary_query_set,
-            scale_replicates,
-        ) = _execute_scale_replicates(
-            step_idx=step_idx,
-            scale_workers=scale_workers,
-            replicate_setups=replicate_setups,
-            ctx=ctx,
-            resolved_runtime=resolved_runtime,
-            allow_truncation=allow_truncation,
-            shared_outcome_cache=shared_outcome_cache,
-            target=primary_setup.target,
-        )
-        replicates_by_scale[scale] = scale_replicates
-        point, decomp = _build_scaling_point(
-            scale=scale,
-            catalog_id=primary_setup.catalogs[step_idx - 1].id,
-            results=combined_results,
-            resolved_query_set=primary_query_set,
-            baseline_results=baseline_results,
-            installed_skills=installed_union,
-            target_skill=scoped_target,
-            seed=effective_config.catalog.seed,
-        )
-        points.append(point)
-        latest_results = combined_results
-        scale_query_map = {q.query_id: q for q in primary_query_set.queries}
-        truth_expected = {q.query_id: q.expected_skill for q in primary_query_set.queries}
-        scale_query_sums[scale] = _extract_query_outcomes(
-            combined_results,
-            truth_expected,
-            installed_union,
-            target_skill=scoped_target,
-            queries_by_id=scale_query_map,
-        )
+        shared_outcome_cache: dict[Any, Any] = {}
+        scale_query_sums: dict[int, dict[str, _QueryOutcome]] = {}
+        replicates_by_scale: dict[int, tuple[_ScaleReplicateRecord, ...]] = {}
+        scoped_target = primary_setup.target if not is_corpus else None
 
-        if scale == actual_scales[0]:
-            baseline_results = combined_results
-        elif decomp is not None:
-            final_decomp = decomp
+        def _take_snapshot() -> ScalingStudy:
+            return _snapshot_scaling_study(
+                ctx=ctx,
+                primary_setup=primary_setup,
+                agent=(resolved_runtime.name or "").strip() or None,
+                model=(resolved_runtime.model or "").strip() or None,
+                actual_scales=actual_scales,
+                points=points,
+                noise_floor=noise_floor,
+                baseline_results=baseline_results,
+                latest_results=latest_results,
+                decomp=final_decomp,
+                scale_query_sums=scale_query_sums,
+                replicates_by_scale=replicates_by_scale,
+            )
 
-        if on_scale_complete is not None:
-            on_scale_complete(step_idx, total_scales, point, _take_snapshot())
+        for step_idx, scale in enumerate(actual_scales, start=1):
+            (
+                combined_results,
+                installed_union,
+                primary_query_set,
+                scale_replicates,
+            ) = _execute_scale_replicates(
+                step_idx=step_idx,
+                scale_workers=max(1, workers),
+                replicate_setups=replicate_setups,
+                ctx=ctx,
+                resolved_runtime=resolved_runtime,
+                allow_truncation=allow_truncation,
+                shared_outcome_cache=shared_outcome_cache,
+                target=primary_setup.target,
+            )
+            replicates_by_scale[scale] = scale_replicates
+            point, decomp = _build_scaling_point(
+                scale=scale,
+                catalog_id=primary_setup.catalogs[step_idx - 1].id,
+                results=combined_results,
+                resolved_query_set=primary_query_set,
+                baseline_results=baseline_results,
+                installed_skills=installed_union,
+                target_skill=scoped_target,
+                seed=effective_config.catalog.seed,
+            )
+            points.append(point)
+            latest_results = combined_results
+            scale_query_map = {q.query_id: q for q in primary_query_set.queries}
+            truth_expected = {q.query_id: q.expected_skill for q in primary_query_set.queries}
+            scale_query_sums[scale] = _extract_query_outcomes(
+                combined_results,
+                truth_expected,
+                installed_union,
+                target_skill=scoped_target,
+                queries_by_id=scale_query_map,
+            )
 
-        if step_idx == 1 and point.all_probes_errored:
-            break
+            if scale == actual_scales[0]:
+                baseline_results = combined_results
+            elif decomp is not None:
+                final_decomp = decomp
 
-    result = _take_snapshot()
-    if temp_dir_obj is not None:
-        temp_dir_obj.cleanup()
-    return result
+            if on_scale_complete is not None:
+                on_scale_complete(step_idx, len(actual_scales), point, _take_snapshot())
+
+            if step_idx == 1 and point.all_probes_errored:
+                break
+
+        result = _take_snapshot()
+        if temp_dir_obj is not None:
+            temp_dir_obj.cleanup()
+        return result
+    finally:
+        if runtime is None:
+            resolved_runtime.cleanup()

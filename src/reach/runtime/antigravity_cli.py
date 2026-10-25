@@ -717,6 +717,17 @@ class _IsolatedHomeMixin:
             self._record_worker_slot(target_home, add=False)
             safe_cleanup_isolated_dir(self.home_dir, target_home)
 
+    def clean_conversation_state(self) -> None:
+        """Purge persisted conversation records, SQLite summaries, and isolated ADC file."""
+        target_home = self.effective_home_dir(sync=False)
+        _unlink_isolated_adc(target_home)
+        conversations, summaries_db = _conversation_state_paths(target_home)
+        if conversations.is_dir():
+            shutil.rmtree(conversations)
+        if summaries_db.exists():
+            summaries_db.unlink()
+        self._discard_worker_slot(target_home)
+
     def cleanup(self) -> None:
         """Remove isolated ADC credentials, tracked worker slots, and owned home directory."""
         opts = getattr(self, "options", None)
@@ -802,17 +813,6 @@ class AntigravityCliRuntime(
         )
         self._cached_skills_prompt = self.format_available_skills_prompt(workdir)
 
-    def clean_conversation_state(self) -> None:
-        """Purge persisted conversation records, SQLite summaries, and isolated ADC file."""
-        target_home = self.effective_home_dir(sync=False)
-        _unlink_isolated_adc(target_home)
-        conversations, summaries_db = _conversation_state_paths(target_home)
-        if conversations.is_dir():
-            shutil.rmtree(conversations)
-        if summaries_db.exists():
-            summaries_db.unlink()
-        self._discard_worker_slot(target_home)
-
     def build_command(self, query_text: str) -> list[str]:
         """Assemble command-line arguments for executing a probe."""
         options = self.options
@@ -890,7 +890,7 @@ class AntigravityCliRuntime(
             self.resident_skill_paths(workdir),
             workdir=resolve_path(workdir),
             allowed_tools=allowed,
-            home_dir=self.effective_home_dir(),
+            home_dir=self.effective_home_dir(sync=False),
         )
         if leaked:
             return f"tool leak: {', '.join(leaked)}"
@@ -995,6 +995,8 @@ class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityC
         finally:
             if home_dir is not None:
                 _unlink_isolated_adc(home_dir)
+            if self.options.auto_clean:
+                self.clean_conversation_state()
         if completed.returncode != 0:
             reason = completed.stderr.strip()
             if not reason and completed.stdout:

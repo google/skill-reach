@@ -29,7 +29,7 @@ from pydantic import ValidationError
 from reach.catalog import build_catalogs, load_skills
 from reach.config import DEFAULT_GEMINI_MODEL
 from reach.models import CatalogMode
-from reach.runtime import ToolCallInfo
+from reach.runtime import SessionSummary, ToolCallInfo
 from reach.runtime.antigravity_cli import (
     DENIED_PERMISSION_ACTIONS,
     AntigravityCliGenerator,
@@ -2405,3 +2405,87 @@ def test_read_file_step_update_with_capital_path_parameter(runtime: AntigravityC
         workdir="/work",
         allowed_tools=("read_file",),
     ) == ("read_file",)
+
+
+def test_generator_complete_auto_clean_discards_worker_slots_and_conversation_state(
+    home_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify AntigravityCliGenerator.complete cleans state and worker slots on auto_clean=True."""
+    gen = AntigravityCliGenerator(
+        model=DEFAULT_GEMINI_MODEL,
+        options=AntigravityCliOptions(
+            model=DEFAULT_GEMINI_MODEL,
+            home_dir=home_dir,
+            auto_clean=True,
+        ),
+    )
+
+    observed_slot: list[Path] = []
+
+    def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env") or {}
+        active_home = Path(env["HOME"])
+        observed_slot.append(active_home)
+        conv_dir, summaries_db = _conversation_state_paths(active_home)
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        (conv_dir / "conv.pb").write_text("data", encoding="utf-8")
+        summaries_db.write_text("sqlite", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"response": "drafted"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    # 1. Owner thread completion cleans conversation state while preserving owner home_dir
+    assert gen.complete("prompt on owner") == "drafted"
+    owner_conv, owner_db = _conversation_state_paths(home_dir)
+    assert not owner_conv.exists()
+    assert not owner_db.exists()
+    assert home_dir.is_dir()
+
+    # 2. Worker thread completion discards the worker slot directory under auto_clean=True
+    observed_slot.clear()
+    run_concurrent_workers(1, lambda _idx: gen.complete("prompt on worker"))
+    assert len(observed_slot) == 1
+    worker_slot = observed_slot[0]
+    assert worker_slot != home_dir.resolve()
+    assert not worker_slot.exists()
+    assert gen._worker_slots == set()
+    gen.cleanup()
+
+
+def test_validate_outcome_does_not_resync_worker_settings(
+    home_dir: Path,
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify validate_outcome uses effective_home_dir(sync=False) to avoid redundant I/O."""
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, auto_clean=False),
+    )
+    sync_calls: list[Path] = []
+    orig_sync = _sync_isolated_settings
+
+    def _spy_sync(src: Path, dst: Path) -> None:
+        sync_calls.append(dst)
+        orig_sync(src, dst)
+
+    monkeypatch.setattr("reach.runtime.antigravity_cli._sync_isolated_settings", _spy_sync)
+
+    summary = SessionSummary(
+        invoked_skills=(),
+        observed_catalog=(),
+        turns_taken=1,
+        status="SUCCESS",
+    )
+
+    def _worker(_idx: int) -> None:
+        assert rt.validate_outcome(summary, workdir) is None
+
+    run_concurrent_workers(1, _worker)
+    assert sync_calls == []
+    rt.cleanup()
