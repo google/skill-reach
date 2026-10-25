@@ -16,14 +16,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
 import subprocess
+import tempfile
 from abc import ABC
 from collections.abc import Mapping
 from math import floor
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, runtime_checkable
 
 from reach.config import DEFAULT_GEMINI_MODEL
 from reach.runtime._env import (
@@ -31,6 +34,7 @@ from reach.runtime._env import (
     resolve_blocked_env_vars,
     sanitize_subprocess_env,
 )
+from reach.runtime._fs import probe_slot_id, resolve_thread_slot_dir
 from reach.runtime.profiles import model_profile
 
 if TYPE_CHECKING:
@@ -88,6 +92,7 @@ class BaseTextGenerator[OptionsT: AgentOptions](ABC):
 
     name: str = "generator"
     options: OptionsT
+    _temp_dir_prefix: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -102,6 +107,7 @@ class BaseTextGenerator[OptionsT: AgentOptions](ABC):
         self.options = cast("OptionsT", options)
         self.completions = 0
         self.completion_cost_usd = 0.0
+        self._owner_slot_id = probe_slot_id()
 
     @property
     def model(self) -> str:
@@ -140,9 +146,33 @@ class BaseTextGenerator[OptionsT: AgentOptions](ABC):
         """Return blocked environment variables configured on options or settings."""
         return resolve_blocked_env_vars(self.options, getattr(self, "settings", None))
 
-    def build_env(self) -> dict[str, str]:
+    def effective_isolation_dir(self, isolation_dir: Path | None = None) -> Path | None:
+        """Return effective isolation directory when isolate_config_dir is enabled."""
+        if not getattr(self.options, "isolate_config_dir", False):
+            return None
+        if isolation_dir is not None:
+            return isolation_dir
+        if (custom := getattr(self.options, "custom_isolation_dir", None)) is not None:
+            return resolve_thread_slot_dir(custom, owner_slot_id=self._owner_slot_id)
+        return None
+
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble sanitized process environment for generator execution."""
+        del isolation_dir
         return sanitize_subprocess_env(dict(os.environ), blocked_env_vars=self.blocked_env_vars)
+
+    def _prepare_completion_env(self, stack: contextlib.ExitStack) -> dict[str, str]:
+        """Resolve completion environment, allocating an ephemeral isolation dir if needed."""
+        temp_dir: Path | None = None
+        if (
+            getattr(self.options, "isolate_config_dir", False)
+            and getattr(self.options, "custom_isolation_dir", None) is None
+            and self._temp_dir_prefix is not None
+        ):
+            temp_dir = Path(
+                stack.enter_context(tempfile.TemporaryDirectory(prefix=self._temp_dir_prefix))
+            )
+        return self.build_env(isolation_dir=temp_dir)
 
     def resolve_schema(
         self,
@@ -171,18 +201,27 @@ class BaseTextGenerator[OptionsT: AgentOptions](ABC):
         msg = f"{type(self).__name__} does not implement build_completion_command()"
         raise NotImplementedError(msg)
 
+    def _run_completion_subprocess(
+        self,
+        effective_prompt: str,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the completion command inside an ephemeral isolation context when enabled."""
+        with contextlib.ExitStack() as stack:
+            env = self._prepare_completion_env(stack)
+            return subprocess.run(
+                self.build_completion_command(effective_prompt),
+                input=effective_prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
+                check=False,
+                env=env,
+            )
+
     def complete(self, prompt: str, *, schema: str | Mapping[str, Any] | None = None) -> str:
         """Execute text completion subprocess piping prompt via stdin and return response string."""
         effective_prompt = self.format_prompt_with_schema(prompt, schema)
-        completed: subprocess.CompletedProcess[str] = subprocess.run(
-            self.build_completion_command(effective_prompt),
-            input=effective_prompt,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_s,
-            check=False,
-            env=self.build_env(),
-        )
+        completed = self._run_completion_subprocess(effective_prompt)
         if completed.returncode != 0:
             reason = completed.stderr.strip() or f"exit code {completed.returncode}"
             msg = f"generation failed: {reason}"

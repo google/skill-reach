@@ -47,9 +47,12 @@ from reach.runtime._env import (
     sanitize_subprocess_env,
 )
 from reach.runtime._fs import (
+    WorkspaceSlot,
+    cleanup_custom_isolation_dir,
     install_skills,
+    probe_slot_id,
     resolve_catalog_skills,
-    safe_cleanup_isolated_dir,
+    resolve_thread_slot_dir,
 )
 from reach.runtime._subprocess import (
     check_tool_leak,
@@ -85,7 +88,14 @@ __all__ = [
 
 
 class AgentOptions(BaseModel):
-    """Base configuration common to all agent drivers."""
+    """Configure options shared across all agent drivers.
+
+    Isolate per-probe agent configuration, session history, and concurrent
+    worker slots when ``isolate_config_dir`` is True using each harness's native
+    environment variables or flags (e.g. ``HOME`` for Goose and Antigravity CLI,
+    ``CLAUDE_CONFIG_DIR`` for Claude Code, ``PI_CODING_AGENT_DIR`` for Pi) so
+    probes do not contaminate each other or mutate host state.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
@@ -107,10 +117,10 @@ class AgentOptions(BaseModel):
 
     @property
     def custom_isolation_dir(self) -> Path | None:
-        """Return custom isolation directory path configured on this options instance, if any."""
+        """Return resolved custom isolation directory configured on this options instance."""
         if self.isolation_dir_field:
             val = getattr(self, self.isolation_dir_field, None)
-            return Path(val) if val is not None else None
+            return resolve_path(val) if val is not None else None
         return None
 
     @model_validator(mode="after")
@@ -244,6 +254,9 @@ class CliOptions(AgentOptions):
         return [flag, self.api_key] if self.api_key else []
 
 
+_DIRECT_PATH_KEYS: tuple[str, ...] = ("path", "Path", "AbsolutePath")
+
+
 class ToolCallInfo(BaseModel):
     """Represent an observed tool invocation and its parameters."""
 
@@ -261,7 +274,7 @@ class ToolCallInfo(BaseModel):
     ) -> None:
         """Initialize tool invocation with optional direct path argument."""
         params = dict(parameters or data.pop("parameters", None) or {})
-        if path is not None and "path" not in params and "AbsolutePath" not in params:
+        if path is not None and not any(k in params for k in _DIRECT_PATH_KEYS):
             params["path"] = str(path)
         super().__init__(name=name, parameters=params, **data)
 
@@ -274,7 +287,7 @@ class ToolCallInfo(BaseModel):
             params = dict(data.get("parameters") or {})
             if "path" in data:
                 val = data.pop("path")
-                if val is not None and "path" not in params and "AbsolutePath" not in params:
+                if val is not None and not any(k in params for k in _DIRECT_PATH_KEYS):
                     params["path"] = str(val)
             data["parameters"] = params
         return data
@@ -642,6 +655,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
     options: OptionsT = cast("Any", AgentOptions())
     api_key_env_var: str | None = None
     _resident: tuple[str, ...] = ()
+    _owner_slot_id: int | None = None
     is_dynamic: bool = False
 
     def __init__(
@@ -678,6 +692,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
             else:
                 self.options = cast("OptionsT", AgentOptions())
         self._resident = ()
+        self._owner_slot_id = probe_slot_id()
 
     @property
     def timeout_s(self) -> int | None:
@@ -769,6 +784,9 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         """Return True if this runtime executes via a CLI subprocess."""
         return False
 
+    isolation_dir_name: ClassVar[str | None] = None
+    extra_isolation_dir_names: ClassVar[tuple[str, ...]] = ()
+
     @property
     def isolation_dir_field(self) -> str | None:
         """Return the options field name used for custom directory isolation, if supported."""
@@ -778,6 +796,47 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
     def custom_isolation_dir(self) -> Path | None:
         """Return the configured custom isolation directory path, or None."""
         return getattr(self.options, "custom_isolation_dir", None)
+
+    def effective_isolation_dir(self, workdir: Path | None = None) -> Path | None:
+        """Return the effective isolated configuration directory for the given workspace."""
+        if not self.options.isolate_config_dir:
+            return None
+        if custom := self.custom_isolation_dir:
+            return resolve_thread_slot_dir(custom, owner_slot_id=self._owner_slot_id)
+        if workdir is not None and self.isolation_dir_name:
+            return WorkspaceSlot.for_subdir(workdir, self.isolation_dir_name).slot
+        return None
+
+    def _cleanup_isolation(
+        self,
+        workdir: Path,
+        *,
+        always_clean_slot: bool = False,
+    ) -> None:
+        """Clean isolated configuration, session, and slot directories for workdir.
+
+        When ``always_clean_slot`` is True (used by ``AntigravitySdkRuntime``), the
+        calling thread's workspace slot is removed even when ``auto_clean`` is False.
+        Custom isolation directories return directly on the owner thread and allocate
+        per-worker ``slot_<pid>_<tid>`` subdirectories on non-owner worker threads so
+        concurrent worker cleanup never deletes a sibling worker's active directory.
+        """
+        if self.options.auto_clean:
+            for extra_name in self.extra_isolation_dir_names:
+                WorkspaceSlot.for_subdir(workdir, extra_name).cleanup()
+        if not self.options.isolate_config_dir:
+            return
+        if custom := self.custom_isolation_dir:
+            cleanup_custom_isolation_dir(
+                workdir,
+                custom,
+                owner_slot_id=self._owner_slot_id,
+                clean_slot=self.options.auto_clean or always_clean_slot,
+                clean_owner=self.options.auto_clean,
+            )
+            return
+        if self.isolation_dir_name and (self.options.auto_clean or always_clean_slot):
+            WorkspaceSlot.for_subdir(workdir, self.isolation_dir_name).cleanup()
 
     def skills_dir(self, workdir: Path) -> Path:
         """Return standard skill directory path in the workspace."""
@@ -818,10 +877,56 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         """Execute post-probe cleanup actions."""
         del workdir
 
+    def _safe_post_probe(
+        self,
+        workdir: Path,
+        outcome: SelectionOutcome | None,
+    ) -> SelectionOutcome:
+        """Run post_probe cleanup without allowing cleanup errors to escape select()."""
+        try:
+            self.post_probe(workdir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post_probe cleanup failed for %s: %s", workdir, exc)
+            msg = f"post_probe cleanup failed: {exc}"
+            if outcome is None:
+                return SelectionOutcome(error=msg, observed_catalog=self._resident)
+            if outcome.error is None:
+                return outcome.model_copy(update={"error": msg})
+            return outcome.model_copy(update={"error": f"{outcome.error}; {msg}"})
+        if outcome is None:
+            return SelectionOutcome(
+                error="unexpected runtime error: missing probe outcome",
+                observed_catalog=self._resident,
+            )
+        return outcome
+
+    def _run_probe_with_cleanup(
+        self,
+        workdir: Path,
+        probe_fn: Callable[[], SelectionOutcome],
+        *,
+        catch_unexpected: bool = False,
+    ) -> SelectionOutcome:
+        """Execute probe_fn and guarantee post_probe cleanup via _safe_post_probe."""
+        outcome: SelectionOutcome | None = None
+        try:
+            outcome = probe_fn()
+        except Exception as exc:
+            if not catch_unexpected:
+                raise
+            outcome = SelectionOutcome(
+                error=f"unexpected runtime error: {exc}",
+                observed_catalog=self._resident,
+            )
+        finally:
+            outcome = self._safe_post_probe(workdir, outcome)
+        return outcome
+
     def clone_isolated(self) -> Self:
         """Create a thread-local isolated clone of this runtime."""
         clone = copy.copy(self)
         clone._resident = ()  # noqa: SLF001
+        clone._owner_slot_id = probe_slot_id()  # noqa: SLF001
         return clone
 
     def cleanup(self) -> None:  # noqa: B027
@@ -959,26 +1064,10 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
             return summary.error or f"runtime error: {summary.status}"
         return check_tool_leak(summary.observed_tools, self.allowed_tools)
 
-    isolation_dir_name: ClassVar[str | None] = None
-
-    def effective_isolation_dir(self, workdir: Path | None = None) -> Path | None:
-        """Return the effective isolated configuration directory for the given workspace."""
-        if not self.options.isolate_config_dir:
-            return None
-        if self.custom_isolation_dir:
-            return self.custom_isolation_dir
-        if workdir is not None and self.isolation_dir_name:
-            return Path(workdir) / self.isolation_dir_name
-        return None
-
     @override
     def post_probe(self, workdir: Path) -> None:
-        """Clean isolated configuration directory after probe if auto_clean is enabled."""
-        if not self.options.auto_clean:
-            return
-        iso_dir = self.effective_isolation_dir(workdir)
-        if iso_dir is not None:
-            safe_cleanup_isolated_dir(workdir, iso_dir)
+        """Clean isolated configuration and session directories after probe if auto_clean is set."""
+        self._cleanup_isolation(workdir)
 
     @override
     def select(
@@ -994,8 +1083,8 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
             skills = self.extract_skills_from_line(line)
             return tracker.observe(skills)
 
-        start_time = time.monotonic()
-        try:
+        def _probe() -> SelectionOutcome:
+            start_time = time.monotonic()
             completed, err = run_subprocess_probe(
                 self.build_command(query_text),
                 workdir,
@@ -1009,7 +1098,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
                     error=err or "subprocess failed",
                     observed_catalog=self._resident,
                 )
-
             summary = self.parse_stream(
                 completed.stdout.splitlines(),
                 resident=self._resident,
@@ -1023,7 +1111,6 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
                     error=f"no result event: {reason}",
                     observed_catalog=self._resident,
                 )
-
             catalog = getattr(summary, "observed_catalog", ()) or self._resident
             outcome = tracker.apply_to_outcome(
                 summary.to_outcome(
@@ -1032,20 +1119,12 @@ class CliAgentRuntime[CliOptionsT: CliOptions](AgentRuntime[CliOptionsT], ABC):
                     early_exit=tracker.early_exit_hit,
                 ),
             )
-
-            # Security tool leak and outcome validation
             if validation_error := self.validate_outcome(summary, workdir):
                 return outcome.model_copy(update={"error": validation_error})
-
             duration_ms = outcome.duration_ms or elapsed_ms
             return outcome.model_copy(update={"duration_ms": duration_ms})
-        except Exception as exc:  # noqa: BLE001
-            return SelectionOutcome(
-                error=f"unexpected runtime error: {exc}",
-                observed_catalog=self._resident,
-            )
-        finally:
-            self.post_probe(workdir)
+
+        return self._run_probe_with_cleanup(workdir, _probe, catch_unexpected=True)
 
 
 class SkillSelectionBase(BaseModel):

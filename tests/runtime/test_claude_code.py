@@ -41,7 +41,7 @@ from reach.runtime.claude_code import (
     parse_stream,
 )
 
-from .conftest import canned, claude_stream, install_one
+from .conftest import canned, claude_stream, expected_slot, install_one
 
 
 @pytest.fixture
@@ -357,10 +357,11 @@ def test_env_configures_isolated_claude_config_dir(
     runtime: ClaudeCodeRuntime,
     tmp_path: Path,
 ) -> None:
-    """Verify build_env configures CLAUDE_CONFIG_DIR pointing inside workdir."""
+    """Verify build_env configures CLAUDE_CONFIG_DIR to a per-thread slot inside workdir."""
     env = runtime.build_env(tmp_path)
-    assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path / ".reach_claude_config")
-    assert (tmp_path / ".reach_claude_config").is_dir()
+    slot = expected_slot(runtime, tmp_path)
+    assert env["CLAUDE_CONFIG_DIR"] == str(slot)
+    assert slot.is_dir()
 
 
 def test_env_syncs_claude_settings_and_defaults_region(
@@ -1292,27 +1293,6 @@ def test_resolve_options_propagates_enabled_plugins_into_claude_code_options() -
     assert payload["enabledPlugins"] == {"custom-mod@builtin": False}
 
 
-def test_generator_and_runtime_env_isolation_parity(tmp_path: Path) -> None:
-    """Verify ClaudeCodeRuntime and ClaudeGenerator share identical isolation variables."""
-    runtime = ClaudeCodeRuntime()
-    gen = ClaudeGenerator()
-    runtime_env = runtime.build_env(tmp_path)
-    gen_env = gen.build_env()
-
-    for var in DEFAULT_ISOLATION_ENV_VARS:
-        assert runtime_env[var] == "1"
-        assert gen_env[var] == "1"
-
-    kept_runtime = ClaudeCodeRuntime(options=ClaudeCodeOptions(disable_bundled_skills=False))
-    kept_gen = ClaudeGenerator(options=ClaudeCodeOptions(disable_bundled_skills=False))
-    kept_runtime_env = kept_runtime.build_env(tmp_path)
-    kept_gen_env = kept_gen.build_env()
-
-    for var in DEFAULT_ISOLATION_ENV_VARS:
-        assert var not in kept_runtime_env
-        assert var not in kept_gen_env
-
-
 def test_ambient_isolation_vars_popped_when_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1392,3 +1372,24 @@ def test_claude_code_options_vertex_project_and_location_aliases(
     env_off = rt_off.build_env(tmp_path / "work")
     assert "CLAUDE_CODE_USE_VERTEX" not in env_off
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_off
+
+
+def test_claude_generator_isolation_flags() -> None:
+    """Verify ClaudeGenerator disables tools, MCP, and dynamic prompt sections by default."""
+    gen = ClaudeGenerator()
+    cmd = gen.build_completion_command("prompt")
+    assert "--tools" in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in cmd
+    assert "--exclude-dynamic-system-prompt-sections" in cmd
+
+    gen_no_iso = ClaudeGenerator(
+        options=ClaudeCodeOptions(
+            isolate_config_dir=False,
+            strict_mcp_config=False,
+            exclude_dynamic_prompt=False,
+        ),
+    )
+    cmd_no_iso = gen_no_iso.build_completion_command("prompt")
+    assert "--strict-mcp-config" not in cmd_no_iso
+    assert "--exclude-dynamic-system-prompt-sections" not in cmd_no_iso

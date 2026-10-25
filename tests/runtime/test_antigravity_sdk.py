@@ -37,6 +37,12 @@ from .conftest import (
     FakeSdkAgent as _FakeAgent,
 )
 from .conftest import (
+    FakeSdkPopen,
+    expected_slot,
+    install_one,
+    run_concurrent_workers,
+)
+from .conftest import (
     FakeSdkResponse as _FakeResponse,
 )
 from .conftest import (
@@ -562,38 +568,56 @@ def test_antigravity_sdk_build_env_synchronizes_keys(monkeypatch: pytest.MonkeyP
 
 def test_select_config_sets_isolated_app_data_dir(
     tmp_path: Path,
+    workdir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify _select_config sets app_data_dir and creates directory when isolation is enabled."""
+    """Verify _select_config sets app_data_dir, save_dir, and creates directory when isolated."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-api-key")
-    workdir = tmp_path / "work"
-    workdir.mkdir()
 
     # Default isolation sets per-worker slot under workdir / .reach_antigravity_sdk
-    from reach.runtime._fs import probe_slot_dir
-
     rt = AntigravitySdkRuntime(options=AntigravitySdkOptions(model="test-model"))
     config = rt._select_config(workdir)
-    expected_dir = probe_slot_dir((workdir / ".reach_antigravity_sdk").resolve())
+    expected_dir = expected_slot(rt, workdir)
     assert config.app_data_dir == str(expected_dir)
+    assert config.save_dir == str(expected_dir)
     assert expected_dir.is_dir()
     assert "GEMINI_API_KEY" in (config.env or {}) or "GOOGLE_API_KEY" in (config.env or {})
 
-    # Custom app_data_dir is respected
+    # Custom app_data_dir is respected on owner and slotted per worker thread
     custom_dir = tmp_path / "custom_app_data"
     rt_custom = AntigravitySdkRuntime(
         options=AntigravitySdkOptions(model="test-model", app_data_dir=custom_dir),
     )
     config_custom = rt_custom._select_config(workdir)
     assert config_custom.app_data_dir == str(custom_dir.resolve())
+    assert config_custom.save_dir == str(custom_dir.resolve())
     assert custom_dir.is_dir()
 
-    # Disabling isolation leaves app_data_dir None
+    worker_configs = run_concurrent_workers(
+        2,
+        lambda _idx: rt_custom._select_config(workdir),
+    )
+    worker_dirs = {Path(cfg.app_data_dir) for cfg in worker_configs if cfg.app_data_dir}
+    assert len(worker_dirs) == 2
+    for w_dir in worker_dirs:
+        assert w_dir.parent == custom_dir.resolve()
+        assert w_dir.name.startswith("slot_")
+        assert w_dir.is_dir()
+
+    # Disabling isolation leaves app_data_dir None (or uses custom app_data_dir directly)
     rt_no_iso = AntigravitySdkRuntime(
         options=AntigravitySdkOptions(model="test-model", isolate_config_dir=False),
     )
     config_no_iso = rt_no_iso._select_config(workdir)
     assert config_no_iso.app_data_dir is None
+    rt_custom_no_iso = AntigravitySdkRuntime(
+        options=AntigravitySdkOptions(
+            model="test-model",
+            isolate_config_dir=False,
+            app_data_dir=custom_dir,
+        ),
+    )
+    assert rt_custom_no_iso._select_config(workdir).app_data_dir == str(custom_dir.resolve())
 
 
 def test_select_invokes_post_probe(
@@ -757,51 +781,6 @@ def test_select_preserves_turn1_directory_skill_order_and_cancels_on_early_exit(
     assert cancelled == [True]
 
 
-def test_post_probe_concurrent_workers_do_not_delete_active_sibling_slots(
-    tmp_path: Path,
-) -> None:
-    """Verify post_probe cleans only its own slot and preserves active sibling slots."""
-    import threading
-
-    workdir = tmp_path / "concurrent_work"
-    workdir.mkdir()
-    rt = AntigravitySdkRuntime(
-        options=AntigravitySdkOptions(model="test-model", auto_clean=True),
-    )
-
-    config_main = rt._select_config(workdir)
-    assert config_main.app_data_dir is not None
-    main_slot = Path(config_main.app_data_dir)
-    sentinel = main_slot / "active_session.json"
-    sentinel.write_text("{}", encoding="utf-8")
-
-    worker_slot_holder: list[Path] = []
-
-    def _worker_probe() -> None:
-        cfg_w = rt._select_config(workdir)
-        assert cfg_w.app_data_dir is not None
-        w_slot = Path(cfg_w.app_data_dir)
-        worker_slot_holder.append(w_slot)
-        (w_slot / "worker_session.json").write_text("{}", encoding="utf-8")
-        rt.post_probe(workdir)
-
-    t = threading.Thread(target=_worker_probe)
-    t.start()
-    t.join()
-
-    assert len(worker_slot_holder) == 1
-    assert worker_slot_holder[0] != main_slot
-    assert not worker_slot_holder[0].exists()
-    # Main thread's slot and sentinel file must remain intact while active!
-    assert main_slot.is_dir()
-    assert sentinel.is_file()
-
-    # When main thread finishes and runs post_probe, both slot and parent are removed
-    rt.post_probe(workdir)
-    assert not main_slot.exists()
-    assert not (workdir / ".reach_antigravity_sdk").exists()
-
-
 def test_complete_passes_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -820,28 +799,32 @@ def test_complete_passes_env(
 def test_generator_build_env_sanitizes_blocked_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify generator build_env sanitizes ambient secrets and respects blocked_env_vars."""
+    """Verify generator build_env masks ambient secrets so {**os.environ, **env} cannot leak."""
+    import os
+
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "leaked-secret")
     monkeypatch.setenv("CUSTOM_SECRET", "custom-value")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
 
-    # Default settings strip default blocked vars
+    # Default settings mask default blocked vars with "" so SDK's {**os.environ, **env} clears them
     default_gen = AntigravitySdkGenerator(
         options=AntigravitySdkOptions(model="test-model"),
     )
     default_env = default_gen.build_env()
-    assert "AWS_SECRET_ACCESS_KEY" not in default_env
+    assert default_env.get("AWS_SECRET_ACCESS_KEY") == ""
+    assert {**os.environ, **default_env}["AWS_SECRET_ACCESS_KEY"] == ""
     assert default_env.get("CUSTOM_SECRET") == "custom-value"
     assert default_env.get("GEMINI_API_KEY") == "test-gemini-key"
 
-    # Custom blocked settings strip specified vars
+    # Custom blocked settings mask specified vars with ""
     settings = RuntimeSettings(blocked_env_vars=["CUSTOM_SECRET"])
     custom_gen = AntigravitySdkGenerator(
         options=AntigravitySdkOptions(model="test-model"),
         settings=settings,
     )
     custom_env = custom_gen.build_env()
-    assert "CUSTOM_SECRET" not in custom_env
+    assert custom_env.get("CUSTOM_SECRET") == ""
+    assert {**os.environ, **custom_env}["CUSTOM_SECRET"] == ""
     assert custom_env.get("GEMINI_API_KEY") == "test-gemini-key"
 
 
@@ -1008,18 +991,23 @@ def test_effective_vertex_and_project_location_resolution(monkeypatch: pytest.Mo
 
 
 def test_express_vs_standard_mode_adc_key_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify ADC key isolation and Express Mode precedence."""
+    """Verify ADC key isolation masks ambient GEMINI/GOOGLE_API_KEY against os.environ merge."""
+    import os
+
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
     monkeypatch.setenv("GEMINI_API_KEY", "ambient-key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "ambient-google-key")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "ambient-project")
 
-    # Standard Mode (ADC): options.api_key is None
+    # Standard Mode (ADC): options.api_key is None -> masks ambient keys with ""
     rt = AntigravitySdkRuntime(options=AntigravitySdkOptions())
     assert rt.options.effective_vertex is True
     assert rt.options.effective_api_key is None
     env = rt.build_env()
-    assert "GEMINI_API_KEY" not in env
-    assert "GOOGLE_API_KEY" not in env
+    assert env.get("GEMINI_API_KEY") == ""
+    assert env.get("GOOGLE_API_KEY") == ""
+    assert {**os.environ, **env}["GEMINI_API_KEY"] == ""
+    assert {**os.environ, **env}["GOOGLE_API_KEY"] == ""
 
     # Express Mode: options.api_key is explicitly provided
     rt_express = AntigravitySdkRuntime(options=AntigravitySdkOptions(api_key="express-key"))
@@ -1086,14 +1074,96 @@ def test_effective_project_and_location_none_when_vertex_is_false(
 def test_blocked_env_vars_strips_google_application_credentials_in_vertex(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify build_env does not restore GOOGLE_APPLICATION_CREDENTIALS when explicitly blocked."""
+    """Verify build_env masks GOOGLE_APPLICATION_CREDENTIALS with '' when explicitly blocked."""
+    import os
+
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
     rt = AntigravitySdkRuntime(
         settings=RuntimeSettings(blocked_env_vars=("GOOGLE_APPLICATION_CREDENTIALS",)),
         options=AntigravitySdkOptions(vertex=True),
     )
     env = rt.build_env()
-    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert env.get("GOOGLE_APPLICATION_CREDENTIALS") == ""
+    assert {**os.environ, **env}["GOOGLE_APPLICATION_CREDENTIALS"] == ""
+
+
+def test_generator_complete_passes_ephemeral_save_dir_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+    generator: AntigravitySdkGenerator,
+    tmp_path: Path,
+) -> None:
+    """Verify complete passes ephemeral save_dir/app_data_dir or per-worker custom slots."""
+    instances = _fake_agent(monkeypatch, _FakeResponse(text="ok"))
+    generator.complete("test prompt")
+    save_dir = instances[0].config.save_dir
+    app_data_dir = instances[0].config.app_data_dir
+    assert isinstance(save_dir, str)
+    assert save_dir != ""
+    assert app_data_dir == save_dir
+    assert not Path(save_dir).exists()
+
+    custom_dir = tmp_path / "gen_custom_app_data"
+    custom_gen = AntigravitySdkGenerator(
+        options=AntigravitySdkOptions(model="test-model", app_data_dir=custom_dir),
+    )
+    instances.clear()
+    run_concurrent_workers(2, lambda _idx: custom_gen.complete("worker prompt"))
+    worker_dirs = {Path(inst.config.app_data_dir) for inst in instances if inst.config.app_data_dir}
+    assert len(worker_dirs) == 2
+    for w_dir in worker_dirs:
+        assert w_dir.parent == custom_dir.resolve()
+        assert w_dir.name.startswith("slot_")
+
+
+def test_select_scrubs_api_key_and_raw_stderr_from_exception_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Verify select redacts effective_api_key and strips Stderr and Harness stderr dumps."""
+    from reach.runtime.antigravity_sdk import _sanitize_sdk_error
+
+    rt = AntigravitySdkRuntime(
+        options=AntigravitySdkOptions(model="test-model", api_key="AIzaSySuperSecretKey123"),
+    )
+    rt._resident = ("gke-basics",)
+
+    class _StderrRaisingAgent(_FakeAgent):
+        @override
+        async def __aenter__(self) -> Never:
+            msg = (
+                "Server failed to start with key AIzaSySuperSecretKey123 "
+                "(exit code: 1).\nStderr:\npanic: secret stack trace\ngoroutine 1 [running]:"
+            )
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr("reach.runtime.antigravity_sdk.Agent", _StderrRaisingAgent)
+    outcome = rt.select("q", tmp_path / "work")
+    assert outcome.error is not None
+    assert "AIzaSySuperSecretKey123" not in outcome.error
+    assert "[REDACTED]" in outcome.error
+    assert "panic: secret stack trace" not in outcome.error
+    assert "Server failed to start" in outcome.error
+
+    class _HarnessStderrRaisingAgent(_FakeAgent):
+        @override
+        async def __aenter__(self) -> Never:
+            msg = (
+                "Harness exited unexpectedly (exit code: 2) with AIzaSySuperSecretKey123"
+                "\nHarness stderr:\nfatal: secret harness dump"
+            )
+            raise RuntimeError(msg)
+
+    monkeypatch.setattr("reach.runtime.antigravity_sdk.Agent", _HarnessStderrRaisingAgent)
+    outcome_harness = rt.select("q", tmp_path / "work")
+    assert outcome_harness.error is not None
+    assert "AIzaSySuperSecretKey123" not in outcome_harness.error
+    assert "secret harness dump" not in outcome_harness.error
+    assert "Harness exited unexpectedly" in outcome_harness.error
+
+    monkeypatch.setenv("GEMINI_API_KEY", "ambient-secret-key-999")
+    scrubbed_ambient = _sanitize_sdk_error("failed with ambient-secret-key-999", None)
+    assert "ambient-secret-key-999" not in scrubbed_ambient
+    assert "[REDACTED]" in scrubbed_ambient
 
 
 def test_select_async_hook_records_skill_when_early_exit_false_and_allows_view_file(
@@ -1746,8 +1816,10 @@ def test_antigravity_sdk_select_records_duration_ms(
         query_text: str,
         workdir: Path,
         target_skill: str | None = None,
+        *,
+        isolation_dir: Path | None = None,
     ) -> SelectionOutcome:
-        _ = (query_text, workdir, target_skill)
+        _ = (query_text, workdir, target_skill, isolation_dir)
         return SelectionOutcome(invoked_skills=("alpha",))
 
     monkeypatch.setattr(rt, "_select_async", _fake_select_async)
@@ -1849,3 +1921,51 @@ def test_auto_enables_vertex_when_project_configured_and_no_api_key(
     assert isinstance(driver_with_key, AntigravitySdkRuntime)
     assert driver_with_key.options.effective_vertex is False
     assert driver_with_key.options.effective_api_key == "test-dev-key"
+
+
+def test_select_inside_running_event_loop_cleans_resolved_slot(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: AntigravitySdkRuntime,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify select called from inside a running event loop cleans the slot it created."""
+    workdir = tmp_path / "work_loop"
+    installed = install_one(runtime, skill_repo, workdir)
+    _fake_agent(monkeypatch, _FakeResponse(structured={"selected_skill": installed}))
+
+    async def _invoke_from_running_loop() -> None:
+        outcome = runtime.select("how do I set up a cluster?", workdir)
+        assert outcome.invoked_skill == installed
+
+    asyncio.run(_invoke_from_running_loop())
+
+    sdk_root = workdir / ".reach_antigravity_sdk"
+    assert not list(sdk_root.glob("slot_*")) if sdk_root.exists() else True
+    assert not sdk_root.exists()
+
+
+@pytest.mark.parametrize("mode", ["select", "complete"])
+def test_select_and_complete_kill_spawned_harness_on_startup_cancelled_error(
+    cancelled_sdk_startup: tuple[list[FakeSdkPopen], list[bool]],
+    workdir: Path,
+    mode: str,
+) -> None:
+    """Verify SDK startup CancelledError terminates spawned process and closes exit stack."""
+    spawned_processes, exit_stacks_closed = cancelled_sdk_startup
+    opts = AntigravitySdkOptions(model="test-model")
+
+    if mode == "select":
+        rt = AntigravitySdkRuntime(options=opts)
+        rt._resident = ("gke-basics",)
+        outcome = rt.select("how to setup", workdir)
+        assert outcome.error == "timeout"
+    else:
+        gen = AntigravitySdkGenerator(options=opts)
+        assert gen.options.isolate_config_dir is True
+        with pytest.raises((asyncio.CancelledError, TimeoutError, RuntimeError)):
+            gen.complete("draft prompt")
+
+    assert len(spawned_processes) == 1
+    assert spawned_processes[0].killed or spawned_processes[0].terminated
+    assert len(exit_stacks_closed) >= 1

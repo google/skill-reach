@@ -16,18 +16,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Never, Self
 
 import pytest
 
 from reach.catalog import build_catalogs, load_skills
 from reach.config import DEFAULT_GEMINI_MODEL, RuntimeSettings
 from reach.models import Catalog, CatalogMode, Skill
-from reach.runtime import AgentRuntime, build_runtime
+from reach.runtime import AgentRuntime, build_runtime, known_agents, runtime_class
+from reach.runtime._fs import WorkspaceSlot
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,6 +45,25 @@ else:
 
 #: True when google.antigravity SDK is installed and available.
 HAS_ANTIGRAVITY: bool = ag_types is not None
+
+#: Default join and synchronization timeout in seconds for concurrent worker tests.
+WORKER_TIMEOUT: float = 10.0
+
+
+def slot_agents() -> tuple[str, ...]:
+    """Return known agent names whose runtime class defines an isolation_dir_name."""
+    return tuple(
+        agent
+        for agent in known_agents()
+        if getattr(runtime_class(agent), "isolation_dir_name", None)
+    )
+
+
+def expected_slot(runtime: AgentRuntime[Any], workdir: Path) -> Path:
+    """Return the calling thread's expected WorkspaceSlot directory for runtime and workdir."""
+    iso_name = runtime.isolation_dir_name
+    assert iso_name is not None
+    return WorkspaceSlot.for_subdir(workdir, iso_name).slot
 
 
 def agent_dependencies_met(agent: str) -> bool:
@@ -99,6 +121,14 @@ def skills(tmp_path: Path) -> list[Skill]:
 def home_dir(tmp_path: Path) -> Path:
     """Provide an isolated, agent-owned home directory."""
     return tmp_path / "agy-home"
+
+
+@pytest.fixture
+def workdir(tmp_path: Path) -> Path:
+    """Provide an initialized workspace directory inside tmp_path."""
+    path = tmp_path / "work"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture
@@ -659,3 +689,192 @@ def patch_sdk_agent(
 
     monkeypatch.setattr("reach.runtime.antigravity_sdk.Agent", factory)
     return instances
+
+
+class FakeSdkPopen:
+    """Mock subprocess.Popen tracking termination and wait calls during SDK startup."""
+
+    def __init__(self) -> None:
+        """Initialize mock process in running state."""
+        self.killed = False
+        self.terminated = False
+        self.waited = False
+
+    def poll(self) -> int | None:
+        """Return 0 once terminated or killed, otherwise None."""
+        return 0 if (self.killed or self.terminated) else None
+
+    def terminate(self) -> None:
+        """Mark the mock process as terminated."""
+        self.terminated = True
+
+    def kill(self) -> None:
+        """Mark the mock process as killed."""
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        """Record wait invocation and return exit code 0."""
+        del timeout
+        self.waited = True
+        return 0
+
+
+def patch_cancelled_sdk_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[FakeSdkPopen], list[bool]]:
+    """Patch Antigravity SDK Agent and LocalAgentConfig to raise CancelledError during startup."""
+    from reach.runtime.antigravity_sdk import AntigravitySdkOptions
+
+    spawned_processes: list[FakeSdkPopen] = []
+    exit_stacks_closed: list[bool] = []
+
+    class _FakeStrategy:
+        async def _connect_websocket(
+            self,
+            port: int,
+            api_key: str,
+            process: FakeSdkPopen,
+        ) -> Never:
+            del port, api_key, process
+            raise asyncio.CancelledError
+
+        async def __aenter__(self) -> Never:
+            proc = FakeSdkPopen()
+            spawned_processes.append(proc)
+            await self._connect_websocket(12345, "key", proc)
+
+        async def __aexit__(self, *args: object) -> None:
+            del args
+
+    class _FakeExitStack:
+        async def enter_async_context(self, cm: _FakeStrategy) -> Never:
+            return await cm.__aenter__()
+
+        async def aclose(self) -> None:
+            exit_stacks_closed.append(True)
+
+    class _CancelledStartupAgent:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+            self._config = config
+            self._exit_stack = _FakeExitStack()
+            self._strategy: Any = None
+
+        async def __aenter__(self) -> Never:
+            create_fn = getattr(self._config, "create_strategy", None)
+            strategy = create_fn() if callable(create_fn) else _FakeStrategy()
+            self._strategy = strategy
+            await self._exit_stack.enter_async_context(strategy)
+
+        async def __aexit__(self, *args: object) -> None:
+            del args
+            await self._exit_stack.aclose()
+
+    class _FakeLocalAgentConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.app_data_dir = kwargs.get("app_data_dir")
+            self.save_dir = kwargs.get("save_dir")
+
+        def create_strategy(self) -> _FakeStrategy:
+            return _FakeStrategy()
+
+    monkeypatch.setattr("reach.runtime.antigravity_sdk.Agent", _CancelledStartupAgent)
+    monkeypatch.setattr("reach.runtime.antigravity_sdk.LocalAgentConfig", _FakeLocalAgentConfig)
+    monkeypatch.setattr(
+        AntigravitySdkOptions,
+        "base_config_kwargs",
+        lambda _self, _model_spec, _env_map: {},
+    )
+    return spawned_processes, exit_stacks_closed
+
+
+@pytest.fixture
+def cancelled_sdk_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[FakeSdkPopen], list[bool]]:
+    """Provide patched SDK startup classes that raise CancelledError on handshake."""
+    return patch_cancelled_sdk_startup(monkeypatch)
+
+
+def run_concurrent_workers[T](
+    count: int,
+    fn: Callable[[int], T],
+    *,
+    timeout: float = WORKER_TIMEOUT,
+    on_error: Callable[[], None] | None = None,
+) -> list[T]:
+    """Run ``count`` worker threads, join with ``timeout``, and re-raise any worker exception."""
+    results: dict[int, T] = {}
+    errors: list[BaseException] = []
+
+    def _target(idx: int) -> None:
+        try:
+            results[idx] = fn(idx)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+            if on_error is not None:
+                on_error()
+
+    threads = [threading.Thread(target=_target, args=(idx,)) for idx in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=timeout)
+        assert not thread.is_alive()
+
+    if errors:
+        raise errors[0]
+    return [results[idx] for idx in range(count)]
+
+
+def run_staggered_two_worker_probe(
+    *,
+    setup_slot: Callable[[], Path],
+    cleanup_slot: Callable[[Path], None],
+    is_intact: Callable[[Path], bool],
+    is_cleaned: Callable[[Path], bool] = lambda slot: not slot.exists(),
+    timeout: float = WORKER_TIMEOUT,
+) -> tuple[Path, Path]:
+    """Run two concurrent worker threads where worker B cleans up while worker A is still active."""
+    ready_barrier = threading.Barrier(2, timeout=timeout)
+    b_cleaned_event = threading.Event()
+    checks: dict[str, bool] = {}
+
+    barrier_passed = False
+
+    def _abort_sync() -> None:
+        if not barrier_passed:
+            ready_barrier.abort()
+        b_cleaned_event.set()
+
+    def _worker(idx: int) -> Path:
+        nonlocal barrier_passed
+        clean_first = idx == 1
+        slot = setup_slot()
+        ready_barrier.wait()
+        barrier_passed = True
+        if clean_first:
+            try:
+                cleanup_slot(slot)
+            finally:
+                checks["b_cleaned"] = is_cleaned(slot)
+                b_cleaned_event.set()
+        else:
+            b_cleaned_event.wait(timeout=timeout)
+            checks["a_survived_b_cleanup"] = is_intact(slot)
+            cleanup_slot(slot)
+            checks["a_cleaned"] = is_cleaned(slot)
+        return slot
+
+    slot_a, slot_b = run_concurrent_workers(
+        2,
+        _worker,
+        timeout=timeout,
+        on_error=_abort_sync,
+    )
+    assert slot_a != slot_b
+    assert checks.get("b_cleaned") is True
+    assert checks.get("a_survived_b_cleanup") is True
+    assert checks.get("a_cleaned") is True
+    return slot_a, slot_b

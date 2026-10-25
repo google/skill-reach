@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
@@ -45,9 +43,9 @@ from reach.runtime._env import (
     sync_google_and_gemini_keys,
 )
 from reach.runtime._fs import (
+    WorkspaceSlot,
     ensure_private_directory,
     extract_tool_path,
-    probe_slot_dir,
     resolve_skill_from_path,
 )
 from reach.runtime._subprocess import (
@@ -142,6 +140,8 @@ class PiOptions(CliOptions):
             cmd.append("--no-extensions")
         if self.mcp_config is not None:
             cmd += ["--mcp-config", str(self.mcp_config)]
+        else:
+            cmd.append("--no-mcp")
         if self.no_themes:
             cmd.append("--no-themes")
         target_model = model or self.model
@@ -253,6 +253,7 @@ def parse_session_entries(
     prompt_tokens: int | None = None
     resolved_model = ""
     assistant_turns = 0
+    session_error: str | None = None
 
     has_entries = False
     for entry in entries:
@@ -264,6 +265,17 @@ def parse_session_entries(
         assistant_turns += 1
         if "model" in msg and isinstance(msg["model"], str):
             resolved_model = msg["model"]
+
+        error_msg = msg.get("errorMessage")
+        stop_reason = msg.get("stopReason")
+        if isinstance(error_msg, str) and error_msg.strip():
+            session_error = error_msg.strip()
+        elif stop_reason == "aborted":
+            session_error = "pi assistant turn aborted"
+        elif stop_reason == "error":
+            session_error = "pi assistant turn failed"
+        else:
+            session_error = None
 
         cost, toks = _extract_pi_message_usage(msg)
         if cost is not None:
@@ -278,6 +290,12 @@ def parse_session_entries(
         observed_tools.extend(m_tools)
         invoked.extend(m_invoked)
 
+    status: SessionStatus | None = None
+    if session_error is not None:
+        status = SessionStatus.ERROR
+    elif has_entries:
+        status = SessionStatus.SUCCESS
+
     return SessionSummary(
         invoked_skills=tuple(invoked),
         turns_taken=max(1, assistant_turns),
@@ -286,8 +304,8 @@ def parse_session_entries(
         cost_usd=cost_usd,
         prompt_tokens=prompt_tokens,
         resolved_model=resolved_model,
-        status=SessionStatus.SUCCESS if has_entries else None,
-        error=None,
+        status=status,
+        error=session_error,
     )
 
 
@@ -299,6 +317,7 @@ def _apply_pi_env(
     """Apply Pi telemetry suppression, API keys, and agent directory isolation to environment."""
     env["PI_TELEMETRY"] = "0"
     env["PI_SKIP_VERSION_CHECK"] = "1"
+    env["PI_OFFLINE"] = "1"
     apply_provider_api_key(
         env,
         provider=options.provider,
@@ -320,6 +339,7 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
     api_key_env_var: str | None = None
     _skills_subpath: str = ".pi/skills"
     isolation_dir_name: ClassVar[str | None] = ".reach_pi_agent"
+    extra_isolation_dir_names: ClassVar[tuple[str, ...]] = (SESSION_DIRNAME,)
 
     @override
     def parse_stream(
@@ -346,14 +366,18 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
         """Assemble command-line arguments for running a single-turn Pi probe."""
         options = self.options
         effective_session_dir = session_dir or Path(SESSION_DIRNAME)
+        safe_query = f" {query_text}" if query_text.startswith(("-", "@")) else query_text
         cmd = [
             options.executable,
             "-p",
-            query_text,
+            safe_query,
             "--session-dir",
             str(effective_session_dir),
             "--tools",
             options.tools,
+            "--no-skills",
+            "--skill",
+            self._skills_subpath,
             "--no-context-files",
             "--no-prompt-templates",
             "--approve",
@@ -375,20 +399,6 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
             self.effective_isolation_dir(workdir),
         )
 
-    @override
-    def post_probe(self, workdir: Path) -> None:
-        """Clean session and agent artifacts after probe execution if auto_clean is enabled."""
-        if not self.options.auto_clean:
-            return
-        session_root = (Path(workdir) / SESSION_DIRNAME).resolve()
-        slot_dir = probe_slot_dir(session_root)
-        if slot_dir.exists():
-            shutil.rmtree(slot_dir, ignore_errors=True)
-        # Prune the root only once the last concurrent worker has released its slot.
-        with contextlib.suppress(OSError):
-            session_root.rmdir()
-        super().post_probe(workdir)
-
     def _select_unmeasured(
         self,
         query_text: str,
@@ -396,7 +406,9 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe without attaching wall-clock duration."""
-        session_dir = ensure_private_directory(probe_slot_dir(Path(workdir) / SESSION_DIRNAME))
+        session_dir = ensure_private_directory(
+            WorkspaceSlot.for_subdir(workdir, SESSION_DIRNAME).slot,
+        )
         existing_files = set(session_dir.glob("*.jsonl"))
 
         cmd = self.build_command(query_text, session_dir)
@@ -451,13 +463,14 @@ class PiRuntime(CliAgentRuntime[PiOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe and return SelectionOutcome."""
-        t0 = time.monotonic()
-        try:
+
+        def _probe() -> SelectionOutcome:
+            t0 = time.monotonic()
             outcome = self._select_unmeasured(query_text, workdir, target_skill=target_skill)
             elapsed_ms = max(1, int((time.monotonic() - t0) * 1000))
             return outcome.model_copy(update={"duration_ms": outcome.duration_ms or elapsed_ms})
-        finally:
-            self.post_probe(workdir)
+
+        return self._run_probe_with_cleanup(workdir, _probe, catch_unexpected=True)
 
 
 class PiGenerator(BaseTextGenerator[PiOptions]):
@@ -465,6 +478,7 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
 
     name: str = "pi"
     options: PiOptions
+    _temp_dir_prefix: ClassVar[str | None] = "reach-pi-gen-"
 
     def __init__(
         self,
@@ -507,10 +521,10 @@ class PiGenerator(BaseTextGenerator[PiOptions]):
         return [*cmd, *self.options.extra_args]
 
     @override
-    def build_env(self) -> dict[str, str]:
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with API keys, isolation, and telemetry suppression."""
         return _apply_pi_env(
-            super().build_env(),
+            super().build_env(isolation_dir),
             self.options,
-            self.options.custom_isolation_dir,
+            self.effective_isolation_dir(isolation_dir),
         )

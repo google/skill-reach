@@ -206,14 +206,16 @@ class FakeRuntime(AgentRuntime[FakeOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Return scripted SelectionOutcome for the given query."""
-        try:
+
+        def _probe() -> SelectionOutcome:
             self.queries.append(query_text)
             answer = self._lookup(query_text)
             if isinstance(answer, SelectionOutcome):
-                if answer.observed_catalog:
-                    return answer
-                return answer.model_copy(update={"observed_catalog": self._resident})
-
+                return (
+                    answer
+                    if answer.observed_catalog
+                    else answer.model_copy(update={"observed_catalog": self._resident})
+                )
             raw_skills = (
                 (answer,)
                 if isinstance(answer, str)
@@ -229,8 +231,8 @@ class FakeRuntime(AgentRuntime[FakeOptions]):
                     duration_ms=1,
                 ),
             )
-        finally:
-            self.post_probe(workdir)
+
+        return self._run_probe_with_cleanup(workdir, _probe)
 
 
 def register_fake_agent() -> None:

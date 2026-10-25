@@ -19,15 +19,18 @@ from __future__ import annotations
 import atexit
 import contextlib
 import json
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Mapping
+import threading
+import weakref
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Self, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Self, override
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, NonNegativeInt, PositiveInt
 from pydantic import ValidationError as PydanticValidationError
 
 from reach.config import (
@@ -52,7 +55,10 @@ from reach.runtime._env import (
 )
 from reach.runtime._fs import (
     ensure_private_directory,
+    probe_slot_id,
     resolve_skill_from_path,
+    resolve_thread_slot_dir,
+    safe_cleanup_isolated_dir,
 )
 from reach.runtime._subprocess import (
     iter_json_lines,
@@ -62,6 +68,7 @@ from reach.runtime.generator import BaseTextGenerator
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
+logger = logging.getLogger(__name__)
 
 #: Tool identifier used by JSON schema structured outputs.
 FINISH_TOOL = "finish"
@@ -134,15 +141,96 @@ def _unlink_isolated_adc(home_dir: Path | None) -> None:
     if home_dir is None:
         return
     adc_file = _isolated_adc_path(home_dir)
-    with contextlib.suppress(OSError):
+    try:
         if adc_file.is_file() or adc_file.is_symlink():
             adc_file.unlink()
+    except OSError as exc:
+        logger.warning(
+            "Failed to unlink isolated ADC file %s (%s)",
+            adc_file,
+            type(exc).__name__,
+        )
 
 
 def _conversation_state_paths(home_dir: Path) -> tuple[Path, Path]:
     """Return paths to conversation history directories and databases under home_dir."""
     base = resolve_path(home_dir) / ".gemini" / "antigravity-cli"
     return (base / "conversations", base / "conversation_summaries.db")
+
+
+class _IsolatedPermissions(BaseModel):
+    """Represent the permissions block inside an isolated settings.json file."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    allow: list[str] | None = None
+    deny: Annotated[list[str], BeforeValidator(lambda v: [] if v is None else v)] = Field(
+        default_factory=list,
+    )
+
+
+class _IsolatedSettings(BaseModel):
+    """Represent the Antigravity CLI isolated settings.json configuration schema."""
+
+    model_config = ConfigDict(extra="allow", frozen=True, populate_by_name=True)
+
+    permissions: Annotated[
+        _IsolatedPermissions,
+        BeforeValidator(lambda v: {} if v is None else v),
+    ] = Field(default_factory=_IsolatedPermissions)
+    model_provider: str | None = Field(default=None, alias="modelProvider")
+    trusted_workspaces: list[str] | None = Field(default=None, alias="trustedWorkspaces")
+
+    @classmethod
+    def load(cls, path: Path, *, strict: bool = False) -> Self:
+        """Load and validate settings.json from disk, raising when strict."""
+        if not path.is_file():
+            return cls()
+        try:
+            return cls.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if strict:
+                raise
+            logger.warning(
+                "Failed to load isolated settings from %s (%s)",
+                path,
+                type(exc).__name__,
+            )
+            return cls()
+
+    def write(self, home_dir: Path) -> None:
+        """Rewrite .config deny path for home_dir and persist formatted settings.json."""
+        resolved_home = resolve_path(home_dir)
+        dst_path = _isolated_settings_path(resolved_home)
+        custom_deny = [
+            rule
+            for rule in self.permissions.deny
+            if rule not in DENIED_PERMISSION_ACTIONS
+            and not (rule.startswith("read_file(") and rule.endswith(("/.config)", "\\.config)")))
+        ]
+        merged_deny = list(
+            dict.fromkeys(
+                [
+                    *DENIED_PERMISSION_ACTIONS,
+                    *custom_deny,
+                    f"read_file({resolved_home / '.config'})",
+                ]
+            )
+        )
+        updated_perms = self.permissions.model_copy(update={"deny": merged_deny})
+        updated = self.model_copy(update={"permissions": updated_perms})
+        payload = updated.model_dump(by_alias=True, exclude_none=True)
+        serialized = json.dumps(payload, sort_keys=True, indent=2)
+        with contextlib.suppress(OSError):
+            if dst_path.is_file() and dst_path.read_text(encoding="utf-8") == serialized:
+                return
+        ensure_private_directory(resolved_home)
+        ensure_private_directory(dst_path.parent)
+        tmp_dst = dst_path.with_name(f".{dst_path.name}.{probe_slot_id()}.tmp")
+        tmp_dst.write_text(serialized, encoding="utf-8")
+        if os.name == "posix":
+            tmp_dst.chmod(0o600)
+        tmp_dst.replace(dst_path)
 
 
 def _ensure_isolated_settings(
@@ -154,25 +242,20 @@ def _ensure_isolated_settings(
 ) -> None:
     """Write or update isolated permissions and workspace trusts in settings.json."""
     resolved_home = resolve_path(home_dir)
-    ensure_private_directory(resolved_home)
-    path = _isolated_settings_path(resolved_home)
-    ensure_private_directory(path.parent)
-    settings: dict[str, Any] = {}
-    if path.exists():
-        settings = json.loads(path.read_text())
-    permissions: dict[str, Any] = {
-        "deny": [*DENIED_PERMISSION_ACTIONS, f"read_file({resolved_home / '.config'})"]
+    base = _IsolatedSettings.load(_isolated_settings_path(resolved_home), strict=True)
+    updates: dict[str, Any] = {
+        "permissions": base.permissions.model_copy(
+            update={
+                "allow": [f"read_file({resolve_path(allow_read)})"]
+                if allow_read is not None
+                else None,
+            },
+        ),
+        "model_provider": model_provider,
     }
-    if allow_read is not None:
-        permissions["allow"] = [f"read_file({resolve_path(allow_read)})"]
-    settings["permissions"] = permissions
-    if model_provider is not None:
-        settings["modelProvider"] = model_provider
-    else:
-        settings.pop("modelProvider", None)
     if trust is not None:
-        settings["trustedWorkspaces"] = [str(resolve_path(trust))]
-    path.write_text(json.dumps(settings, sort_keys=True, indent=2))
+        updates["trusted_workspaces"] = [str(resolve_path(trust))]
+    base.model_copy(update=updates).write(resolved_home)
 
 
 class AntigravityCliOptions(AntigravityOptions, CliOptions):
@@ -333,7 +416,7 @@ def _is_tool_allowed(
     if _is_sensitive_credential_path(attempt.path, home_dir=home_dir):
         return False
 
-    if attempt.name == VIEW_TOOL:
+    if attempt.name in (VIEW_TOOL, "read_file"):
         if attempt.path is None:
             return False
         resolved = resolve_path(attempt.path)
@@ -559,24 +642,54 @@ def parse_stream(
     )
 
 
+def _sync_isolated_settings(src_home: Path, dst_home: Path) -> None:
+    """Copy isolated settings from src_home into dst_home and rewrite its .config deny path."""
+    settings = _IsolatedSettings.load(_isolated_settings_path(resolve_path(src_home)))
+    settings.write(dst_home)
+
+
 class _IsolatedHomeMixin:
     """Manage an isolated Antigravity CLI home directory and its lifecycle."""
 
     options: AntigravityCliOptions
     model: str
     _owns_home_dir: bool = False
+    _worker_slots: set[Path] | None = None
+    _worker_slots_lock: threading.Lock | None = None
+    _atexit_cb: Callable[[], None] | None = None
 
     def _init_isolated_home(self, prefix: str) -> None:
         """Allocate an isolated home directory if unset and write initial settings.json."""
         self._owns_home_dir = self.options.home_dir is None
+        if getattr(self, "_owner_slot_id", None) is None:
+            self._owner_slot_id: int | None = probe_slot_id()
+        self._worker_slots = set()
+        self._worker_slots_lock = threading.Lock()
         if self._owns_home_dir:
-            home_dir = Path(tempfile.mkdtemp(prefix=prefix))
+            home_dir = resolve_path(Path(tempfile.mkdtemp(prefix=prefix)))
             self.options = self.options.model_copy(update={"home_dir": home_dir})
-            atexit.register(self.cleanup)
+        self_ref = weakref.ref(self)
+
+        def _atexit_cleanup() -> None:
+            if (obj := self_ref()) is not None:
+                obj.cleanup()
+
+        self._atexit_cb = _atexit_cleanup
+        atexit.register(_atexit_cleanup)
         _ensure_isolated_settings(
             self.home_dir,
             model_provider=self.options.resolve_model_provider(self.model),
         )
+
+    def _record_worker_slot(self, slot_home: Path, *, add: bool) -> None:
+        """Add or discard a worker slot path under _worker_slots_lock."""
+        if self._worker_slots is None or self._worker_slots_lock is None:
+            return
+        with self._worker_slots_lock:
+            if add:
+                self._worker_slots.add(slot_home)
+            else:
+                self._worker_slots.discard(slot_home)
 
     @property
     def home_dir(self) -> Path:
@@ -586,17 +699,45 @@ class _IsolatedHomeMixin:
             raise ValueError(msg)
         return self.options.home_dir
 
+    def effective_home_dir(self, *, sync: bool = True) -> Path:
+        """Return home_dir on the owner thread or a thread-isolated slot directory on workers."""
+        base_home = resolve_path(self.home_dir)
+        slot_home = resolve_thread_slot_dir(
+            base_home,
+            owner_slot_id=self._owner_slot_id,
+        )
+        if slot_home != base_home and sync:
+            self._record_worker_slot(slot_home, add=True)
+            _sync_isolated_settings(base_home, slot_home)
+        return slot_home
+
+    def _discard_worker_slot(self, target_home: Path) -> None:
+        """Remove a worker-isolated home slot directory without touching the owner home_dir."""
+        if resolve_path(target_home) != resolve_path(self.home_dir):
+            self._record_worker_slot(target_home, add=False)
+            safe_cleanup_isolated_dir(self.home_dir, target_home)
+
     def cleanup(self) -> None:
-        """Remove isolated ADC credentials and temporary home directory if owned."""
+        """Remove isolated ADC credentials, tracked worker slots, and owned home directory."""
         opts = getattr(self, "options", None)
         home_dir = opts.home_dir if opts is not None else None
         _unlink_isolated_adc(home_dir)
+        slots_to_clean: tuple[Path, ...] = ()
+        if self._worker_slots is not None and self._worker_slots_lock is not None:
+            with self._worker_slots_lock:
+                slots_to_clean = tuple(self._worker_slots)
+                self._worker_slots.clear()
+        if home_dir is not None:
+            for slot_dir in slots_to_clean:
+                safe_cleanup_isolated_dir(home_dir, slot_dir)
         if getattr(self, "_owns_home_dir", False) and home_dir is not None:
             if home_dir.is_dir():
                 shutil.rmtree(home_dir, ignore_errors=True)
             self._owns_home_dir = False
+        if self._atexit_cb is not None:
             with contextlib.suppress(Exception):
-                atexit.unregister(self.cleanup)
+                atexit.unregister(self._atexit_cb)
+            self._atexit_cb = None
 
     def __del__(self) -> None:
         """Clean up resources when garbage collected."""
@@ -630,7 +771,11 @@ class AntigravityCliRuntime(
         """Create a thread-local isolated clone with a dedicated temporary home directory."""
         cloned_options = self.options.model_copy(update={"home_dir": None})
         cloned = type(self)(settings=self.settings, options=cloned_options)
+        # Preserve installed catalog state and workspace trusts for callers like
+        # RetrieverRuntime.select (retriever.py:89) that clone an already-installed runtime.
+        cloned._resident = self._resident  # noqa: SLF001
         cloned._cached_skills_prompt = self._cached_skills_prompt  # noqa: SLF001
+        _sync_isolated_settings(self.home_dir, cloned.home_dir)
         return cloned
 
     def __enter__(self) -> Self:
@@ -659,12 +804,14 @@ class AntigravityCliRuntime(
 
     def clean_conversation_state(self) -> None:
         """Purge persisted conversation records, SQLite summaries, and isolated ADC file."""
-        _unlink_isolated_adc(self.home_dir)
-        conversations, summaries_db = _conversation_state_paths(self.home_dir)
+        target_home = self.effective_home_dir(sync=False)
+        _unlink_isolated_adc(target_home)
+        conversations, summaries_db = _conversation_state_paths(target_home)
         if conversations.is_dir():
             shutil.rmtree(conversations)
         if summaries_db.exists():
             summaries_db.unlink()
+        self._discard_worker_slot(target_home)
 
     def build_command(self, query_text: str) -> list[str]:
         """Assemble command-line arguments for executing a probe."""
@@ -723,7 +870,7 @@ class AntigravityCliRuntime(
         return _apply_agy_cli_env(
             super().build_env(workdir),
             self.options,
-            self.home_dir,
+            self.effective_home_dir(),
             self.blocked_env_vars,
         )
 
@@ -743,7 +890,7 @@ class AntigravityCliRuntime(
             self.resident_skill_paths(workdir),
             workdir=resolve_path(workdir),
             allowed_tools=allowed,
-            home_dir=self.home_dir,
+            home_dir=self.effective_home_dir(),
         )
         if leaked:
             return f"tool leak: {', '.join(leaked)}"
@@ -751,8 +898,9 @@ class AntigravityCliRuntime(
 
     @override
     def post_probe(self, workdir: Path) -> None:
-        """Clean conversation state after probe execution if auto_clean is enabled."""
+        """Unlink isolated ADC credentials and prune conversation state when auto_clean is set."""
         del workdir
+        _unlink_isolated_adc(self.effective_home_dir(sync=False))
         if self.options.auto_clean:
             self.clean_conversation_state()
 
@@ -763,6 +911,7 @@ class _AntigravityCompletion(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     response: str
+    structured_output: Any = None
 
 
 class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityCliOptions]):
@@ -791,12 +940,12 @@ class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityC
         self._init_isolated_home("reach-agy-draft-")
 
     @override
-    def build_env(self) -> dict[str, str]:
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with API keys, ADC credentials, and isolated home."""
         return _apply_agy_cli_env(
-            super().build_env(),
+            super().build_env(isolation_dir),
             self.options,
-            self.home_dir,
+            isolation_dir or self.effective_home_dir(),
             self.blocked_env_vars,
         )
 
@@ -832,15 +981,20 @@ class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityC
     ) -> str:
         """Execute text completion subprocess and return response string."""
         schema_str = self.resolve_schema(schema)
-        completed = subprocess.run(
-            self.build_completion_command(prompt, schema=schema_str),
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_s,
-            check=False,
-            env=self.build_env(),
-        )
+        home_dir = self.effective_home_dir()
+        try:
+            completed = subprocess.run(
+                self.build_completion_command(prompt, schema=schema_str),
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
+                check=False,
+                env=self.build_env(home_dir),
+            )
+        finally:
+            if home_dir is not None:
+                _unlink_isolated_adc(home_dir)
         if completed.returncode != 0:
             reason = completed.stderr.strip()
             if not reason and completed.stdout:
@@ -855,6 +1009,12 @@ class AntigravityCliGenerator(_IsolatedHomeMixin, BaseTextGenerator[AntigravityC
         try:
             envelope = _AntigravityCompletion.model_validate_json(completed.stdout)
             self.completions += 1
+            if schema_str and envelope.structured_output is not None:
+                return (
+                    envelope.structured_output
+                    if isinstance(envelope.structured_output, str)
+                    else json.dumps(envelope.structured_output)
+                )
             return envelope.response
         except PydanticValidationError:
             self.completions += 1

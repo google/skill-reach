@@ -192,7 +192,8 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Route query to literal skill mention first, falling back to BM25 description match."""
-        try:
+
+        def _probe() -> SelectionOutcome:
             if self._pattern is None and self._resident:
                 self._set_resident(self._resident)
 
@@ -208,8 +209,8 @@ class KeywordRuntime(AgentRuntime[KeywordOptions]):
                     duration_ms=1,
                 ),
             )
-        finally:
-            self.post_probe(workdir)
+
+        return self._run_probe_with_cleanup(workdir, _probe)
 
     @override
     def parse_stream(

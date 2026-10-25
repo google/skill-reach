@@ -66,6 +66,9 @@ def _normalize_goose_provider(provider: str | None) -> str | None:
     return cleaned or None
 
 
+_OPENAI_MODEL_PREFIXES: tuple[str, ...] = ("gpt-", "chatgpt-", "o1", "o3", "o4")
+
+
 class GooseOptions(CliOptions):
     """Hold configuration options for driving the Goose agent CLI."""
 
@@ -85,8 +88,13 @@ class GooseOptions(CliOptions):
         """Return canonical Goose provider, inferring from model when provider is unset."""
         if self.provider:
             return self.provider
-        if self.model.strip().lower().startswith("gemini"):
+        model_lower = self.model.strip().lower()
+        if model_lower.startswith("gemini"):
             return "google"
+        if model_lower.startswith("claude"):
+            return "anthropic"
+        if model_lower.startswith(_OPENAI_MODEL_PREFIXES):
+            return "openai"
         return _normalize_goose_provider(detect_model_provider(self.model, api_key=self.api_key))
 
 
@@ -302,15 +310,26 @@ def _apply_goose_env(
 ) -> dict[str, str]:
     """Apply Goose telemetry suppression, API keys, and XDG isolation to environment."""
     env["OTEL_SDK_DISABLED"] = "true"
+    env.pop("GOOSE_ADDITIONAL_CONFIG_FILES", None)
+    env.pop("GOOSE_PATH_ROOT", None)
+    effective_provider = options.effective_provider
+    if options.api_key and effective_provider is None:
+        msg = (
+            f"Cannot infer Goose provider for api_key from model {options.model!r}. "
+            "Set options.provider explicitly (e.g. 'google', 'anthropic', or 'openai')."
+        )
+        raise ValueError(msg)
     apply_provider_api_key(
         env,
-        provider=options.provider,
+        provider=effective_provider,
         api_key=options.api_key,
-        default_provider="openai",
+        default_provider="google",
     )
     sync_google_and_gemini_keys(env)
     if isolation_dir is not None:
         isolated_dir = ensure_private_directory(isolation_dir)
+        env["GOOSE_DISABLE_KEYRING"] = "1"
+        env["GOOSE_PATH_ROOT"] = str(isolated_dir)
         env["HOME"] = str(isolated_dir)
         env["XDG_CONFIG_HOME"] = str(isolated_dir / ".config")
         env["XDG_DATA_HOME"] = str(isolated_dir / ".local" / "share")
@@ -334,8 +353,7 @@ class GooseRuntime(CliAgentRuntime[GooseOptions]):
             opts.executable,
             "run",
             "-q",
-            "--text",
-            query_text,
+            f"--text={query_text}",
             "--output-format",
             "json",
             "--no-session",
@@ -411,6 +429,7 @@ class GooseGenerator(BaseTextGenerator[GooseOptions]):
 
     name: str = "goose"
     options: GooseOptions
+    _temp_dir_prefix: ClassVar[str | None] = "reach-goose-gen-"
 
     def __init__(
         self,
@@ -450,10 +469,10 @@ class GooseGenerator(BaseTextGenerator[GooseOptions]):
         return [*cmd, *opts.extra_args]
 
     @override
-    def build_env(self) -> dict[str, str]:
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with API keys, isolation, and telemetry suppression."""
         return _apply_goose_env(
-            super().build_env(),
+            super().build_env(isolation_dir),
             self.options,
-            self.options.custom_isolation_dir,
+            self.effective_isolation_dir(isolation_dir),
         )

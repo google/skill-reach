@@ -22,15 +22,16 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
-from collections.abc import Collection, Generator, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Collection, Generator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, override
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Mapping
+    from collections.abc import Coroutine
 
     from google.antigravity import Agent, LocalAgentConfig
     from google.antigravity import hooks as ag_hooks
@@ -71,6 +72,7 @@ from reach.runtime import (
     TrajectoryTracker,
 )
 from reach.runtime._env import (
+    DEFAULT_BLOCKED_ENV_VARS,
     raise_missing_agent_dependency,
     sync_google_and_gemini_keys,
 )
@@ -78,9 +80,7 @@ from reach.runtime._fs import (
     ensure_private_directory,
     extract_tool_path,
     normalize_skill_tool_args,
-    probe_slot_dir,
     resolve_skill_from_path,
-    safe_cleanup_isolated_dir,
 )
 from reach.runtime._subprocess import check_tool_leak
 from reach.runtime.generator import BaseTextGenerator
@@ -249,6 +249,104 @@ def _suppress_retryable_step_warnings() -> Generator[None, None, None]:
             _FILTER_REFCOUNT = max(0, _FILTER_REFCOUNT - 1)
             if _FILTER_REFCOUNT == 0 and _RETRYABLE_STEP_FILTER in root_logger.filters:
                 root_logger.removeFilter(_RETRYABLE_STEP_FILTER)
+
+
+_PROCESS_TERMINATE_TIMEOUT_S = 1.0
+_SDK_TEMP_DIR_PREFIX = "reach-agy-sdk-"
+
+
+class _SdkProcess(Protocol):
+    """Describe the minimal subprocess interface expected from a spawned SDK harness."""
+
+    def poll(self) -> int | None: ...
+    def terminate(self) -> None: ...
+    def kill(self) -> None: ...
+    def wait(self, timeout: float | None = None) -> object: ...
+
+
+def _terminate_sdk_process(process: _SdkProcess | None) -> None:
+    """Terminate or kill a spawned Antigravity harness process if still alive."""
+    if process is None:
+        return
+    poll_fn = getattr(process, "poll", None)
+    if callable(poll_fn) and poll_fn() is not None:
+        return
+    for method_name in ("terminate", "kill"):
+        fn = getattr(process, method_name, None)
+        if callable(fn):
+            with contextlib.suppress(Exception):
+                fn()
+    wait_fn = getattr(process, "wait", None)
+    if callable(wait_fn):
+        with contextlib.suppress(Exception):
+            wait_fn(timeout=_PROCESS_TERMINATE_TIMEOUT_S)
+
+
+@contextlib.asynccontextmanager
+async def _open_sdk_agent(config: LocalAgentConfig) -> AsyncGenerator[Any, None]:
+    """Enter an Antigravity SDK Agent while guaranteeing subprocess cleanup on cancellation.
+
+    ``google-antigravity`` 0.1.22 only catches ``Exception`` (not ``BaseException`` /
+    ``asyncio.CancelledError``) during ``Agent.__aenter__`` and ``_connect_websocket``,
+    which can orphan the spawned harness binary if ``asyncio.wait_for`` cancels startup.
+    """
+    spawned_processes: list[_SdkProcess | None] = []
+    orig_create_strategy = getattr(config, "create_strategy", None)
+    if callable(orig_create_strategy):
+
+        def _tracked_create_strategy(*args: object, **kwargs: object) -> object:
+            strategy = orig_create_strategy(*args, **kwargs)
+            orig_connect = getattr(strategy, "_connect_websocket", None)
+            if callable(orig_connect):
+
+                async def _tracked_connect(
+                    port: int,
+                    api_key: str,
+                    process: _SdkProcess | None,
+                ) -> object:
+                    spawned_processes.append(process)
+                    try:
+                        res = orig_connect(port, api_key, process)
+                        return await res if asyncio.iscoroutine(res) else res
+                    except BaseException:
+                        _terminate_sdk_process(process)
+                        raise
+
+                strategy._connect_websocket = _tracked_connect  # noqa: SLF001
+            return strategy
+
+        with contextlib.suppress(Exception):
+            setattr(config, "create_strategy", _tracked_create_strategy)  # noqa: B010
+
+    agent = Agent(config)
+    entered = False
+    try:
+        await agent.__aenter__()
+        entered = True
+        yield agent
+    except BaseException:
+        if not entered:
+            exit_stack = getattr(agent, "_exit_stack", None)
+            aclose_fn = getattr(exit_stack, "aclose", None)
+            if callable(aclose_fn):
+                with contextlib.suppress(Exception):
+                    res = aclose_fn()
+                    if asyncio.iscoroutine(res):
+                        await res
+            strategy = getattr(agent, "_strategy", None)
+            conn = getattr(strategy, "_connection", None)
+            if (conn_proc := getattr(conn, "_process", None)) is not None:
+                spawned_processes.append(conn_proc)
+            for proc in spawned_processes:
+                _terminate_sdk_process(proc)
+        raise
+    finally:
+        if entered:
+            try:
+                await agent.__aexit__(None, None, None)
+            finally:
+                for proc in spawned_processes:
+                    _terminate_sdk_process(proc)
 
 
 _DIR_READ_ERR_PATTERN = re.compile(r"read\s+([^\r\n]+?):\s*is a directory", flags=re.IGNORECASE)
@@ -528,20 +626,35 @@ class AntigravitySdkOptions(AntigravityOptions):
         return kwargs
 
 
+def _sanitize_sdk_error(message: str, api_key: str | None = None) -> str:
+    """Strip raw multi-line Stderr dumps and redact API keys from SDK error strings."""
+    cleaned = message
+    for marker in ("\nStderr:", "\nHarness stderr:"):
+        cleaned, _, _ = cleaned.partition(marker)
+    cleaned = cleaned.strip()
+    key_to_redact = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if key_to_redact:
+        cleaned = cleaned.replace(key_to_redact, "[REDACTED]")
+    return cleaned
+
+
 def _apply_agy_sdk_env(
     env: dict[str, str],
     options: AntigravitySdkOptions,
     blocked_env_vars: Iterable[str] | None = None,
 ) -> dict[str, str]:
-    """Apply API key synchronization and Vertex credential preservation to environment."""
+    """Apply API key synchronization, Vertex credential preservation, and os.environ masking."""
+    blocked = set(blocked_env_vars or ())
     if (api_key := options.effective_api_key) is not None:
         env["GEMINI_API_KEY"] = api_key
         env["GOOGLE_API_KEY"] = api_key
+        sync_google_and_gemini_keys(env)
     elif options.effective_vertex and not options.api_key:
         env.pop("GEMINI_API_KEY", None)
         env.pop("GOOGLE_API_KEY", None)
+    else:
+        sync_google_and_gemini_keys(env)
 
-    blocked = set(blocked_env_vars or ())
     if (
         options.effective_vertex
         and "GOOGLE_APPLICATION_CREDENTIALS" not in blocked
@@ -549,8 +662,22 @@ def _apply_agy_sdk_env(
         and "GOOGLE_APPLICATION_CREDENTIALS" not in env
     ):
         env["GOOGLE_APPLICATION_CREDENTIALS"] = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+    elif not options.effective_vertex:
+        effective_blocked = (
+            blocked if blocked_env_vars is not None else set(DEFAULT_BLOCKED_ENV_VARS)
+        )
+        if "GOOGLE_APPLICATION_CREDENTIALS" in effective_blocked:
+            env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
 
-    return sync_google_and_gemini_keys(env)
+    # google-antigravity (0.1.22, local_connection.py:1518) merges child env via
+    # {**os.environ, **env_map}, so popping a key from env_map alone would re-expose
+    # os.environ[key]. Setting stripped keys to "" overrides os.environ in the merge,
+    # and the Go localharness binary treats os.Getenv(k) == "" identically to unset.
+    for key in os.environ:
+        if key not in env:
+            env[key] = ""
+
+    return env
 
 
 class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
@@ -560,6 +687,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
     options: AntigravitySdkOptions
     api_key_env_var: str | None = "GEMINI_API_KEY"
     _skills_subpath = ".agents/skills"
+    isolation_dir_name: ClassVar[str | None] = ".reach_antigravity_sdk"
 
     def __init__(
         self,
@@ -591,27 +719,20 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
             return (*SELECTION_TOOLS, *MULTI_TURN_SELECTION_TOOLS)
         return MULTI_TURN_SELECTION_TOOLS
 
-    @staticmethod
-    def _resolve_sdk_slot(workdir: Path) -> tuple[Path, Path]:
-        """Resolve the root SDK directory and thread-isolated slot directory."""
-        sdk_root = (Path(workdir) / ".reach_antigravity_sdk").resolve()
-        return sdk_root, probe_slot_dir(sdk_root)
-
     def _select_config(
         self,
         workdir: Path,
         hooks: list[Any] | None = None,
+        *,
+        isolation_dir: Path | None = None,
     ) -> LocalAgentConfig:
         """Assemble LocalAgentConfig with turn budget, inspection tools, and hooks."""
         app_data_dir = None
-        if self.options.isolate_config_dir or self.options.app_data_dir:
-            sdk_target = (
-                self.options.app_data_dir
-                if self.options.app_data_dir is not None
-                else self._resolve_sdk_slot(workdir)[1]
-            )
-            sdk_dir = ensure_private_directory(sdk_target)
-            app_data_dir = str(sdk_dir)
+        sdk_target = (
+            isolation_dir if isolation_dir is not None else self.effective_isolation_dir(workdir)
+        ) or self.options.app_data_dir
+        if sdk_target is not None:
+            app_data_dir = str(ensure_private_directory(sdk_target))
 
         enabled_tools = list(self._default_selection_tools)
         if self.allowed_tools:
@@ -655,6 +776,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
                 ),
                 "budget_config": ag_types.BudgetConfig(max_model_calls=self.options.max_turns),
                 "app_data_dir": app_data_dir,
+                "save_dir": app_data_dir,
                 "hooks": hooks,
             }
         )
@@ -732,6 +854,8 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
         query_text: str,
         workdir: Path,
         target_skill: str | None = None,
+        *,
+        isolation_dir: Path | None = None,
     ) -> SelectionOutcome:
         """Execute chat evaluation asynchronously and return observed outcome."""
         tracker = self._make_tracker(target_skill)
@@ -744,7 +868,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
             agent_holder,
             post_step_seen,
         )
-        config = self._select_config(workdir, hooks=hooks_list)
+        config = self._select_config(workdir, hooks=hooks_list, isolation_dir=isolation_dir)
 
         data: Any = None
         text_out = ""
@@ -754,7 +878,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
 
         try:
             with _suppress_retryable_step_warnings():
-                async with Agent(config) as agent:
+                async with _open_sdk_agent(config) as agent:
                     agent_holder.append(agent)
                     try:
                         response = await agent.chat(query_text)
@@ -826,18 +950,7 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
     @override
     def post_probe(self, workdir: Path) -> None:
         """Clean ephemeral per-thread SDK slot or isolated app_data_dir after probe execution."""
-        if not self.options.isolate_config_dir:
-            return
-        if self.options.app_data_dir is None:
-            sdk_root, slot_dir = self._resolve_sdk_slot(workdir)
-            had_slot = slot_dir.exists()
-            safe_cleanup_isolated_dir(workdir, slot_dir)
-            if self.options.auto_clean or had_slot:
-                # Prune the root only once the last concurrent worker has released its slot.
-                with contextlib.suppress(OSError):
-                    sdk_root.rmdir()
-        elif self.options.auto_clean:
-            safe_cleanup_isolated_dir(workdir, self.options.app_data_dir)
+        self._cleanup_isolation(workdir, always_clean_slot=True)
 
     @override
     def select(
@@ -847,29 +960,36 @@ class AntigravitySdkRuntime(AntigravityRuntime[AntigravitySdkOptions]):
         target_skill: str | None = None,
     ) -> SelectionOutcome:
         """Execute query evaluation probe and return SelectionOutcome."""
-        t0 = time.monotonic()
-        try:
+
+        def _probe() -> SelectionOutcome:
+            t0 = time.monotonic()
             try:
+                isolation_dir = self.effective_isolation_dir(workdir)
                 outcome = _run_sync(
                     asyncio.wait_for(
-                        self._select_async(query_text, workdir, target_skill=target_skill),
+                        self._select_async(
+                            query_text,
+                            workdir,
+                            target_skill=target_skill,
+                            isolation_dir=isolation_dir,
+                        ),
                         timeout=self.timeout_s,
                     ),
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.CancelledError):
                 outcome = SelectionOutcome(
                     error="timeout",
                     observed_catalog=self._resident,
                 )
             except Exception as exc:  # noqa: BLE001
                 outcome = SelectionOutcome(
-                    error=str(exc),
+                    error=_sanitize_sdk_error(str(exc), self.options.effective_api_key),
                     observed_catalog=self._resident,
                 )
             elapsed_ms = max(1, int((time.monotonic() - t0) * 1000))
             return outcome.model_copy(update={"duration_ms": outcome.duration_ms or elapsed_ms})
-        finally:
-            self.post_probe(workdir)
+
+        return self._run_probe_with_cleanup(workdir, _probe)
 
 
 class AntigravitySdkGenerator(BaseTextGenerator[AntigravitySdkOptions]):
@@ -908,9 +1028,11 @@ class AntigravitySdkGenerator(BaseTextGenerator[AntigravitySdkOptions]):
         self.settings = settings
 
     @override
-    def build_env(self) -> dict[str, str]:
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble environment variables with API key synchronization."""
-        return _apply_agy_sdk_env(super().build_env(), self.options, self.blocked_env_vars)
+        return _apply_agy_sdk_env(
+            super().build_env(isolation_dir), self.options, self.blocked_env_vars
+        )
 
     @property
     @override
@@ -943,40 +1065,51 @@ class AntigravitySdkGenerator(BaseTextGenerator[AntigravitySdkOptions]):
             if caps is not None:
                 kwargs["capabilities"] = caps
 
-            config = LocalAgentConfig(**kwargs)
-            with _suppress_retryable_step_warnings():
-                async with Agent(config) as agent:
-                    response = await agent.chat(prompt)
-                    if schema_dict is not None:
-                        attr = getattr(response, "structured_output", None)
-                        structured = attr() if callable(attr) else attr
-                        if asyncio.iscoroutine(structured):
-                            structured = await structured
-                        if structured is not None:
-                            if hasattr(structured, "model_dump_json"):
-                                return structured.model_dump_json()
-                            if hasattr(structured, "model_dump"):
-                                return json.dumps(structured.model_dump())
-                            return json.dumps(structured)
-                        err_msg = _extract_history_error(agent) or (
-                            "empty structured output (likely rate-limited)"
-                        )
-                        raise ValueError(err_msg)
-                    text_out = await response.text()
-                    if not (text_out or "").strip():
-                        err_msg = _extract_history_error(agent) or (
-                            "empty response (likely rate-limited)"
-                        )
-                        raise ValueError(err_msg)
-                    return text_out
+            with tempfile.TemporaryDirectory(prefix=_SDK_TEMP_DIR_PREFIX) as temp_save_dir:
+                if self.options.app_data_dir is not None:
+                    target_dir = self.effective_isolation_dir() or self.options.app_data_dir
+                    app_dir = str(ensure_private_directory(target_dir))
+                    kwargs["app_data_dir"] = app_dir
+                    kwargs["save_dir"] = app_dir
+                else:
+                    if self.options.isolate_config_dir:
+                        kwargs["app_data_dir"] = temp_save_dir
+                    kwargs["save_dir"] = temp_save_dir
+                config = LocalAgentConfig(**kwargs)
+                with _suppress_retryable_step_warnings():
+                    async with _open_sdk_agent(config) as agent:
+                        response = await agent.chat(prompt)
+                        if schema_dict is not None:
+                            attr = getattr(response, "structured_output", None)
+                            structured = attr() if callable(attr) else attr
+                            if asyncio.iscoroutine(structured):
+                                structured = await structured
+                            if structured is not None:
+                                if hasattr(structured, "model_dump_json"):
+                                    return structured.model_dump_json()
+                                if hasattr(structured, "model_dump"):
+                                    return json.dumps(structured.model_dump())
+                                return json.dumps(structured)
+                            err_msg = _extract_history_error(agent) or (
+                                "empty structured output (likely rate-limited)"
+                            )
+                            raise ValueError(err_msg)
+                        text_out = await response.text()
+                        if not (text_out or "").strip():
+                            err_msg = _extract_history_error(agent) or (
+                                "empty response (likely rate-limited)"
+                            )
+                            raise ValueError(err_msg)
+                        return text_out
 
         try:
             text = _run_sync(asyncio.wait_for(_complete_async(), timeout=self.timeout_s))
-        except TimeoutError as err:
+        except (TimeoutError, asyncio.CancelledError) as err:
             msg = f"generation failed: timed out after {self.timeout_s}s"
             raise RuntimeError(msg) from err
         except (AntigravityValidationError, Exception) as err:
-            msg = f"generation failed: {err}"
+            sanitized = _sanitize_sdk_error(str(err), self.options.effective_api_key)
+            msg = f"generation failed: {sanitized}"
             raise RuntimeError(msg) from err
         self.completions += 1
         return text

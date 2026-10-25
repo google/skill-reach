@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -32,8 +32,7 @@ from reach.runtime import CliAgentRuntime, RuntimeSettings, build_runtime
 from reach.runtime._subprocess import run_subprocess_probe
 from reach.runtime.claude_code import ClaudeCodeRuntime
 
-if TYPE_CHECKING:
-    from pathlib import Path
+from .conftest import run_concurrent_workers
 
 pytestmark = pytest.mark.integration
 
@@ -62,29 +61,89 @@ def test_agent_binary_isolated_execution(
     workdir = tmp_path / f"work_{agent_name}"
     workdir.mkdir()
 
-    env = runtime.build_env(workdir)
+    try:
+        env = runtime.build_env(workdir)
 
-    # 1. Verify isolated configuration directory is created with private 0o700 permissions
-    iso_dir = runtime.effective_isolation_dir(workdir)
-    if iso_dir is not None:
-        assert iso_dir.is_dir()
-        assert (iso_dir.stat().st_mode & 0o777) == 0o700
+        # 1. Verify isolated configuration directory is created with private 0o700 permissions
+        iso_dir = runtime.effective_isolation_dir(workdir)
+        if iso_dir is not None:
+            assert iso_dir.is_dir()
+            assert (iso_dir.stat().st_mode & 0o777) == 0o700
 
-    # 2. Execute binary --version using Reach's isolated environment
-    completed, err = run_subprocess_probe(
-        [executable, "--version"],
-        workdir=workdir,
-        env=env,
-        timeout_s=5.0,
-    )
+        # 2. Execute binary --version using Reach's isolated environment
+        completed, err = run_subprocess_probe(
+            [executable, "--version"],
+            workdir=workdir,
+            env=env,
+            timeout_s=5.0,
+        )
 
-    assert err is None, f"Subprocess probe failed with error: {err}"
-    assert completed is not None
-    assert completed.returncode == 0, f"Command exited {completed.returncode}:\n{completed.stderr}"
-    assert len(completed.stdout.strip()) > 0, "Expected version string in stdout"
+        assert err is None, f"Subprocess probe failed with error: {err}"
+        assert completed is not None
+        assert completed.returncode == 0, (
+            f"Command exited {completed.returncode}:\n{completed.stderr}"
+        )
+        assert len(completed.stdout.strip()) > 0, "Expected version string in stdout"
 
-    # 3. Verify clean post-probe teardown
-    runtime.post_probe(workdir)
+        # 3. Verify clean post-probe teardown
+        runtime.post_probe(workdir)
+    finally:
+        runtime.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "executable", "env_var"),
+    [
+        ("claude-code", "claude", "CLAUDE_CONFIG_DIR"),
+        ("goose", "goose", "GOOSE_PATH_ROOT"),
+        ("pi", "pi", "PI_CODING_AGENT_DIR"),
+        ("antigravity-cli", "antigravity", "HOME"),
+    ],
+)
+def test_agent_binary_concurrent_worker_slot_isolation(
+    agent_name: str,
+    executable: str,
+    env_var: str,
+    tmp_path: Path,
+) -> None:
+    """Verify concurrent worker threads allocate distinct slot directories and clean up cleanly."""
+    if not shutil.which(executable):
+        pytest.skip(f"Agent binary {executable!r} not installed in PATH")
+
+    runtime = build_runtime(RuntimeSettings(agent=agent_name, options={"auto_clean": True}))
+    assert isinstance(runtime, CliAgentRuntime)
+    workdir = tmp_path / f"concurrent_{agent_name}"
+    workdir.mkdir()
+    observed_slots: list[Path] = []
+
+    def _worker(_idx: int) -> None:
+        env = runtime.build_env(workdir)
+        slot_path = Path(env[env_var])
+        assert slot_path.is_dir()
+        assert slot_path.name.startswith("slot_")
+        assert (slot_path.stat().st_mode & 0o777) == 0o700
+        observed_slots.append(slot_path)
+        completed, err = run_subprocess_probe(
+            [executable, "--version"],
+            workdir=workdir,
+            env=env,
+            timeout_s=5.0,
+        )
+        assert err is None, f"Concurrent probe failed with error: {err}"
+        assert completed is not None
+        assert completed.returncode == 0
+        runtime.post_probe(workdir)
+
+    try:
+        run_concurrent_workers(2, _worker)
+        assert len(observed_slots) == 2
+        assert observed_slots[0] != observed_slots[1]
+        for slot_path in observed_slots:
+            assert not slot_path.exists()
+        if runtime.isolation_dir_name is not None:
+            assert not (workdir / runtime.isolation_dir_name).exists()
+    finally:
+        runtime.cleanup()
 
 
 @pytest.mark.parametrize(("agent_name", "executable"), CLI_AGENTS)
@@ -100,31 +159,34 @@ def test_agent_cli_help_and_flag_compatibility(
     runtime = build_runtime(RuntimeSettings(agent=agent_name))
     workdir = tmp_path / f"work_{agent_name}"
     workdir.mkdir()
-    env = runtime.build_env(workdir)
+    try:
+        env = runtime.build_env(workdir)
 
-    completed, err = run_subprocess_probe(
-        [executable, "--help"],
-        workdir=workdir,
-        env=env,
-        timeout_s=5.0,
-    )
+        completed, err = run_subprocess_probe(
+            [executable, "--help"],
+            workdir=workdir,
+            env=env,
+            timeout_s=5.0,
+        )
 
-    assert err is None, f"Help probe failed with error: {err}"
-    assert completed is not None
-    assert completed.returncode == 0
-    assert len(completed.stdout.strip()) > 0
+        assert err is None, f"Help probe failed with error: {err}"
+        assert completed is not None
+        assert completed.returncode == 0
+        assert len(completed.stdout.strip()) > 0
 
-    if isinstance(runtime, ClaudeCodeRuntime):
-        cmd = runtime.build_command("preflight-query")
-        assert "--output-format" in cmd
-        assert "stream-json" in cmd
-        assert "--verbose" in cmd
-        assert "--strict-mcp-config" in cmd
-        assert "--no-session-persistence" in cmd
-        settings_str = runtime.options.settings_json()
-        if settings_str is not None:
-            parsed = json.loads(settings_str)
-            assert isinstance(parsed, dict)
+        if isinstance(runtime, ClaudeCodeRuntime):
+            cmd = runtime.build_command("preflight-query")
+            assert "--output-format" in cmd
+            assert "stream-json" in cmd
+            assert "--verbose" in cmd
+            assert "--strict-mcp-config" in cmd
+            assert "--no-session-persistence" in cmd
+            settings_str = runtime.options.settings_json()
+            if settings_str is not None:
+                parsed = json.loads(settings_str)
+                assert isinstance(parsed, dict)
+    finally:
+        runtime.cleanup()
 
 
 def test_doctor_diagnostics_live(synthetic_skills_repo: Path) -> None:
