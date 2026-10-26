@@ -139,6 +139,7 @@ reach eval cloud-deploy --workers 4
 | `--no-resume`                      | Flag    | `false`                  | Re-probe everything, ignoring results already in output.                                       |
 | `--append-across-arms`             | Flag    | `false`                  | Add probes to an `--out` recorded under a different configuration.                             |
 | `--allow-truncation`               | Flag    | `false`                  | Probe a catalog too wide for the runtime's skill listing without error.                        |
+| `--manifest-only`                  | Flag    | `false`                  | Install only `SKILL.md` into agent workspace, ignoring subdirectories and sibling symlinks.    |
 | `--yes`, `-y`                      | Flag    | `false`                  | Bypass interactive safety confirmation prompts.                                                |
 
 ### Query Generation
@@ -154,6 +155,7 @@ reach eval cloud-deploy --workers 4
 | `--draft-concurrency` | Integer | `1`                | Targets to draft concurrently.                                                               |
 | `--adversarial`       | Flag    | `false`            | Synthesize near-miss adversarial negative queries sharing target vocabulary.                 |
 | `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                                           |
+| `--out-of-scope`      | Flag    | `false`            | Draft out-of-scope negative queries without resident skill citations.                        |
 
 ### Recording & Artifacts
 

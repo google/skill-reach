@@ -469,18 +469,35 @@ def test_view_scaling_study_out_file(tmp_path: Path, sample_scaling_study: Scali
     assert "scale" in out_file.read_text(encoding="utf-8")
 
 
-def test_view_scaling_study_rejects_html_and_slice(
+def test_view_scaling_study_supports_html_and_rejects_slice(
     tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Verify reach view raises ValueError when HTML or slicing flags are passed with sweep."""
+    """Verify reach view generates HTML report for sweep and rejects slicing flags."""
     sweep_path = tmp_path / "sweep.json"
     sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
 
-    assert main(["view", str(sweep_path), "--format", "html"]) == 2
-    assert "HTML format is not supported for sweep artifacts" in capsys.readouterr().err
+    assert main(["view", str(sweep_path), "--format", "html"]) == 0
+    captured = capsys.readouterr()
+    assert "<!DOCTYPE html>" in captured.out
+    assert "<svg" in captured.out
 
     assert main(["view", str(sweep_path), "--filter-skill", "skill-a"]) == 2
     assert "Slicing flags" in capsys.readouterr().err
+
+
+def test_view_scaling_study_compare_html(
+    tmp_path: Path, sample_scaling_study: ScalingStudy, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify reach view with --compare generates HTML overlay."""
+    sweep_path = tmp_path / "sweep.json"
+    sweep_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+    compare_path = tmp_path / "sweep_compare.json"
+    compare_path.write_text(sample_scaling_study.model_dump_json(), encoding="utf-8")
+
+    assert main(["view", str(sweep_path), "--compare", str(compare_path), "--format", "html"]) == 0
+    captured = capsys.readouterr()
+    assert "<!DOCTYPE html>" in captured.out
+    assert "Comparison Baseline" in captured.out
 
 
 def test_view_defaults_to_sweep_json_when_eval_absent(
@@ -597,3 +614,22 @@ def test_view_browser_default_out_and_alt_artifact_fallback(
 
     # Passing a directory as artifact triggers OSError when reading text (exit 2)
     assert main(["view", str(reach_dir)]) == 2
+
+
+def test_render_sweep_html_handles_empty_points_and_single_scale(
+    sample_scaling_study: ScalingStudy,
+) -> None:
+    """Verify render_sweep_html safely renders empty points and single-scale sweeps."""
+    from reach.views.sweep import render_sweep, render_sweep_html
+
+    empty_study = sample_scaling_study.model_copy(update={"points": ()})
+    empty_html = render_sweep_html(empty_study)
+    assert "No scaling points recorded" in empty_html
+
+    single_pt = sample_scaling_study.points[0]
+    single_study = sample_scaling_study.model_copy(
+        update={"scales": (single_pt.scale,), "points": (single_pt,)}
+    )
+    single_html = render_sweep(single_study, "html", compare=single_study)
+    assert f"K={single_pt.scale}" in single_html
+    assert "<circle" in single_html

@@ -48,6 +48,7 @@ reach query --queries .reach/queries.json --leaks --citations
 | `--generator-arm`     | Choice  | `None`             | Prompt synthesis arm (`content` or `framing`).                                                                                |
 | `--adversarial`       | Flag    | `false`            | Synthesize near-miss negative queries sharing target vocabulary.                                                              |
 | `--adversarial-count` | Integer | `1`                | Number of adversarial negative queries per target.                                                                            |
+| `--out-of-scope`      | Flag    | `false`            | Draft out-of-scope negative queries without resident skill citations.                                                         |
 | `--top-rivals`        | Integer | `3`                | Maximum number of rival skills to include in prompt context.                                                                  |
 | `--draft-concurrency` | Integer | `1`                | Parallel concurrency for query generation workers.                                                                            |
 | `--review`            | Flag    | `false`            | Launch interactive browser review for drafted queries before saving.                                                          |

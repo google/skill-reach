@@ -170,6 +170,7 @@ similarity_threshold = 0.92
 # Process execution timeout and runtime parameters (agent inherits from [general].default_agent when omitted).
 # agent = "antigravity-cli"
 early_exit = true
+# manifest_only = false
 max_turns = 3
 timeout_s = 200
 # Explicit list of environment variables stripped from agent subprocesses (overrides defaults):
@@ -178,6 +179,7 @@ timeout_s = 200
 [study]
 # Default parameters used by evaluation commands (`reach eval`, `reach check`, `reach optimize`, `reach sweep`).
 catalog = "auto"
+# knee_metric = "trajectory"
 partial = false
 rescope = false
 tag = ""

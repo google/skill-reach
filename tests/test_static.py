@@ -26,6 +26,8 @@ from reach.static import (
     get_review_css,
     get_review_js,
     get_review_template,
+    get_sweep_css,
+    get_sweep_template,
     get_view_css,
     get_view_js,
     get_view_template,
@@ -46,10 +48,12 @@ def clean_static_cache() -> Generator[None, None, None]:
     [
         ("tokens.css", ("/*", "*/")),
         ("base.css", ("/*", "*/")),
+        ("sweep.css", ("/*", "*/")),
         ("view.html", ("<!--", "-->")),
         ("review.html", ("<!--", "-->")),
+        ("sweep.html", ("<!--", "-->")),
     ],
-    ids=["tokens.css", "base.css", "view.html", "review.html"],
+    ids=["tokens.css", "base.css", "sweep.css", "view.html", "review.html", "sweep.html"],
 )
 def test_load_static_asset_strips_comments(filename: str, forbidden_markers: Sequence[str]) -> None:
     """Verify load_static_asset strips comment blocks from CSS and HTML assets."""
@@ -139,12 +143,23 @@ def test_load_static_asset_nonexistent_raises_file_not_found() -> None:
     [
         get_review_css,
         get_view_css,
+        get_sweep_css,
         get_review_js,
         get_view_js,
         get_review_template,
         get_view_template,
+        get_sweep_template,
     ],
-    ids=["review_css", "view_css", "review_js", "view_js", "review_tmpl", "view_tmpl"],
+    ids=[
+        "review_css",
+        "view_css",
+        "sweep_css",
+        "review_js",
+        "view_js",
+        "review_tmpl",
+        "view_tmpl",
+        "sweep_tmpl",
+    ],
 )
 def test_bundled_assets_contain_no_external_urls(
     asset_fn: Callable[[], str],
@@ -165,8 +180,12 @@ def test_bundled_assets_contain_no_external_urls(
             get_view_css,
             (":root", "body", "table.confusion", ".figure-cell"),
         ),
+        (
+            get_sweep_css,
+            (":root", "body", ".chart-container", ".metric-value"),
+        ),
     ],
-    ids=["review_css", "view_css"],
+    ids=["review_css", "view_css", "sweep_css"],
 )
 def test_css_bundles_contain_expected_rules(
     css_getter: Callable[[], str],

@@ -709,6 +709,34 @@ def test_install_skills_copies_when_use_symlinks_is_false(
     assert (dest / skills[0].name / "SKILL.md").is_file()
 
 
+def test_install_skills_manifest_only_copies_only_skill_md(
+    tmp_path: Path,
+) -> None:
+    """Verify install_skills with manifest_only=True copies only SKILL.md."""
+    skill_dir = tmp_path / "repo" / "skill-test"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: skill-test\ndescription: Test description.\n---\nBody",
+        encoding="utf-8",
+    )
+    (skill_dir / "scripts").mkdir()
+    (skill_dir / "scripts" / "run.sh").write_text("#!/bin/bash\necho ok", encoding="utf-8")
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("secret", encoding="utf-8")
+    (skill_dir / "leak_symlink").symlink_to(outside_file)
+
+    skill = Skill(name="skill-test", description="Test description.", path=skill_dir)
+    catalog = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("skill-test",))
+    dest = tmp_path / "installed_skills"
+
+    installed = install_skills(catalog, {"skill-test": skill}, dest, manifest_only=True)
+    assert installed == ("skill-test",)
+    installed_skill = dest / "skill-test"
+    assert (installed_skill / "SKILL.md").is_file()
+    assert not (installed_skill / "scripts").exists()
+    assert not (installed_skill / "leak_symlink").exists()
+
+
 def test_install_skills_falls_back_to_copy_on_symlink_error(
     skill_repo: Path,
     tmp_path: Path,
@@ -3664,3 +3692,37 @@ def test_cli_generators_complete_uses_ephemeral_isolation_dir_by_default(
     monkeypatch.setattr(subprocess, "run", _fake_run_no_iso)
     assert gen_no_iso.complete("draft a query") == "drafted query"
     assert env_var not in captured_envs[0]
+
+
+def test_install_skills_manifest_only_validates_manifest_symlink(tmp_path: Path) -> None:
+    """Verify manifest_only rejects escaping or broken SKILL.md symlinks while ignoring siblings."""
+    secret_file = tmp_path / "secret.md"
+    secret_file.write_text("secret", encoding="utf-8")
+
+    # 1. Escaping SKILL.md symlink is rejected
+    escape_dir = tmp_path / "escape-skill"
+    escape_dir.mkdir()
+    (escape_dir / "SKILL.md").symlink_to(secret_file)
+    escape_skill = Skill(name="escape-skill", description="Escape", path=escape_dir)
+    catalog_esc = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("escape-skill",))
+    with pytest.raises(ValueError, match="escaping skill directory"):
+        install_skills(
+            catalog_esc,
+            {"escape-skill": escape_skill},
+            tmp_path / "dest_esc",
+            manifest_only=True,
+        )
+
+    # 2. Broken SKILL.md symlink is rejected
+    broken_dir = tmp_path / "broken-skill"
+    broken_dir.mkdir()
+    (broken_dir / "SKILL.md").symlink_to(broken_dir / "missing.md")
+    broken_skill = Skill(name="broken-skill", description="Broken", path=broken_dir)
+    catalog_brk = Catalog(id="c", mode=CatalogMode.SINGLETON, skills=("broken-skill",))
+    with pytest.raises(ValueError, match="broken or cyclical symlink"):
+        install_skills(
+            catalog_brk,
+            {"broken-skill": broken_skill},
+            tmp_path / "dest_brk",
+            manifest_only=True,
+        )

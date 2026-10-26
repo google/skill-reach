@@ -92,13 +92,19 @@ Output:
 ///
 
 /// tab | Scaling sweep study
-Render recorded capacity decay, knee metrics, and scaling curves from a sweep artifact:
+Render recorded capacity decay, knee metrics, and scaling curves from a sweep artifact in the terminal:
 
 ```bash
 reach view .reach/sweep.json
 ```
 
-Or export to CSV format:
+Generate a standalone HTML scaling report with an inline SVG capacity curve, 95% bootstrap CI band, first-turn entrypoint curve, per-scale scorecard, and replicate collision attribution (optionally overlaying a baseline sweep via `--compare`):
+
+```bash
+reach view .reach/sweep.json --compare .reach/sweep_keyword.json --format html -o sweep_report.html
+```
+
+Or export per-scale metrics to CSV format:
 
 ```bash
 reach view .reach/sweep.json --format csv > sweep.csv
@@ -114,6 +120,7 @@ reach view .reach/sweep.json --format csv > sweep.csv
 | :---------------- | :----- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ARTIFACT`        | Path   | `.reach/eval.json` | Path to the evaluation or sweep artifact JSON file. If omitted, defaults to `.reach/eval.json` (or `.reach/sweep.json`).                                                              |
 | `--out`, `-o`     | Path   | -                  | Destination path to write the rendered report (defaults to stdout).                                                                                                                   |
+| `--compare`       | Path   | -                  | Path to baseline `sweep.json` artifact for comparative scaling curve overlay (HTML format only).                                                                                      |
 | `--open`, `-O`    | Flag   | `false`            | Open the rendered HTML report directly in the default web browser.                                                                                                                    |
 | `--show-queries`  | Flag   | `false`            | Display individual scored query records below the summary scorecard.                                                                                                                  |
 | `--queries`, `-q` | Path   | -                  | Subset query set file used to slice the recorded evaluation run.                                                                                                                      |

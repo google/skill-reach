@@ -108,6 +108,7 @@ class AgentOptions(BaseModel):
     blocked_env_vars: tuple[str, ...] | None = None
     api_key: str | None = None
     use_symlinks: bool = True
+    manifest_only: bool = False
     isolate_config_dir: bool = True
     auto_clean: bool = False
     json_schema: str | None = None
@@ -775,6 +776,13 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
         return self.options.auto_clean
 
     @property
+    def manifest_only(self) -> bool:
+        """Return whether to install only SKILL.md manifests."""
+        return self.options.manifest_only or (
+            self.settings.manifest_only if self.settings is not None else False
+        )
+
+    @property
     def rations_catalog(self) -> bool:
         """Return True if this runtime actively rations skill listing budgets."""
         return False
@@ -861,6 +869,7 @@ class AgentRuntime[OptionsT: AgentOptions](ABC):
             by_name,
             self.skills_dir(target),
             use_symlinks=self.use_symlinks,
+            manifest_only=self.manifest_only,
         )
         self._post_install(target)
         return target
@@ -1285,6 +1294,8 @@ def resolve_options(settings: RuntimeSettings) -> BaseModel | None:
             and getattr(settings, "blocked_env_vars", None) is not None
         ):
             raw["blocked_env_vars"] = settings.blocked_env_vars
+        if "manifest_only" not in raw and getattr(settings, "manifest_only", None) is not None:
+            raw["manifest_only"] = settings.manifest_only
         return model.model_validate(raw)
     if raw:
         msg = f"{_no_options_reason(settings.agent)}; got {sorted(raw)}"

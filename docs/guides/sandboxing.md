@@ -56,6 +56,10 @@ Every Reach agent driver operates within four isolation boundaries:
 3. **Ambient Context Neutralization**: Repository-level instruction files, developer preference hints, and persistent auto-memory are bypassed to prevent external prompt bias.
 4. **Session & Workspace Scoping**: Probes execute in ephemeral working directories with isolated configuration paths to ensure probe independence and prevent cross-query state leakage.
 
+/// tip | Manifest-Only Workspace Staging (`--manifest-only`)
+When benchmarking third-party skill repositories where only `SKILL.md` routing and activation are under test, pass `--manifest-only` (or set `manifest_only = true` under `[runtime]` in `reach.toml`). This stages only each skill's `SKILL.md` file into `<workspace>/<skill.name>/SKILL.md`, skipping bundled `scripts/`, subdirectories, and sibling symlinks.
+///
+
 ---
 
 ### Agent-Specific Isolation Mechanisms

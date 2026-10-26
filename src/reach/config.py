@@ -24,7 +24,7 @@ from copy import deepcopy
 from enum import StrEnum
 from functools import cache, cached_property
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, NamedTuple, Self, cast
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self, cast
 
 from pydantic import (
     BaseModel,
@@ -450,6 +450,7 @@ class RuntimeSettings(BaseModel):
     timeout_s: int = Field(default=200, gt=0)
     max_turns: int = Field(default=3, ge=1)
     early_exit: bool = True
+    manifest_only: bool = False
 
     @model_validator(mode="after")
     def _options_match_the_agent(self) -> Self:
@@ -795,6 +796,7 @@ class StudySettings(BaseModel):
     bootstrap_iterations: int = Field(default=200, ge=10)
     bootstrap_seed: int | None = Field(default=42)
     catalog_replicates: Annotated[int, Field(ge=1, le=20)] = 1
+    knee_metric: Literal["trajectory", "entrypoint"] = "trajectory"
 
     @field_validator("anchor", mode="before")
     @classmethod

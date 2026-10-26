@@ -306,8 +306,9 @@ def _execute_draft_generation(
         arm=generate.generator_arm,
         top_rivals=generate.top_rivals,
         concurrency=generate.draft_concurrency,
-        adversarial=generate.adversarial,
+        adversarial=generate.adversarial or bool(generate.out_of_scope),
         adversarial_count=generate.adversarial_count,
+        out_of_scope=generate.out_of_scope,
     )
     query_set = _update_draft_provenance(
         whole(drafted),
@@ -425,8 +426,9 @@ def _draft_query_set(
             ),
         ),
         citations=existing_citations,
-        adversarial=generate.adversarial,
+        adversarial=generate.adversarial or bool(generate.out_of_scope),
         adversarial_count=generate.adversarial_count,
+        out_of_scope=bool(generate.out_of_scope),
     )
     recovered, drafting = _init_or_recover_checkpoint(in_progress, terms, requested, console)
     if recovered is None and existing_query_set is not None:
@@ -441,7 +443,7 @@ def _draft_query_set(
         agent=drafter.name,
         model=generator_model,
         rivals=_rivals_in_view(catalog, generate),
-        adversarial=generate.adversarial,
+        adversarial=generate.adversarial or bool(generate.out_of_scope),
         adversarial_count=generate.adversarial_count,
     )
     if dry_run:

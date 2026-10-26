@@ -26,6 +26,8 @@ from rich.text import Text
 from reach.rendering import csv_document, dispatch_render
 from reach.sweep import _MIN_KNEE_POINTS
 
+from ._sweep_html import render_sweep_html
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -39,6 +41,7 @@ __all__ = [
     "render_ascii_curve",
     "render_sweep",
     "render_sweep_csv",
+    "render_sweep_html",
     "render_sweep_json",
 ]
 
@@ -51,6 +54,7 @@ _MAX_SHOWN_COLLISION_GROUPS: int = 3
 _MAX_SUSPECT_DISTRACTORS: int = 2
 _MIN_DROP_PROB_FOR_GRADUAL_LABEL: float = 0.50
 _MIN_GRADUAL_PROB_DISPLAY: float = 0.01
+_COMPACT_TERMINAL_WIDTH: int = 110
 
 
 def _format_duration_s(duration_ms: float) -> str:
@@ -96,7 +100,8 @@ def _format_replicate_collisions_summary(
     grouped_scales: dict[tuple[str, tuple[str, ...]], list[int]] = {}
     for item in collisions:
         target_label = item.expected_skill or item.query_id
-        distractors = item.suspect_distractors[:_MAX_SUSPECT_DISTRACTORS]
+        distractor_candidates = item.invoked_distractors or item.suspect_distractors
+        distractors = distractor_candidates[:_MAX_SUSPECT_DISTRACTORS]
         key = (target_label, distractors)
         grouped_scales.setdefault(key, []).append(item.scale)
 
@@ -121,7 +126,9 @@ def _format_replicate_collisions_summary(
     return f"{', '.join(summaries)}{more}"
 
 
-def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:  # noqa: PLR0912, PLR0915
+def _print_corpus_capacity_sweep(  # noqa: C901, PLR0912, PLR0915
+    console: Console, study: ScalingStudy
+) -> None:
     """Render a Rich table and capacity summary for whole-corpus scaling sweep."""
     header: list[tuple[str, str]] = [
         ("Corpus Capacity Scaling: ", "bold"),
@@ -164,6 +171,12 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             f"to detect (evaluated {len(study.scales)})"
         )
         decision_lines.append((hint_text, "dim"))
+        decision_lines.append(("\n", ""))
+
+    if study.entrypoint_knee_scale is not None:
+        decision_lines.append(
+            (f"  • First-Turn Entrypoint Knee: K = {study.entrypoint_knee_scale}", "bold green")
+        )
         decision_lines.append(("\n", ""))
 
     boot_dist_text = _format_knee_bootstrap_distribution(study)
@@ -228,6 +241,11 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
 
     has_negatives = any(pt.negative_probes > 0 for pt in study.points)
     has_truncation = any(pt.disclosure_states.get("name_only_elided", 0) > 0 for pt in study.points)
+    compact_cols = console.width is not None and console.width < _COMPACT_TERMINAL_WIDTH
+    has_entrypoint = not compact_cols and any(
+        pt.entrypoint_f1_score is not None for pt in study.points
+    )
+    has_step_eff = not compact_cols and any(pt.step_efficiency_mean > 0 for pt in study.points)
 
     table = Table(
         box=box.SIMPLE,
@@ -243,6 +261,15 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
         table.add_column("Abstain", justify="right", no_wrap=True)
     table.add_column("F1", justify="right", no_wrap=True)
     table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
+    if has_entrypoint:
+        table.add_column("Entry F1" if not compact_cols else "Entry", justify="right", no_wrap=True)
+    if has_step_eff:
+        table.add_column(
+            "Step Eff" if not compact_cols else "Eff",
+            justify="right",
+            style="dim",
+            no_wrap=True,
+        )
     table.add_column("Δ Collide", justify="right", style="red", no_wrap=True)
     if has_truncation:
         table.add_column("Trunc", justify="right", style="yellow", no_wrap=True)
@@ -282,9 +309,19 @@ def _print_corpus_capacity_sweep(console: Console, study: ScalingStudy) -> None:
             [
                 Text(f1_pct, style=rate_style),
                 f1_ci_str,
-                col_str,
             ]
         )
+        if has_entrypoint:
+            entry_f1_str = (
+                f"{pt.entrypoint_f1_score * 100:.1f}%"
+                if pt.entrypoint_f1_score is not None
+                else "—"
+            )
+            row.append(entry_f1_str)
+        if has_step_eff:
+            eff_str = f"{pt.step_efficiency_mean:.2f}" if pt.step_efficiency_mean > 0 else "—"
+            row.append(eff_str)
+        row.append(col_str)
         if has_truncation:
             elided = pt.disclosure_states.get("name_only_elided", 0)
             total_p = max(1, pt.probes_executed)
@@ -352,6 +389,13 @@ def _print_single_skill_header(console: Console, study: ScalingStudy) -> None:
                 style="dim",
             )
         )
+    if study.entrypoint_knee_scale is not None:
+        console.print(
+            Text.assemble(
+                ("First-Turn Entrypoint Knee: ", "bold green"),
+                (f"k* = {study.entrypoint_knee_scale}", "bold green"),
+            )
+        )
 
     boot_dist_text = _format_knee_bootstrap_distribution(study)
     if boot_dist_text:
@@ -375,7 +419,11 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
     """Render a Rich table and loss decomposition for single-skill scaling sweep."""
     _print_single_skill_header(console, study)
     has_truncation = any(pt.delta_truncated != 0 for pt in study.points)
-    compact_cols = has_truncation
+    has_entrypoint = any(pt.entrypoint_pass_rate is not None for pt in study.points)
+    has_step_eff = any(pt.step_efficiency_mean > 0 for pt in study.points)
+    compact_cols = has_truncation or (
+        console.width is not None and console.width < _COMPACT_TERMINAL_WIDTH
+    )
     table = Table(
         box=box.SIMPLE,
         show_header=True,
@@ -386,6 +434,17 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
     table.add_column("Scale" if compact_cols else "Scale (N)", justify="right", no_wrap=True)
     table.add_column("Pass Rate", justify="right", no_wrap=True)
     table.add_column("95% CI", justify="center", style="dim", no_wrap=True)
+    if has_entrypoint:
+        table.add_column(
+            "Entry Pass" if not compact_cols else "Entry", justify="right", no_wrap=True
+        )
+    if has_step_eff:
+        table.add_column(
+            "Step Eff" if not compact_cols else "Eff",
+            justify="right",
+            style="dim",
+            no_wrap=True,
+        )
     table.add_column("Δ Total", justify="right", no_wrap=True)
     table.add_column(
         "Δ Abstain" if compact_cols else "Δ Abstention", justify="right", style="cyan", no_wrap=True
@@ -418,9 +477,18 @@ def _print_single_skill_sweep(console: Console, study: ScalingStudy) -> None:
             str(pt.scale),
             Text(pct, style=rate_style),
             ci,
-            tot_str,
-            abs_str,
         ]
+        if has_entrypoint:
+            entry_pass_str = (
+                f"{pt.entrypoint_pass_rate * 100:.1f}%"
+                if pt.entrypoint_pass_rate is not None
+                else "—"
+            )
+            row.append(entry_pass_str)
+        if has_step_eff:
+            eff_str = f"{pt.step_efficiency_mean:.2f}" if pt.step_efficiency_mean > 0 else "—"
+            row.append(eff_str)
+        row.extend([tot_str, abs_str])
         if has_truncation:
             trunc_str = f"{pt.delta_truncated * 100:+.1f}%" if pt.delta_truncated != 0 else "0.0%"
             row.append(trunc_str)
@@ -531,6 +599,9 @@ def _extract_knee_csv_cells(study: ScalingStudy) -> tuple[str, str, str]:
 def render_sweep_csv(study: ScalingStudy) -> str:
     """Export ScalingStudy metrics to formatted CSV."""
     knee_str, knee_low, knee_high = _extract_knee_csv_cells(study)
+    entry_knee_str = (
+        str(study.entrypoint_knee_scale) if study.entrypoint_knee_scale is not None else ""
+    )
     if study.is_corpus_sweep:
         headers = [
             "scale",
@@ -544,11 +615,13 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             "f1_score",
             "f1_ci_low",
             "f1_ci_high",
+            "entrypoint_f1",
             "step_efficiency",
             "skill_f1",
             "knee_scale",
             "knee_ci_low",
             "knee_ci_high",
+            "entrypoint_knee_scale",
             "in_scope_probes",
             "negative_probes",
             "duration_ms",
@@ -566,11 +639,13 @@ def render_sweep_csv(study: ScalingStudy) -> str:
                 f"{pt.f1_score:.4f}",
                 f"{pt.f1_interval.low:.4f}",
                 f"{pt.f1_interval.high:.4f}",
+                f"{pt.entrypoint_f1_score:.4f}" if pt.entrypoint_f1_score is not None else "",
                 f"{pt.step_efficiency_mean:.4f}",
                 f"{pt.skill_f1_mean:.4f}",
                 knee_str,
                 knee_low,
                 knee_high,
+                entry_knee_str,
                 pt.in_scope_probes,
                 pt.negative_probes,
                 f"{pt.duration_ms_mean:.2f}",
@@ -586,6 +661,8 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             f"{pt.pass_rate:.4f}",
             f"{pt.pass_rate_interval.low:.4f}",
             f"{pt.pass_rate_interval.high:.4f}",
+            f"{pt.entrypoint_pass_rate:.4f}" if pt.entrypoint_pass_rate is not None else "",
+            f"{pt.step_efficiency_mean:.4f}",
             f"{pt.delta_vs_baseline:.4f}",
             f"{pt.delta_abstention:.4f}",
             f"{pt.delta_truncated:.4f}",
@@ -593,6 +670,7 @@ def render_sweep_csv(study: ScalingStudy) -> str:
             knee_str,
             knee_low,
             knee_high,
+            entry_knee_str,
             pt.probes_executed,
             pt.probes_failed,
             f"{pt.duration_ms_mean:.2f}",
@@ -606,6 +684,8 @@ def render_sweep_csv(study: ScalingStudy) -> str:
         "pass_rate",
         "wilson_low",
         "wilson_high",
+        "entrypoint_pass_rate",
+        "step_efficiency",
         "delta_total",
         "delta_abstention",
         "delta_truncated",
@@ -613,6 +693,7 @@ def render_sweep_csv(study: ScalingStudy) -> str:
         "knee_scale",
         "knee_ci_low",
         "knee_ci_high",
+        "entrypoint_knee_scale",
         "probes_executed",
         "probes_failed",
         "duration_ms",
@@ -622,10 +703,18 @@ def render_sweep_csv(study: ScalingStudy) -> str:
 
 SWEEP_RENDERERS = {
     "csv": render_sweep_csv,
+    "html": render_sweep_html,
     "json": render_sweep_json,
 }
 
 
-def render_sweep(study: ScalingStudy, fmt: str) -> str:
+def render_sweep(
+    study: ScalingStudy,
+    fmt: str,
+    *,
+    compare: ScalingStudy | None = None,
+) -> str:
     """Render ScalingStudy into the requested format."""
+    if fmt == "html" and compare is not None:
+        return render_sweep_html(study, compare=compare)
     return dispatch_render(SWEEP_RENDERERS, fmt, study)
