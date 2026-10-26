@@ -116,6 +116,7 @@ def test_shared_config_names_no_runtime_specific_setting() -> None:
         "allowed_tools",
         "blocked_env_vars",
         "early_exit",
+        "manifest_only",
         "max_turns",
         "options",
         "timeout_s",
@@ -590,6 +591,7 @@ def test_the_loader_gained_no_field(variable_config: Path, skill_repo: Path) -> 
         "anchor",
         "trusted",
         "auto_queries",
+        "knee_metric",
     }
     assert RunConfig.model_validate(dumped).fingerprint == config.fingerprint
 

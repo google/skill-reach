@@ -45,11 +45,12 @@ reach sweep ./skills --bootstrap-iterations 500 --catalog-replicates 3 --seed 42
 
 ///
 
-/// tab | Export sweep metrics to JSON or CSV
-Export full capacity and decomposition metrics for plotting and regression tracking:
+/// tab | Export & visualize sweep reports
+Export full capacity and decomposition metrics to JSON/CSV or render a standalone HTML scaling report via `reach view`:
 
 ```bash
-reach sweep ./skills --format json > sweep.json
+reach sweep ./skills --out .reach/sweep.json
+reach view .reach/sweep.json --format html -o sweep_report.html
 ```
 
 ///
@@ -61,7 +62,7 @@ By default, `reach sweep` evaluates a fixed anchor cohort across all library siz
 ///
 
 /// tip | Knee Uncertainty, Right-Censoring & Replicate Collision Diagnostics
-`ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision sensitivity (`replicate_collisions` when `--catalog-replicates > 1`).
+`ScalingStudy` artifacts (`sweep.json`) record the discrete bootstrap knee distribution (`knee_scale_pmf`), first-turn entrypoint routing knee (`entrypoint_knee_scale`), total significant degradation probability (`drop_probability`), immediate cliff probability (`cliff_probability` at $K_0$), right-censoring indicator (`knee_upper_censored`, rendered as `[low, >K_max]` in text and `>K_max` in CSV), baseline intra-skill correlation (`skill_icc`), and per-query replicate collision attribution (`replicate_collisions` with `invoked_distractors` and BM25-ranked `suspect_distractors` when `--catalog-replicates > 1`).
 ///
 
 ## Options
@@ -83,6 +84,7 @@ By default, `reach sweep` evaluates a fixed anchor cohort across all library siz
 | `--seed`                                       | Integer       | `42`                          | Random seed for reproducible bootstrap resamples and curve perturbation.                                                                                           |
 | `--catalog-replicates`                         | Integer       | `1`                           | Number of independent distractor catalog permutations to probe per scale step (1–20) for replicate collision detection.                                            |
 | `--noise-floor`                                | Float         | Dynamic (paired McNemar)      | Minimum pass rate drop to trigger knee detection (defaults to paired McNemar variance scaled by cluster design effect).                                            |
+| `--knee-metric`                                | Choice        | `trajectory`                  | Metric driving primary knee detection and loss decomposition: `trajectory` or `entrypoint`.                                                                        |
 | `--agent`                                      | Choice        | `from reach.toml`             | Agent runtime to execute scaling probes: `antigravity-cli`, `antigravity-sdk`, `claude-code`, `goose`, `keyword`, `pi`.                                            |
 | `--model`, `-m`                                | String        | Default model                 | Target model identifier.                                                                                                                                           |
 | `--effort`, `-e`                               | String        | Default effort                | Reasoning effort level (e.g. `low`, `medium`, `high`).                                                                                                             |
@@ -101,6 +103,7 @@ By default, `reach sweep` evaluates a fixed anchor cohort across all library siz
 | `--out`, `-o`                                  | Path          | `.reach/sweep.json`           | File path to write results (format inferred from file extension or `--format`).                                                                                    |
 | `--workdir`                                    | Path          | Temp                          | Working directory for probe execution.                                                                                                                             |
 | `--allow-truncation` / `--no-allow-truncation` | Boolean       | `true`                        | Probe scaling steps even if catalogs exceed runtime listing budget (default: `true`).                                                                              |
+| `--manifest-only`                              | Flag          | `false`                       | Install only `SKILL.md` into agent workspace, ignoring subdirectories and sibling symlinks.                                                                        |
 | `--auto-queries` / `--no-auto-queries`         | Boolean       | `true`                        | Automatically synthesize queries on cold start or for explicitly requested unqueried skills; existing non-empty query sets in corpus-wide sweeps are reused as-is. |
 | `--yes`, `-y`                                  | Flag          | `false`                       | Bypass interactive safety confirmation prompts.                                                                                                                    |
 | `--config`, `-c`                               | Path          | -                             | Path to reach.toml configuration file.                                                                                                                             |

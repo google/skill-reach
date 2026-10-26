@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple
 
 from cyclopts import Parameter
 from pydantic import ValidationError as PydanticValidationError
@@ -230,6 +230,17 @@ def _print_anchor_coverage(
         f"[dim]Anchor coverage:[/] {total_matched} queries matched across "
         f"{covered}/{len(resolved_anchors)} anchor skills"
     )
+    non_anchor_queries = [
+        q
+        for q in raw_qs.queries
+        if q.expected_skill is not None and q.expected_skill not in resolved_anchors
+    ]
+    if non_anchor_queries:
+        console.print(
+            f"[yellow]Notice:[/] {len(non_anchor_queries)} query(s) in [cyan]{queries_path}[/] "
+            f"target non-anchor skills and will be excluded from the corpus sweep "
+            f"(use --out-of-scope when drafting negative queries for a corpus sweep)."
+        )
     zero_anchors = [a for a, count in counts.items() if count == 0]
     if zero_anchors:
         console.print(
@@ -362,6 +373,12 @@ def _sweep(
                 "Minimum pass rate drop to trigger knee detection "
                 "(default: dynamic paired McNemar noise floor)"
             ),
+        ),
+    ] = None,
+    knee_metric: Annotated[
+        Literal["trajectory", "entrypoint"] | None,
+        Parameter(
+            help=("Metric used for Kneedle knee detection: 'trajectory' (default) or 'entrypoint'"),
         ),
     ] = None,
     runtime: Annotated[
@@ -521,6 +538,7 @@ def _sweep(
             runtime=driver,
             rivals_share=rivals_share,
             noise_floor=noise_floor,
+            knee_metric=knee_metric,
             workers=cli_workers if cli_workers is not None else effective_config.plan.workers,
             skills=found,
             attempts=cli_attempts,
@@ -603,6 +621,7 @@ def _prepare_and_confirm_sweep(
             stale_targets=resolution.stale_targets,
             format=format,
             existing_qs=resolution.existing_query_set,
+            target=target,
         ):
             return code
         fresh_qs = None
@@ -697,6 +716,7 @@ def _draft_missing_sweep_queries(
     format: Format,
     stale_targets: tuple[str, ...] = (),
     existing_qs: QuerySet | None = None,
+    target: str | None = None,
 ) -> int:
     """Draft missing anchor queries or refresh stale anchor queries into resolved_queries."""
     sync_targets = tuple(dict.fromkeys(missing_targets + stale_targets))
@@ -723,6 +743,8 @@ def _draft_missing_sweep_queries(
         effective_config.query,
         targets=sync_targets,
     )
+    if target is None and flags.out_of_scope is None:
+        flags = flags.model_copy(update={"out_of_scope": True})
     draft_settings = effective_config.with_overrides(
         catalog={"mode": CatalogMode.ALL},
         study={"queries": resolved_queries},

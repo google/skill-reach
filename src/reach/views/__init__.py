@@ -137,6 +137,7 @@ from reach.views.sweep import (
     print_sweep,
     render_sweep,
     render_sweep_csv,
+    render_sweep_html,
     render_sweep_json,
 )
 
@@ -239,6 +240,7 @@ __all__ = [
     "render_survey",
     "render_sweep",
     "render_sweep_csv",
+    "render_sweep_html",
     "render_sweep_json",
     "safety_panel",
     "suggest_view",

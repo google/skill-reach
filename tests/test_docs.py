@@ -276,6 +276,7 @@ UNDOCUMENTED_CLI_FLAGS: dict[str, set[str]] = {
         "--draft-only",
         "--early-exit",
         "--effort",
+        "--manifest-only",
         "--max-turns",
         "--mode",
         "--model",

@@ -35,6 +35,7 @@ from reach.views import (
     print_sweep,
     print_wrote,
     render_sweep_csv,
+    render_sweep_html,
     render_sweep_json,
 )
 
@@ -44,24 +45,33 @@ from .flags import SWITCH, SliceFlags, Verbose
 _VIEW_PAYLOAD_ADAPTER: TypeAdapter[Artifact | ScalingStudy] = TypeAdapter(Artifact | ScalingStudy)
 
 
+def _open_html_in_browser(
+    console: Console,
+    html_content: str,
+    out: Path | None,
+    default_filename: str = "report.html",
+) -> int:
+    """Write HTML content to target path or .reach/<default_filename> and open in browser."""
+    target_out = out
+    if target_out is None:
+        reach_dir = Path(".reach")
+        reach_dir.mkdir(parents=True, exist_ok=True)
+        target_out = reach_dir / default_filename
+
+    target_out.parent.mkdir(parents=True, exist_ok=True)
+    target_out.write_text(html_content, encoding="utf-8")
+    console.print(f"Opening [bold]{target_out}[/bold] in your default browser...")
+    webbrowser.open(target_out.resolve().as_uri())
+    return 0
+
+
 def _handle_browser_view(
     console: Console,
     recorded: Artifact,
     out: Path | None,
 ) -> int:
     """Save HTML view and open in default web browser."""
-    target_out = out
-    if target_out is None:
-        reach_dir = Path(".reach")
-        reach_dir.mkdir(parents=True, exist_ok=True)
-        target_out = reach_dir / "report.html"
-
-    target_out.parent.mkdir(parents=True, exist_ok=True)
-    html_content = render_view(recorded, "html")
-    target_out.write_text(html_content, encoding="utf-8")
-    console.print(f"Opening [bold]{target_out}[/bold] in your default browser...")
-    webbrowser.open(target_out.resolve().as_uri())
-    return 0
+    return _open_html_in_browser(console, render_view(recorded, "html"), out, "report.html")
 
 
 def _serialize_eval_format(recorded: Artifact, format_opt: str) -> str | None:
@@ -132,15 +142,19 @@ def _handle_sweep_view(
     format_opt: str,
     *,
     open_browser: bool,
+    compare: ScalingStudy | None = None,
 ) -> int:
     """Render and display or write scaling sweep study results."""
-    if open_browser or format_opt == "html":
-        msg = "HTML format is not supported for sweep artifacts; choose 'text', 'json', or 'csv'."
-        raise ValueError(msg)
+    if open_browser:
+        return _open_html_in_browser(
+            console, render_sweep_html(study, compare=compare), out, "sweep.html"
+        )
 
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
-        if format_opt == "csv" or out.suffix == ".csv":
+        if format_opt == "html" or out.suffix == ".html":
+            content = render_sweep_html(study, compare=compare)
+        elif format_opt == "csv" or out.suffix == ".csv":
             content = render_sweep_csv(study)
         elif format_opt in ("json", "jsonl") or out.suffix == ".json":
             content = render_sweep_json(study)
@@ -153,6 +167,8 @@ def _handle_sweep_view(
         return 0
 
     match format_opt:
+        case "html":
+            print(render_sweep_html(study, compare=compare))
         case "csv":
             print(render_sweep_csv(study))
         case "json" | "jsonl":
@@ -214,6 +230,12 @@ def _view(
             "'csv' (sweep summary CSV)",
         ),
     ] = "text",
+    compare: Annotated[
+        Path | None,
+        Parameter(
+            help="Optional secondary scaling sweep artifact to overlay in HTML comparison view",
+        ),
+    ] = None,
     slice_flags: SliceFlags | None = None,
     open_browser: Annotated[
         bool,
@@ -266,7 +288,25 @@ def _view(
                 "are not supported for sweep artifacts."
             )
             raise ValueError(msg)
-        return _handle_sweep_view(console, parsed, out, format, open_browser=open_browser)
+        compare_study: ScalingStudy | None = None
+        if compare is not None:
+            try:
+                compare_study = ScalingStudy.load(compare)
+            except (OSError, ValueError) as err:
+                msg = f"Cannot read compare artifact at {compare}: {err}"
+                raise ValueError(msg) from err
+        return _handle_sweep_view(
+            console,
+            parsed,
+            out,
+            format,
+            open_browser=open_browser,
+            compare=compare_study,
+        )
+
+    if compare is not None:
+        msg = "--compare flag is only supported for scaling sweep artifacts."
+        raise ValueError(msg)
 
     recorded = (
         load_arm(

@@ -25,7 +25,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
-from pydantic import BaseModel, ConfigDict, RootModel, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    NonNegativeInt,
+    PositiveInt,
+    RootModel,
+    StringConstraints,
+    ValidationError,
+)
 
 from reach._io import write_model
 from reach._json import parse_model_json
@@ -34,7 +42,7 @@ from reach.config import (
     DEFAULT_GEMINI_MODEL,
     QuerySettings,
 )
-from reach.models import Catalog, Query, QueryKind, Skill
+from reach.models import Catalog, CatalogMode, Query, QueryKind, Skill
 from reach.queries import Origin, QuerySet, QuerySetProvenance
 from reach.retrieval import Bm25Scorer, Scorer
 from reach.runtime.generator import (
@@ -579,16 +587,35 @@ def generate_adversarial_for_skill(
     scorer: Scorer | None = None,
     *,
     auto_clamp: bool = False,
+    out_of_scope: bool | None = None,
 ) -> tuple[Query, ...]:
     """Generate and verify adversarial near-miss queries for a single target skill."""
     driver = runtime or text_generator()
-    target_body, rival_bodies, rival_skills = prompt_material_with_skills(
-        target,
-        catalog,
-        skills,
-        top_rivals,
-        scorer,
+    effective_out_of_scope = (
+        out_of_scope if out_of_scope is not None else (catalog.mode == CatalogMode.SWEEP)
     )
+    if effective_out_of_scope:
+        if target not in catalog.skills:
+            msg = (
+                f"{target!r} is not in catalog {catalog.id!r}: ground truth derived "
+                "here would not be valid where these queries get probed"
+            )
+            raise ValueError(msg)
+        residents = resident_skills(catalog, skills)
+        by_name = {s.name: s for s in residents}
+        names = [s.name for s in skills]
+        text = (by_name[target].path / "SKILL.md").read_text(encoding="utf-8")
+        target_body = strip_selection_surface(text, redact=names)
+        rival_bodies: Sequence[str] = ()
+        rival_skills: Sequence[Skill] = ()
+    else:
+        target_body, rival_bodies, rival_skills = prompt_material_with_skills(
+            target,
+            catalog,
+            skills,
+            top_rivals,
+            scorer,
+        )
     budget = driver.prompt_budget_chars()
     if auto_clamp and top_rivals is None and budget is not None:
         target_body, rival_bodies, clamped_skills = _auto_clamp_prompt_materials(
@@ -618,7 +645,8 @@ def generate_adversarial_for_skill(
     queries: list[Query] = []
     for i, draft in enumerate(drafts, start=1):
         if (
-            draft.rival_index is not None
+            not effective_out_of_scope
+            and draft.rival_index is not None
             and 1 <= draft.rival_index <= len(rival_skills)
             and verify_citation(draft, rival_bodies[draft.rival_index - 1])
         ):
@@ -632,7 +660,9 @@ def generate_adversarial_for_skill(
                     notes=draft.reason,
                 ),
             )
-        elif (draft.rival_index is None or draft.rival_index == 0) and verify_citation(
+        elif (
+            draft.rival_index is None or draft.rival_index == 0 or effective_out_of_scope
+        ) and verify_citation(
             draft,
             target_body,
         ):
@@ -818,6 +848,60 @@ def _dispatch_generation(
             land(futures[future], future.result())
 
 
+def _draft_adv_queries_with_retry(
+    target: str,
+    catalog: Catalog,
+    skills: Sequence[Skill],
+    count: int,
+    driver: TextGenerator,
+    top_rivals: int | None,
+    scorer: Scorer | None,
+    *,
+    auto_clamp: bool,
+    out_of_scope: bool | None,
+) -> tuple[Query, ...]:
+    """Draft adversarial queries for target with retries and logging."""
+    adv_queries: tuple[Query, ...] = ()
+    last_adv_err: Exception | None = None
+    for _ in range(DEFAULT_MAX_ATTEMPTS):
+        try:
+            adv_queries = generate_adversarial_for_skill(
+                target,
+                catalog,
+                skills,
+                count=count,
+                runtime=driver,
+                top_rivals=top_rivals,
+                scorer=scorer,
+                auto_clamp=auto_clamp,
+                out_of_scope=out_of_scope,
+            )
+            if adv_queries:
+                break
+            last_adv_err = None
+        except (ValueError, ValidationError) as err:
+            last_adv_err = err
+        except RuntimeError:
+            raise
+
+    if not adv_queries:
+        if last_adv_err is not None:
+            logger.warning(
+                "Failed drafting adversarial queries for %r after %d attempts: %s",
+                target,
+                DEFAULT_MAX_ATTEMPTS,
+                last_adv_err,
+            )
+        else:
+            logger.warning(
+                "Drafting adversarial queries for %r yielded no verified citations "
+                "after %d attempts",
+                target,
+                DEFAULT_MAX_ATTEMPTS,
+            )
+    return adv_queries
+
+
 def generate_query_set(
     catalog: Catalog,
     skills: Sequence[Skill],
@@ -833,6 +917,7 @@ def generate_query_set(
     adversarial: bool = False,
     adversarial_count: int = 1,
     auto_clamp: bool = True,
+    out_of_scope: bool | None = None,
 ) -> QuerySet:
     """Generate QuerySet for a catalog with progress reporting and checkpointing."""
     driver = runtime or text_generator()
@@ -842,7 +927,8 @@ def generate_query_set(
     stamp = f"Generator arm: {arm.value}."
     if top_rivals is not None:
         stamp += f" Rival cap: {top_rivals}."
-    if adversarial:
+    effective_adversarial = adversarial or bool(out_of_scope)
+    if effective_adversarial:
         stamp += f" Adversarial: {adversarial_count}."
 
     def so_far() -> QuerySet:
@@ -857,8 +943,8 @@ def generate_query_set(
                 generator_arm=arm.value,
                 queries_per_target=count,
                 rivals_in_view=top_rivals,
-                adversarial=adversarial,
-                adversarial_per_target=adversarial_count if adversarial else None,
+                adversarial=effective_adversarial,
+                adversarial_per_target=adversarial_count if effective_adversarial else None,
             ),
         )
 
@@ -867,45 +953,20 @@ def generate_query_set(
         if progress is not None:
             progress(target, drafts)
         queries.extend(to_queries(drafts, target, target))
-        if adversarial:
-            adv_queries: tuple[Query, ...] = ()
-            last_adv_err: Exception | None = None
-            for _ in range(DEFAULT_MAX_ATTEMPTS):
-                try:
-                    adv_queries = generate_adversarial_for_skill(
-                        target,
-                        catalog,
-                        skills,
-                        count=adversarial_count,
-                        runtime=driver,
-                        top_rivals=top_rivals,
-                        scorer=scorer,
-                        auto_clamp=auto_clamp,
-                    )
-                    if adv_queries:
-                        break
-                    last_adv_err = None
-                except (ValueError, ValidationError) as err:
-                    last_adv_err = err
-                except RuntimeError:
-                    raise
-
-            if not adv_queries:
-                if last_adv_err is not None:
-                    logger.warning(
-                        "Failed drafting adversarial queries for %r after %d attempts: %s",
-                        target,
-                        DEFAULT_MAX_ATTEMPTS,
-                        last_adv_err,
-                    )
-                else:
-                    logger.warning(
-                        "Drafting adversarial queries for %r yielded no verified citations "
-                        "after %d attempts",
-                        target,
-                        DEFAULT_MAX_ATTEMPTS,
-                    )
-            queries.extend(adv_queries)
+        if effective_adversarial:
+            adv = _draft_adv_queries_with_retry(
+                target,
+                catalog,
+                skills,
+                adversarial_count,
+                driver,
+                top_rivals,
+                scorer,
+                auto_clamp=auto_clamp,
+                out_of_scope=out_of_scope,
+            )
+            if adv:
+                queries.extend(adv)
         if checkpoint is not None:
             checkpoint(so_far())
 
@@ -960,21 +1021,22 @@ def read_citations(path: Path) -> CitationTrail:
 class DraftCheckpoint(BaseModel):
     """Store in-progress query generation state and configuration for resumption."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     fingerprint: str
     bodies: str
     catalog_id: str
     arm: GeneratorArm
-    count: int
+    count: PositiveInt
     generator_model: str
-    top_rivals: int | None = None
+    top_rivals: PositiveInt | None = None
     targets: tuple[str, ...]
     covered: tuple[str, ...]
     drafted: QuerySet
     citations: tuple[Citation, ...] = ()
     adversarial: bool = False
-    adversarial_count: int = 1
+    adversarial_count: NonNegativeInt = 1
+    out_of_scope: bool = False
 
     @property
     def owed(self) -> tuple[str, ...]:
@@ -1023,10 +1085,10 @@ def read_checkpoint(path: Path) -> DraftCheckpoint:
     """Load and validate an in-progress DraftCheckpoint from disk."""
     resolved = Path(path).expanduser().resolve()
     try:
-        return DraftCheckpoint.model_validate(
-            json.loads(resolved.read_text(encoding="utf-8")),
+        return DraftCheckpoint.model_validate_json(
+            resolved.read_text(encoding="utf-8"),
         )
-    except (ValidationError, json.JSONDecodeError) as error:
+    except ValidationError as error:
         msg = (
             f"{resolved} is not a readable partial draft: {error}\n"
             "delete it to draft the set again from nothing"
@@ -1051,6 +1113,7 @@ def assert_resumable(found: DraftCheckpoint, wanted: DraftCheckpoint) -> None:
             "targets",
             "adversarial",
             "adversarial_count",
+            "out_of_scope",
         )
         if getattr(found, field) != getattr(wanted, field)
     ]
