@@ -1198,6 +1198,7 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
 
         in_code_fence = False
         open_block_line: int | None = None
+        open_prettier_ignore_line: int | None = None
         for lineno, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("```"):
@@ -1217,6 +1218,17 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
                 f"Indented prettier-ignore comment at {rel}:{lineno} ({line!r}); place at "
                 "column 0 surrounded by blank lines so Remark pairs start/end at root level."
             )
+            if stripped == "<!-- prettier-ignore-start -->":
+                assert open_prettier_ignore_line is None, (
+                    f"Nested or unclosed prettier-ignore-start at {rel}:{lineno} "
+                    f"(previous opened at line {open_prettier_ignore_line})"
+                )
+                open_prettier_ignore_line = lineno
+            elif stripped == "<!-- prettier-ignore-end -->":
+                assert open_prettier_ignore_line is not None, (
+                    f"Unmatched prettier-ignore-end at {rel}:{lineno}"
+                )
+                open_prettier_ignore_line = None
             indent_match = misindented_list_or_math_re.match(line)
             if indent_match and len(indent_match.group(1)) % 4 != 0:
                 pytest.fail(
@@ -1238,6 +1250,9 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
                     open_block_line = lineno
 
         assert open_block_line is None, f"Unclosed '///' block opened at {rel}:{open_block_line}"
+        assert open_prettier_ignore_line is None, (
+            f"Unclosed prettier-ignore-start opened at {rel}:{open_prettier_ignore_line}"
+        )
 
         md_renderer.reset()
         rendered_html = md_renderer.convert(content)
