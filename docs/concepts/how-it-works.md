@@ -114,26 +114,30 @@ For each skill in a resident catalog:
 
 - **Recall (Turn-1 vs. Trajectory)**: `ClassMetrics.recall` measures Turn-1 entrypoint recall, while `ClassMetrics.trajectory_recall` credits multi-turn recovery when `expected_skill` is reached on a later turn:
 
-  $$\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}}$$
+    $$\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}}$$
 
 - **Precision & Turn-1 Conservation**: Out of all queries where the agent selected this skill on Turn 1, what fraction actually belonged to it?
 
-      $$\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}}$$
+    $$\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}}$$
 
-  <!-- prettier-ignore-end -->
+<!-- prettier-ignore-end -->
 
 Per-class `ClassMetrics` (`true_positives`, `false_positives`, `false_negatives`, `predicted`), `confusion()`, and `collisions()` strictly conserve Turn-1 predictions ($\sum \text{FN} = \sum \text{FP}$ and $\sum \text{predicted} = \text{scored}$). If a greedy distractor skill hijacks Turn 1 and the agent later recovers to `expected_skill` on Turn 2, the distractor still records a Turn-1 False Positive (`fp = 1`) so it surfaces in `report.top_attractors()`, while `trajectory_recall` and `trajectory_reachability` credit the Turn-2 recovery.
 
 - **Macro Precision Over Active Classes**: `macro_precision` averages across active classes (`support > 0` or `predicted > 0`) while `macro_recall` and `macro_f1` average across classes with query support (`support > 0`). Unqueried, unpredicted catalog skills (`support = 0, predicted = 0`) never artificially deflate macro precision when evaluating against a full catalog label list, whereas zero-support distractors that receive false-positive predictions (`predicted > 0`) still penalize `macro_precision`.
 
-### Neutral Helper & Router Skills (`acceptable_skills`)
+### Neutral Helper & Router Skills
 
 Queries can declare optional `acceptable_skills` (for example, a catalog index or discovery router skill such as `finding-google-skills`). `skill-reach` treats `acceptable_skills` as **neutral exploratory steps** (analogous to `cd` or `list_dir`):
 
+<!-- prettier-ignore-start -->
+
 - **Runtime Turn Accounting**: Reading an `acceptable_skill` is a real LLM tool call and consumes 1 turn from `max_turns`, but it does **not** trigger `early_exit`—allowing the agent to proceed to the next turn to invoke `expected_skill`.
 - **Scoring Neutrality**: Neutral `acceptable_skills` are stripped from the observed trajectory before scoring:
-  - **Assisted Hit (`("router-skill", "expected-skill")`)**: Scored as `("expected-skill",)` (`1 TP` for `expected-skill`, `0 FP` and `0` collisions for `router-skill`, `0` redundancy).
-  - **Unfinished Exploration (`("router-skill",)` alone)**: Scored as `()` (`NO_SKILL`). `router-skill` is not blamed as a False Positive or collision (`0 FP`), while `expected-skill` records a False Negative (`1 FN` / `false_abstention`) because the target capability was never reached within `max_turns`.
+    - **Assisted Hit**: Invoking `("router-skill", "expected-skill")` is scored as `("expected-skill",)`—recording `1 TP` for `expected-skill`, `0 FP` and `0` collisions for `router-skill`, and `0` redundancy.
+    - **Unfinished Exploration**: Invoking `("router-skill",)` alone is scored as `()` (`NO_SKILL`). `router-skill` is not blamed as a False Positive or collision (`0 FP`), while `expected-skill` records a False Negative (`1 FN` / `false_abstention`) because the target capability was never reached within `max_turns`.
+
+<!-- prettier-ignore-end -->
 
 ### Abstention and Out-of-Scope Handling
 
@@ -153,16 +157,19 @@ Small query sets are susceptible to random variation and hierarchical correlatio
 
 - **Cluster-Adjusted Wilson Score Intervals ($\rho_{\text{attempt}} = 0.60$)**: Repeated attempts (`--attempts`) on the same query are strongly correlated. `skill-reach` adjusts nominal sample sizes via survey design effect $\text{DEFF}_{\text{attempt}} = 1 + (n - 1)\rho_{\text{attempt}}$ before computing 95% Wilson score intervals:
 
-  $$\text{0.800 [0.376, 0.964]}$$
+    $$\text{0.800 [0.376, 0.964]}$$
 
 - **Between-Query Intra-Skill Correlation ($\hat{\rho}_{\text{skill}}$)**: Queries targeting the same skill share that skill's `SKILL.md` description quality and local distractor neighborhood. `skill-reach` estimates empirical intra-skill correlation $\hat{\rho}_{\text{skill}}$ via one-way random-effects ANOVA (`estimate_skill_icc`, recorded on `Artifact.spread.skill_icc` and `ScalingStudy.skill_icc`). On production 150-skill corpora with $\bar{Q}_0 = 5$ queries per skill, $\hat{\rho}_{\text{skill}}$ typically ranges from $0.20$ to $0.34$ ($\text{DEFF}_{\text{skill}} \approx 1.8\text{–}2.4\times$).
 - **Skill-Stratified Query-Cluster Bootstrap**: Conditional on the fixed medoid anchor cohort ($S$ anchors), `reach sweep` and `decompose_pass_rate_drop` resample whole query clusters with replacement **within each skill stratum** (plus the out-of-scope stratum). This preserves exact per-skill query weights in every bootstrap replicate while propagating cross-scale covariance.
 - **Per-Replicate McNemar Noise Floor & Right-Censored Knee PMF**: Inside each bootstrap replicate, `reach sweep` recomputes the cluster-adjusted paired McNemar noise floor from the resampled queries' discordant pairs ($n_{10}, n_{01}$) and classifies the PAVA-smoothed curve into:
-  - **Detected knee ($k^* \in \{K_0, \dots, K_{\max-1}\}$)**, including **immediate cliffs** ($k^* = K_0$ or a dominant first-step drop at $K_1$, reported as `cliff_probability`),
-  - **Gradual log-linear decay above noise (`is_gradual_drop`)**, where the curve degrades steadily across the full scale window without a sharp localized elbow, or
-  - **Flat / right-censored beyond $K_{\max}$**, where no statistically significant drop has occurred by the largest evaluated scale (causing the upper confidence bound to right-censor at `[low, >K_max]` when at least 50% of replicates detect a knee).
+    - **Detected knee ($k^* \in \{K_0, \dots, K_{\max-1}\}$)**, including **immediate cliffs** ($k^* = K_0$ or a dominant first-step drop at $K_1$, reported as `cliff_probability`),
+    - **Gradual log-linear decay above noise (`is_gradual_drop`)**, where the curve degrades steadily across the full scale window without a sharp localized elbow, or
+    - **Flat / right-censored beyond $K_{\max}$**, where no statistically significant drop has occurred by the largest evaluated scale (causing the upper confidence bound to right-censor at `[low, >K_max]` when at least 50% of replicates detect a knee).
+
     Because $k^*$ lives on a coarse discrete scale grid, `ScalingStudy` reports the full discrete probability mass function (`knee_scale_pmf`), total significant degradation probability (`drop_probability`), and `cliff_probability` alongside `knee_scale_interval`.
+
 - **Owen-Scrambled Catalog Replicates & Replicate Collision Detection (`--catalog-replicates`)**: At intermediate scales $K < N$, a single deterministic distractor ordering mixes scale size with the specific subset of distractors included at $K$. Passing `--catalog-replicates R` generates $R$ low-discrepancy catalog sequences using Laine–Karras bitwise Owen scrambling of the radix-2 van der Corput sequence (`seed = 0` on replicate 0 preserves the unscrambled baseline) and flags queries whose pass/fail outcome flips across orderings (`ReplicateCollisionDiagnostic`) along with suspect distractor skills.
+
 <!-- prettier-ignore-end -->
 
 ### Turn Budgeting & Early Exit
