@@ -22,13 +22,28 @@ import shutil
 import threading
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from reach.catalog import resident_skills
 from reach.config import resolve_path
 
 if TYPE_CHECKING:
     from reach.models import Catalog, Skill
+
+
+#: Prefix shared by all default workspace isolation subdirectories (e.g. .reach_claude).
+ISOLATION_DIR_PREFIX = ".reach_"
+
+
+def _reject_symlink(path: Path) -> None:
+    """Raise ValueError if path or any of its .reach_* ancestor directories is a symbolic link."""
+    if path.is_symlink():
+        msg = f"Refusing to use symlinked isolation directory: {path}"
+        raise ValueError(msg)
+    for ancestor in path.parents:
+        if ancestor.name.startswith(ISOLATION_DIR_PREFIX) and ancestor.is_symlink():
+            msg = f"Refusing to use symlinked isolation directory: {ancestor}"
+            raise ValueError(msg)
 
 
 def ensure_private_directory(path: Path | str) -> Path:
@@ -40,10 +55,21 @@ def ensure_private_directory(path: Path | str) -> Path:
     Returns:
         Resolved Path object for the created directory.
     """
+    # Check before resolve_path() because Path.resolve() follows symlinks, which
+    # would obscure a symlink at the raw target path or its .reach_* parent.
+    _reject_symlink(Path(path).expanduser())
     target = resolve_path(path)
-    target.mkdir(parents=True, exist_ok=True)
+    _reject_symlink(target)
+    try:
+        target.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except FileNotFoundError:
+        # Retry once if a sibling worker pruned an empty parent directory concurrently
+        # while pathlib was walking upward during mkdir(parents=True).
+        target.mkdir(mode=0o700, parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
         target.chmod(0o700)
+        if target.parent.name.startswith(ISOLATION_DIR_PREFIX):
+            target.parent.chmod(0o700)
     return target
 
 
@@ -72,8 +98,8 @@ def safe_cleanup_isolated_dir(workdir: Path | str, target_dir: Path | str | None
     """
     if target_dir is None:
         return False
-    resolved_workdir = Path(workdir).resolve()
-    resolved_target = Path(target_dir).resolve()
+    resolved_workdir = resolve_path(workdir)
+    resolved_target = resolve_path(target_dir)
     if resolved_workdir in resolved_target.parents and resolved_target.exists():
         shutil.rmtree(resolved_target, ignore_errors=True)
         return True
@@ -88,6 +114,85 @@ def probe_slot_id() -> int:
 def probe_slot_dir(parent: Path, prefix: str = "slot") -> Path:
     """Return the scratch directory reserved for the calling process and thread under parent."""
     return Path(parent) / f"{prefix}_{os.getpid()}_{probe_slot_id()}"
+
+
+def resolve_thread_slot_dir(base_dir: Path | str, *, owner_slot_id: int | None = None) -> Path:
+    """Return resolved base_dir on owner_slot_id or a per-thread slot directory under base_dir."""
+    _reject_symlink(Path(base_dir).expanduser())
+    resolved_base = resolve_path(base_dir)
+    if owner_slot_id is not None and probe_slot_id() == owner_slot_id:
+        return resolved_base
+    slot = probe_slot_dir(resolved_base)
+    _reject_symlink(slot)
+    return slot
+
+
+def cleanup_custom_isolation_dir(
+    workdir: Path | str,
+    custom_dir: Path | str,
+    *,
+    owner_slot_id: int | None = None,
+    clean_slot: bool = False,
+    clean_owner: bool = False,
+) -> None:
+    """Clean a user-supplied custom isolation directory for the calling thread.
+
+    On a non-owner worker thread, remove the calling thread's ``slot_<pid>_<tid>``
+    subdirectory when ``clean_slot`` is True and prune ``custom_dir`` if empty
+    and contained within ``workdir``. On the owner thread, remove non-``slot_*``
+    entries inside ``custom_dir`` when ``clean_owner`` is True and ``custom_dir``
+    is contained within ``workdir``, then prune ``custom_dir`` if empty.
+    """
+    resolved_workdir = resolve_path(workdir)
+    resolved_custom = resolve_path(custom_dir)
+    slot_dir = resolve_thread_slot_dir(resolved_custom, owner_slot_id=owner_slot_id)
+    if slot_dir != resolved_custom:
+        if clean_slot:
+            safe_cleanup_isolated_dir(resolved_custom, slot_dir)
+        if clean_owner and resolved_workdir in resolved_custom.parents:
+            with contextlib.suppress(OSError):
+                resolved_custom.rmdir()
+        return
+    if (
+        not clean_owner
+        or resolved_workdir not in resolved_custom.parents
+        or not resolved_custom.is_dir()
+    ):
+        return
+    for entry in list(resolved_custom.iterdir()):
+        if entry.name.startswith("slot_"):
+            continue
+        with contextlib.suppress(OSError):
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        resolved_custom.rmdir()
+
+
+class WorkspaceSlot(NamedTuple):
+    """Represent a thread-isolated slot directory inside a workspace root directory."""
+
+    workdir: Path
+    root: Path
+    slot: Path
+
+    @classmethod
+    def for_subdir(cls, workdir: Path | str, subdir_name: str) -> WorkspaceSlot:
+        """Resolve a workspace slot for the calling thread under workdir/subdir_name."""
+        resolved_workdir = resolve_path(workdir)
+        raw_root = resolved_workdir / subdir_name
+        _reject_symlink(raw_root)
+        root = resolve_path(raw_root)
+        return cls(workdir=resolved_workdir, root=root, slot=resolve_thread_slot_dir(root))
+
+    def cleanup(self) -> bool:
+        """Remove this thread's slot directory and prune the parent root when empty."""
+        removed = safe_cleanup_isolated_dir(self.workdir, self.slot)
+        with contextlib.suppress(OSError):
+            self.root.rmdir()
+        return removed
 
 
 def resolve_catalog_skills(
@@ -195,6 +300,7 @@ def _clean_path(val: object) -> Path | None:
 
 TOOL_PATH_KEYS: tuple[str, ...] = (
     "path",
+    "Path",
     "AbsolutePath",
     "DirectoryPath",
     "SearchDirectory",
@@ -258,6 +364,7 @@ def normalize_skill_tool_args(
     for key in (
         "AbsolutePath",
         "path",
+        "Path",
         "file_path",
         "filePath",
         "dir_path",

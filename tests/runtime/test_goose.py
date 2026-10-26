@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,7 @@ from reach.runtime.goose import (
     resolve_skill_from_tool_call,
 )
 
-from .conftest import goose_payload
+from .conftest import expected_slot, goose_payload
 
 
 @pytest.fixture
@@ -284,8 +285,7 @@ def test_build_command_arguments() -> None:
     assert cmd[0] == "goose"
     assert "run" in cmd
     assert "-q" in cmd
-    assert "--text" in cmd
-    assert "how to calculate pizza" in cmd
+    assert "--text=how to calculate pizza" in cmd
     assert "--output-format" in cmd
     assert "json" in cmd
     assert "--no-session" in cmd
@@ -299,6 +299,9 @@ def test_build_command_arguments() -> None:
     assert "--provider" in cmd
     assert "gemini_oauth" in cmd
     assert "--debug" in cmd
+
+    dash_cmd = rt.build_command("-v --help")
+    assert "--text=-v --help" in dash_cmd
 
 
 def test_select_successful_probe(
@@ -353,67 +356,117 @@ def test_goose_parse_stream_whitespace_and_early_exit(runtime: GooseRuntime) -> 
     assert early_exit_summary.status == "SUCCESS"
 
 
-def test_goose_build_env_defaults_and_isolation(tmp_path: Path) -> None:
-    """Verify build_env sets telemetry suppression, isolated home, and XDG directories."""
+def test_goose_build_env_defaults_and_isolation(
+    tmp_path: Path,
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify build_env sets telemetry suppression, isolated home, GOOSE_PATH_ROOT, and XDG dirs."""
+    monkeypatch.delenv("GOOSE_DISABLE_KEYRING", raising=False)
+    monkeypatch.setenv("GOOSE_ADDITIONAL_CONFIG_FILES", str(tmp_path / "extra.yaml"))
+    monkeypatch.setenv("GOOSE_PATH_ROOT", str(tmp_path / "ambient_goose_root"))
     rt = GooseRuntime()
-    workdir = tmp_path / "work"
-    workdir.mkdir()
 
     env = rt.build_env(workdir)
+    slot = expected_slot(rt, workdir)
     assert env["OTEL_SDK_DISABLED"] == "true"
-    assert env["HOME"] == str(workdir / ".reach_goose")
-    assert env["XDG_CONFIG_HOME"] == str(workdir / ".reach_goose" / ".config")
-    assert env["XDG_DATA_HOME"] == str(workdir / ".reach_goose" / ".local" / "share")
-    assert env["XDG_STATE_HOME"] == str(workdir / ".reach_goose" / ".local" / "state")
-    assert (workdir / ".reach_goose").is_dir()
+    assert env["GOOSE_DISABLE_KEYRING"] == "1"
+    assert "GOOSE_ADDITIONAL_CONFIG_FILES" not in env
+    assert env["GOOSE_PATH_ROOT"] == str(slot)
+    assert env["HOME"] == str(slot)
+    assert env["XDG_CONFIG_HOME"] == str(slot / ".config")
+    assert env["XDG_DATA_HOME"] == str(slot / ".local" / "share")
+    assert env["XDG_STATE_HOME"] == str(slot / ".local" / "state")
+    assert slot.is_dir()
+
+    rt_no_iso = GooseRuntime(options=GooseOptions(isolate_config_dir=False))
+    env_no_iso = rt_no_iso.build_env(workdir)
+    assert "GOOSE_DISABLE_KEYRING" not in env_no_iso
+    assert "GOOSE_ADDITIONAL_CONFIG_FILES" not in env_no_iso
+    assert "GOOSE_PATH_ROOT" not in env_no_iso
 
 
-def test_goose_build_env_provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("options", "expected_provider", "expected_env", "absent_env"),
+    [
+        pytest.param(
+            {"api_key": "google-key"},
+            "google",
+            {"GEMINI_API_KEY": "google-key", "GOOGLE_API_KEY": "google-key"},
+            ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+            id="default-gemini-model-infers-google",
+        ),
+        pytest.param(
+            {"model": "gpt-4o", "api_key": "inferred-openai-key"},
+            "openai",
+            {"OPENAI_API_KEY": "inferred-openai-key"},
+            ("GEMINI_API_KEY", "ANTHROPIC_API_KEY"),
+            id="inferred-openai-from-model",
+        ),
+        pytest.param(
+            {"model": "claude-sonnet-4-5", "api_key": "inferred-anthropic-key"},
+            "anthropic",
+            {"ANTHROPIC_API_KEY": "inferred-anthropic-key"},
+            ("GEMINI_API_KEY", "OPENAI_API_KEY"),
+            id="inferred-anthropic-from-model",
+        ),
+        pytest.param(
+            {"provider": "openai", "api_key": "openai-key"},
+            "openai",
+            {"OPENAI_API_KEY": "openai-key"},
+            ("ANTHROPIC_API_KEY", "GEMINI_API_KEY"),
+            id="explicit-openai-provider",
+        ),
+        pytest.param(
+            {"provider": "google", "api_key": "custom-key"},
+            "google",
+            {"GEMINI_API_KEY": "custom-key", "GOOGLE_API_KEY": "custom-key"},
+            ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
+            id="explicit-google-provider",
+        ),
+        pytest.param(
+            {"provider": "anthropic", "api_key": "anthropic-key"},
+            "anthropic",
+            {"ANTHROPIC_API_KEY": "anthropic-key"},
+            ("GEMINI_API_KEY", "OPENAI_API_KEY"),
+            id="explicit-anthropic-provider",
+        ),
+    ],
+)
+def test_goose_build_env_provider_api_keys(
+    clean_api_keys: None,
+    options: dict[str, Any],
+    expected_provider: str,
+    expected_env: dict[str, str],
+    absent_env: tuple[str, ...],
+) -> None:
     """Verify build_env maps api_key to appropriate provider environment variables."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    rt = GooseRuntime(RuntimeSettings(agent="goose", options=options))
+    assert rt.options.effective_provider == expected_provider
+    env = rt.build_env()
+    for key, value in expected_env.items():
+        assert env[key] == value
+    for key in absent_env:
+        assert key not in env
 
-    # Test default provider (openai)
-    rt_default = GooseRuntime(RuntimeSettings(agent="goose", options={"api_key": "openai-key"}))
-    env_default = rt_default.build_env()
-    assert env_default["OPENAI_API_KEY"] == "openai-key"
-    assert "ANTHROPIC_API_KEY" not in env_default
-    assert "GEMINI_API_KEY" not in env_default
 
-    # Test explicit api_key option for Google
-    rt_custom = GooseRuntime(
+def test_goose_build_env_unmapped_model_with_api_key_raises(clean_api_keys: None) -> None:
+    """Verify unmapped model with api_key and provider=None raises ValueError."""
+    rt = GooseRuntime(
         RuntimeSettings(
             agent="goose",
-            options={"provider": "google", "api_key": "custom-key"},
+            options={"model": "custom-unmapped-model", "api_key": "secret-key"},
         )
     )
-    env_custom = rt_custom.build_env()
-    assert env_custom["GEMINI_API_KEY"] == "custom-key"
-    assert env_custom["GOOGLE_API_KEY"] == "custom-key"
-    assert "OPENAI_API_KEY" not in env_custom
-
-    # Test explicit api_key option for Anthropic
-    rt_anthropic = GooseRuntime(
-        RuntimeSettings(
-            agent="goose",
-            options={"provider": "anthropic", "api_key": "anthropic-key"},
-        )
-    )
-    env_anthropic = rt_anthropic.build_env()
-    assert env_anthropic["ANTHROPIC_API_KEY"] == "anthropic-key"
-    assert "GEMINI_API_KEY" not in env_anthropic
+    with pytest.raises(ValueError, match="Cannot infer Goose provider"):
+        rt.build_env()
 
 
 def test_select_passes_env_and_cleans_when_auto_clean(
     mock_subprocess: Callable[..., Any],
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify select passes isolated env to subprocess and cleans state when auto_clean is True."""
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-
     rt = GooseRuntime(RuntimeSettings(agent="goose", options={"auto_clean": True}))
     rt._resident = ("test-skill",)
 
@@ -442,17 +495,16 @@ def test_select_passes_env_and_cleans_when_auto_clean(
             ],
             "metadata": {"cost_usd": 0.01},
         }
-        import subprocess
-
         return subprocess.CompletedProcess(cmd, returncode=0, stdout=json.dumps(output), stderr="")
 
     mock_subprocess(handler=mock_run)
 
     outcome = rt.select("test query", workdir)
+    slot = expected_slot(rt, workdir)
     assert outcome.invoked_skill == "test-skill"
     assert captured_env.get("OTEL_SDK_DISABLED") == "true"
-    assert captured_env.get("HOME") == str(workdir / ".reach_goose")
-    assert captured_env.get("XDG_CONFIG_HOME") == str(workdir / ".reach_goose" / ".config")
+    assert captured_env.get("HOME") == str(slot)
+    assert captured_env.get("XDG_CONFIG_HOME") == str(slot / ".config")
 
     # Because auto_clean=True, isolated directory should be removed in post_probe
     assert not (workdir / ".reach_goose").exists()

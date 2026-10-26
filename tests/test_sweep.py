@@ -3754,3 +3754,67 @@ def test_print_sweep_table_standardizes_prec_and_time_headers(
     assert "3.4s" in single_out
     assert "5.1s" in single_out
     assert "ms" not in single_out.split("Time")[1]
+
+
+@pytest.mark.parametrize("pass_external_runtime", [False, True])
+def test_run_scaling_sweep_cleans_owned_runtime_on_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pass_external_runtime: bool,
+) -> None:
+    """Verify run_scaling_sweep cleans runtimes it built on failure and spares caller runtimes."""
+    skills_dir = tmp_path / "skills"
+    _create_mock_skills(skills_dir, 4)
+
+    q_file = tmp_path / "queries.json"
+    save_query_set(
+        QuerySet(
+            catalog_id="synthetic",
+            queries=tuple(
+                Query(
+                    query_id=f"q-{i}",
+                    text=f"Task {i:02d}",
+                    expected_skill=f"skill-{i:02d}",
+                    kind=QueryKind.IMPLICIT,
+                )
+                for i in range(4)
+            ),
+            provenance=QuerySetProvenance(origin=Origin.AUTHORED),
+        ),
+        q_file,
+    )
+
+    config = RunConfig(
+        study=StudySettings(skills=skills_dir, queries=q_file, workdir=tmp_path / "ws"),
+        plan=PlanSettings(retries=0),
+        catalog=CatalogSettings(mode=CatalogMode.SWEEP),
+    )
+
+    cleaned_runtimes: list[bool] = []
+
+    class _TrackingRuntime(FakeRuntime):
+        def cleanup(self) -> None:
+            cleaned_runtimes.append(True)
+            super().cleanup()
+
+    rt_instance = _TrackingRuntime(model="mock-model")
+    if not pass_external_runtime:
+        monkeypatch.setattr("reach.sweep.build_runtime", lambda _settings: rt_instance)
+
+    def _boom_callback(*_args: object) -> None:
+        msg = "simulated mid-sweep interrupt"
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="simulated mid-sweep interrupt"):
+        run_scaling_sweep(
+            config=config,
+            target_skill=None,
+            scales=(2, 4),
+            runtime=rt_instance if pass_external_runtime else None,
+            on_scale_complete=_boom_callback,
+        )
+
+    if pass_external_runtime:
+        assert cleaned_runtimes == []
+    else:
+        assert cleaned_runtimes == [True]

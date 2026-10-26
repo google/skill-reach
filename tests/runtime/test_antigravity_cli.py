@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +29,7 @@ from pydantic import ValidationError
 from reach.catalog import build_catalogs, load_skills
 from reach.config import DEFAULT_GEMINI_MODEL
 from reach.models import CatalogMode
-from reach.runtime import ToolCallInfo
+from reach.runtime import SessionSummary, ToolCallInfo
 from reach.runtime.antigravity_cli import (
     DENIED_PERMISSION_ACTIONS,
     AntigravityCliGenerator,
@@ -39,14 +41,18 @@ from reach.runtime.antigravity_cli import (
     _extract_result_event,
     _isolated_settings_path,
     _leaked_tools,
+    _sync_isolated_settings,
     parse_stream,
 )
 
 from .conftest import (
+    WORKER_TIMEOUT,
     agy_stream,
     canned,
     install_one,
     read_isolated_settings,
+    run_concurrent_workers,
+    run_staggered_two_worker_probe,
 )
 
 
@@ -1129,12 +1135,18 @@ def test_complete_serializes_mapping_schema(
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,
-            stdout=json.dumps({"response": "result"}),
+            stdout=json.dumps(
+                {
+                    "response": '```json\n{"token":"ALPHA"}\n```\n{"token":"ALPHA"}\n',
+                    "structured_output": {"token": "ALPHA"},
+                }
+            ),
             stderr="",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    generator.complete("test", schema={"type": "object", "properties": {}})
+    out = generator.complete("test", schema={"type": "object", "properties": {}})
+    assert json.loads(out) == {"token": "ALPHA"}
     assert captured_cmd is not None
     assert "--json-schema" in captured_cmd
     idx = captured_cmd.index("--json-schema")
@@ -1496,27 +1508,412 @@ def test_antigravity_cli_registers_atexit_for_temp_home(
     monkeypatch: pytest.MonkeyPatch,
     target_cls: type[AntigravityCliRuntime | AntigravityCliGenerator],
 ) -> None:
-    """Verify temporary home directory registers atexit cleanup upon creation."""
-    registered: list[object] = []
+    """Verify temporary home registers weakref atexit callback without blocking GC."""
+    import gc
+    import weakref
+
+    registered: list[Any] = []
     monkeypatch.setattr("atexit.register", registered.append)
     instance = target_cls()
-    try:
-        assert instance.cleanup in registered
-    finally:
-        instance.cleanup()
+    created_home = instance.home_dir
+    ref = weakref.ref(instance)
+    assert len(registered) == 1
+    assert created_home.is_dir()
+
+    # Dropping the strong reference must allow GC (__del__) even while registered in atexit
+    del instance
+    gc.collect()
+    assert ref() is None
+    assert not created_home.exists()
 
 
-def test_antigravity_cli_runtime_clone_isolated_creates_distinct_home_dir(home_dir: Path) -> None:
-    """Verify clone_isolated allocates a separate temporary home directory for worker isolation."""
+def test_antigravity_cli_runtime_clone_isolated_creates_distinct_home_dir(
+    home_dir: Path,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify clone_isolated allocates a distinct temporary home directory and keeps residency."""
+    workdir = tmp_path / "work"
     rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir))
+    install_one(rt, skill_repo, workdir)
     clone = rt.clone_isolated()
     try:
         assert clone.home_dir != rt.home_dir
         assert clone.home_dir.is_dir()
+        assert clone.resident_skill_paths(workdir) == rt.resident_skill_paths(workdir)
+        assert len(clone.resident_skill_paths(workdir)) == 1
+        clone_settings = json.loads(_isolated_settings_path(clone.home_dir).read_text())
+        assert clone_settings.get("trustedWorkspaces") == [str(workdir.resolve())]
     finally:
         clone.cleanup()
         assert not clone.home_dir.exists()
         assert rt.home_dir.is_dir()
+
+
+def test_antigravity_cli_concurrent_workers_isolate_home_and_state(
+    monkeypatch: pytest.MonkeyPatch,
+    home_dir: Path,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify concurrent worker threads get isolated home slots and post_probe spares siblings."""
+    adc_src = tmp_path / "host_adc.json"
+    adc_src.write_text('{"type": "authorized_user"}', encoding="utf-8")
+    monkeypatch.setattr("reach.runtime.antigravity_cli.find_adc_path", lambda: adc_src)
+
+    workdir = tmp_path / "work_concurrent"
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(
+            model="m",
+            home_dir=home_dir,
+            auto_clean=True,
+            vertex=True,
+            project="test-proj",
+        ),
+    )
+    install_one(rt, skill_repo, workdir)
+
+    adcs: dict[Path, Path] = {}
+
+    def setup_slot() -> Path:
+        env = rt.build_env(workdir)
+        worker_home = Path(env["HOME"])
+        _write_conversation_state(worker_home)
+        adcs[worker_home] = Path(env["GOOGLE_APPLICATION_CREDENTIALS"])
+        return worker_home
+
+    def is_intact(slot: Path) -> bool:
+        conv, db = _conversation_state_paths(slot)
+        return adcs[slot].is_file() and conv.is_dir() and db.is_file()
+
+    home_a, home_b = run_staggered_two_worker_probe(
+        setup_slot=setup_slot,
+        cleanup_slot=lambda _slot: rt.post_probe(workdir),
+        is_intact=is_intact,
+    )
+
+    assert home_a != home_dir
+    assert home_b != home_dir
+    assert _isolated_settings_path(home_dir).is_file()
+
+
+@pytest.mark.parametrize(
+    (
+        "raw_payload",
+        "expect_warning",
+        "expected_allow",
+        "expected_extra_deny",
+        "expected_provider",
+        "expected_extra",
+    ),
+    [
+        pytest.param(None, False, None, [], None, None, id="missing-file"),
+        pytest.param(
+            "{secret-fragment-malformed",
+            True,
+            None,
+            [],
+            None,
+            None,
+            id="malformed-json",
+        ),
+        pytest.param("[1, 2, 3]", True, None, [], None, None, id="non-dict-json"),
+        pytest.param(
+            '{"permissions": "not-a-dict"}',
+            True,
+            None,
+            [],
+            None,
+            None,
+            id="invalid-permissions-schema",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "permissions": None,
+                    "modelProvider": "vertex",
+                    "customKey": {"kept": True},
+                },
+            ),
+            False,
+            None,
+            [],
+            "vertex",
+            {"kept": True},
+            id="null-permissions-preserves-other-keys",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "permissions": {
+                        "allow": ["read_file(/skills)"],
+                        "deny": [
+                            "custom_user_deny",
+                            "command(*)",
+                            "read_file(/stale/home/.config)",
+                        ],
+                    },
+                    "modelProvider": "vertex",
+                    "trustedWorkspaces": ["/work"],
+                    "customKey": {"nested": True},
+                },
+            ),
+            False,
+            ["read_file(/skills)"],
+            ["custom_user_deny"],
+            "vertex",
+            {"nested": True},
+            id="valid-settings-payload",
+        ),
+    ],
+)
+def test_sync_isolated_settings_handles_valid_and_invalid_payloads(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    raw_payload: str | None,
+    expect_warning: bool,
+    expected_allow: list[str] | None,
+    expected_extra_deny: list[str],
+    expected_provider: str | None,
+    expected_extra: dict[str, Any] | None,
+) -> None:
+    """Verify _sync_isolated_settings validates schema, merges deny rules, and sanitizes logs."""
+    src_home = tmp_path / "src_home"
+    dst_home = tmp_path / "dst_home"
+    if raw_payload is not None:
+        src_path = _isolated_settings_path(src_home)
+        src_path.parent.mkdir(parents=True, exist_ok=True)
+        src_path.write_text(raw_payload, encoding="utf-8")
+
+    _sync_isolated_settings(src_home, dst_home)
+    assert ("Failed to load isolated settings" in caplog.text) is expect_warning
+    assert "secret-fragment-malformed" not in caplog.text
+    dst_settings = read_isolated_settings(dst_home)
+    assert dst_settings["permissions"]["deny"] == [
+        *DENIED_PERMISSION_ACTIONS,
+        *expected_extra_deny,
+        f"read_file({dst_home.resolve() / '.config'})",
+    ]
+    assert dst_settings["permissions"].get("allow") == expected_allow
+    assert dst_settings.get("modelProvider") == expected_provider
+    assert dst_settings.get("customKey") == expected_extra
+
+
+def test_post_probe_unlinks_adc_when_auto_clean_false_and_logs_unlink_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    home_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify post_probe always unlinks isolated ADC even with auto_clean=False and logs errors."""
+    from reach.runtime.antigravity_cli import _isolated_adc_path, _unlink_isolated_adc
+
+    adc_src = tmp_path / "host_adc.json"
+    adc_src.write_text('{"type": "authorized_user"}', encoding="utf-8")
+    monkeypatch.setattr("reach.runtime.antigravity_cli.find_adc_path", lambda: adc_src)
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(
+            home_dir=home_dir,
+            auto_clean=False,
+            vertex=True,
+            project="test-proj",
+        ),
+    )
+    env_owner = rt.build_env(workdir)
+    owner_adc = Path(env_owner["GOOGLE_APPLICATION_CREDENTIALS"])
+    _write_conversation_state(home_dir)
+    assert owner_adc.is_file()
+
+    rt.post_probe(workdir)
+    assert not owner_adc.exists()
+    conversations, summaries_db = _conversation_state_paths(home_dir)
+    assert conversations.is_dir()
+    assert summaries_db.is_file()
+
+    worker_adc_paths: list[Path] = []
+    worker_convs: list[Path] = []
+
+    def _run_worker(_idx: int) -> None:
+        w_env = rt.build_env(workdir)
+        w_home = Path(w_env["HOME"])
+        _write_conversation_state(w_home)
+        worker_adc_paths.append(Path(w_env["GOOGLE_APPLICATION_CREDENTIALS"]))
+        w_conv, _ = _conversation_state_paths(w_home)
+        worker_convs.append(w_conv)
+        rt.post_probe(workdir)
+
+    run_concurrent_workers(1, _run_worker)
+    assert not worker_adc_paths[0].exists()
+    assert worker_convs[0].is_dir()
+
+    failing_adc = _isolated_adc_path(home_dir)
+    failing_adc.parent.mkdir(parents=True, exist_ok=True)
+    failing_adc.write_text("{}", encoding="utf-8")
+
+    def _fail_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        msg = "simulated unlink failure"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "unlink", _fail_unlink)
+    _unlink_isolated_adc(home_dir)
+    assert "Failed to unlink isolated ADC file" in caplog.text
+    assert "simulated unlink failure" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        pytest.param("init", id="corrupt-at-init"),
+        pytest.param("post-install", id="corrupt-before-post-install"),
+    ],
+)
+def test_corrupt_owner_settings_raises_value_error(
+    home_dir: Path,
+    skill_repo: Path,
+    workdir: Path,
+    stage: str,
+) -> None:
+    """Verify corrupt settings.json in owner home_dir raises ValueError at init or post-install."""
+    settings_path = _isolated_settings_path(home_dir)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if stage == "init":
+        settings_path.write_text("{corrupt-owner-json", encoding="utf-8")
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir))
+    else:
+        rt = AntigravityCliRuntime(options=AntigravityCliOptions(home_dir=home_dir))
+        settings_path.write_text("{corrupt-before-post-install", encoding="utf-8")
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            install_one(rt, skill_repo, workdir)
+
+
+def test_cleanup_removes_worker_slots_under_user_supplied_home_dir(
+    home_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify atexit cleanup removes concurrent worker slots while sparing user slot_* dirs."""
+    user_slot_dir = home_dir / "slot_user_custom"
+    user_slot_dir.mkdir(parents=True)
+    user_sentinel = user_slot_dir / "keep.txt"
+    user_sentinel.write_text("user data", encoding="utf-8")
+
+    atexit_callbacks: list[Any] = []
+    monkeypatch.setattr(
+        "reach.runtime.antigravity_cli.atexit.register",
+        atexit_callbacks.append,
+    )
+
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, auto_clean=False),
+    )
+    assert len(atexit_callbacks) == 1
+
+    sync_calls: list[Path] = []
+    sync_lock = threading.Lock()
+    orig_sync = _sync_isolated_settings
+
+    def _spy_sync(src: Path, dst: Path) -> None:
+        with sync_lock:
+            sync_calls.append(dst)
+        orig_sync(src, dst)
+
+    monkeypatch.setattr("reach.runtime.antigravity_cli._sync_isolated_settings", _spy_sync)
+
+    barrier = threading.Barrier(3, timeout=WORKER_TIMEOUT)
+
+    def _create_worker_slot(_idx: int) -> Path:
+        # Calling clean_conversation_state before any slot exists must not sync/create a slot
+        rt.clean_conversation_state()
+        barrier.wait()
+        return rt.effective_home_dir()
+
+    worker_slots = run_concurrent_workers(
+        3,
+        _create_worker_slot,
+        on_error=lambda: (barrier.abort(), None)[-1],
+    )
+
+    assert len(set(worker_slots)) == 3
+    for slot_dir in worker_slots:
+        assert slot_dir != home_dir.resolve()
+        assert slot_dir.is_dir()
+    assert set(sync_calls) == set(worker_slots)
+
+    atexit_callbacks[-1]()
+    for slot_dir in worker_slots:
+        assert not slot_dir.exists()
+    assert user_slot_dir.is_dir()
+    assert user_sentinel.is_file()
+    assert home_dir.is_dir()
+    assert _isolated_settings_path(home_dir).is_file()
+
+
+def test_worker_slot_resyncs_after_owner_settings_change(
+    home_dir: Path,
+    skill_repo: Path,
+    workdir: Path,
+) -> None:
+    """Verify worker slot re-syncs owner settings, merges custom deny, and recreates on discard."""
+    owner_settings = _isolated_settings_path(home_dir)
+    owner_settings.parent.mkdir(parents=True, exist_ok=True)
+    owner_settings.write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "allow": ["read_file(/custom-preexisting)"],
+                    "deny": [
+                        "custom_owner_deny",
+                        "read_file(/stale/owner/.config)",
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, auto_clean=False),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _worker(_idx: int) -> None:
+        slot = rt.effective_home_dir()
+        slot_settings = _isolated_settings_path(slot)
+        os.utime(slot_settings, (1_000_000, 1_000_000))
+        mtime_before_repeat = slot_settings.stat().st_mtime_ns
+        rt.effective_home_dir()
+        observed["mtime_unchanged_on_noop_sync"] = (
+            slot_settings.stat().st_mtime_ns == mtime_before_repeat
+        )
+        observed["before"] = read_isolated_settings(slot)
+        install_one(rt, skill_repo, workdir)
+        slot_after = rt.effective_home_dir()
+        assert slot_after == slot
+        observed["after"] = read_isolated_settings(slot_after)
+        rt._discard_worker_slot(slot)
+        observed["exists_after_discard"] = slot.exists()
+        slot_recreated = rt.effective_home_dir()
+        assert slot_recreated == slot
+        observed["recreated"] = read_isolated_settings(slot_recreated)
+
+    run_concurrent_workers(1, _worker)
+
+    assert observed["mtime_unchanged_on_noop_sync"] is True
+
+    before_deny = observed["before"]["permissions"]["deny"]
+    assert "custom_owner_deny" in before_deny
+    assert "read_file(/stale/owner/.config)" not in before_deny
+    assert f"read_file({home_dir.resolve() / '.config'})" not in before_deny
+    assert observed["before"].get("trustedWorkspaces") is None
+    assert observed["after"].get("trustedWorkspaces") == [str(workdir.resolve())]
+    assert observed["exists_after_discard"] is False
+    assert observed["recreated"].get("trustedWorkspaces") == [str(workdir.resolve())]
+    rt.cleanup()
 
 
 def test_antigravity_cli_options_adc_vertex_and_constraints() -> None:
@@ -1693,6 +2090,27 @@ def test_antigravity_cli_adc_lazy_provisioning_env_and_cleanup(
     assert env["GOOGLE_APPLICATION_CREDENTIALS"] == str(isolated_adc)
     assert "GEMINI_API_KEY" not in env
     assert "GOOGLE_API_KEY" not in env
+
+    if isinstance(instance, AntigravityCliGenerator):
+        seen_during_run: list[bool] = []
+
+        def _fake_complete_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            del kwargs
+            seen_during_run.append(isolated_adc.is_file())
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout='{"response": "ok"}',
+                stderr="",
+            )
+
+        monkeypatch.setattr(subprocess, "run", _fake_complete_run)
+        assert instance.complete("hello") == "ok"
+        assert seen_during_run == [True]
+        assert not isolated_adc.exists()
+        # Re-provision via build_env() to also exercise cleanup() below
+        instance.build_env()
+        assert isolated_adc.is_file()
 
     # cleanup() unlinks isolated ADC even when home_dir was explicitly provided
     instance.cleanup()
@@ -1911,3 +2329,163 @@ def test_is_sensitive_credential_path_with_home_dir(tmp_path: Path, home_dir: Pa
     assert _is_sensitive_credential_path(str(home_dir / ".config"), home_dir=home_dir) is True
     assert _is_sensitive_credential_path(str(safe_file), home_dir=home_dir) is False
     assert _is_sensitive_credential_path(None, home_dir=home_dir) is False
+
+
+def test_owner_thread_with_unresolved_or_default_home_dir_not_treated_as_worker(
+    tmp_path: Path,
+    clean_api_keys: None,
+) -> None:
+    """Verify owner thread is never added to _worker_slots for default or symlinked home_dir."""
+    rt_default = AntigravityCliRuntime(options=AntigravityCliOptions(model=DEFAULT_GEMINI_MODEL))
+    try:
+        eff_default = rt_default.effective_home_dir()
+        assert eff_default == rt_default.home_dir
+        assert rt_default._worker_slots == set()
+    finally:
+        rt_default.cleanup()
+
+    real_parent = tmp_path / "private_var"
+    real_parent.mkdir(parents=True, exist_ok=True)
+    link_parent = tmp_path / "var_alias"
+    link_parent.symlink_to(real_parent)
+    unresolved_home = link_parent / "agy_home"
+
+    rt_unresolved = AntigravityCliRuntime(
+        options=AntigravityCliOptions(model=DEFAULT_GEMINI_MODEL, home_dir=unresolved_home),
+    )
+    eff_unresolved = rt_unresolved.effective_home_dir()
+    assert eff_unresolved == unresolved_home.resolve()
+    assert rt_unresolved._worker_slots == set()
+
+
+def test_read_file_step_update_with_capital_path_parameter(runtime: AntigravityCliRuntime) -> None:
+    """Verify live agy read_file step_update with capital Path extracts skill and checks sandbox."""
+    runtime._resident = ("acme-deploy-tool",)
+    step_line = json.dumps(
+        {
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": "conv-123",
+                "step_index": 2,
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": "read_file",
+                "tool_info": {
+                    "name": "read_file",
+                    "parameters": {
+                        "Path": "/work/.agents/skills/acme-deploy-tool/SKILL.md",
+                    },
+                },
+            },
+        }
+    )
+    assert runtime.extract_skill_from_line(step_line) == "acme-deploy-tool"
+
+    summary = runtime.parse_stream([step_line], early_exit=True)
+    assert summary.invoked_skill == "acme-deploy-tool"
+    assert summary.invoked_skills == ("acme-deploy-tool",)
+    assert len(summary.tool_calls) == 1
+    assert summary.tool_calls[0].name == "read_file"
+    assert summary.tool_calls[0].path == "/work/.agents/skills/acme-deploy-tool/SKILL.md"
+
+    resident = frozenset({"/work/.agents/skills/acme-deploy-tool/SKILL.md"})
+    assert (
+        _leaked_tools(
+            summary.tool_calls,
+            resident,
+            workdir="/work",
+            allowed_tools=("read_file",),
+        )
+        == ()
+    )
+    escaped_call = ToolCallInfo(name="read_file", parameters={"Path": "/etc/passwd"})
+    assert _leaked_tools(
+        [escaped_call],
+        resident,
+        workdir="/work",
+        allowed_tools=("read_file",),
+    ) == ("read_file",)
+
+
+def test_generator_complete_auto_clean_discards_worker_slots_and_conversation_state(
+    home_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify AntigravityCliGenerator.complete cleans state and worker slots on auto_clean=True."""
+    gen = AntigravityCliGenerator(
+        model=DEFAULT_GEMINI_MODEL,
+        options=AntigravityCliOptions(
+            model=DEFAULT_GEMINI_MODEL,
+            home_dir=home_dir,
+            auto_clean=True,
+        ),
+    )
+
+    observed_slot: list[Path] = []
+
+    def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env") or {}
+        active_home = Path(env["HOME"])
+        observed_slot.append(active_home)
+        conv_dir, summaries_db = _conversation_state_paths(active_home)
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        (conv_dir / "conv.pb").write_text("data", encoding="utf-8")
+        summaries_db.write_text("sqlite", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='{"response": "drafted"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    # 1. Owner thread completion cleans conversation state while preserving owner home_dir
+    assert gen.complete("prompt on owner") == "drafted"
+    owner_conv, owner_db = _conversation_state_paths(home_dir)
+    assert not owner_conv.exists()
+    assert not owner_db.exists()
+    assert home_dir.is_dir()
+
+    # 2. Worker thread completion discards the worker slot directory under auto_clean=True
+    observed_slot.clear()
+    run_concurrent_workers(1, lambda _idx: gen.complete("prompt on worker"))
+    assert len(observed_slot) == 1
+    worker_slot = observed_slot[0]
+    assert worker_slot != home_dir.resolve()
+    assert not worker_slot.exists()
+    assert gen._worker_slots == set()
+    gen.cleanup()
+
+
+def test_validate_outcome_does_not_resync_worker_settings(
+    home_dir: Path,
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify validate_outcome uses effective_home_dir(sync=False) to avoid redundant I/O."""
+    rt = AntigravityCliRuntime(
+        options=AntigravityCliOptions(home_dir=home_dir, auto_clean=False),
+    )
+    sync_calls: list[Path] = []
+    orig_sync = _sync_isolated_settings
+
+    def _spy_sync(src: Path, dst: Path) -> None:
+        sync_calls.append(dst)
+        orig_sync(src, dst)
+
+    monkeypatch.setattr("reach.runtime.antigravity_cli._sync_isolated_settings", _spy_sync)
+
+    summary = SessionSummary(
+        invoked_skills=(),
+        observed_catalog=(),
+        turns_taken=1,
+        status="SUCCESS",
+    )
+
+    def _worker(_idx: int) -> None:
+        assert rt.validate_outcome(summary, workdir) is None
+
+    run_concurrent_workers(1, _worker)
+    assert sync_calls == []
+    rt.cleanup()

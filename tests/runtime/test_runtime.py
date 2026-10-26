@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import subprocess
+import threading
 import tomllib
 from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, override
 
@@ -30,6 +33,8 @@ from pydantic import ValidationError as PydanticValidationError
 
 from reach.catalog import build_catalogs, load_skills
 from reach.config import (
+    RegistrySettings,
+    RunConfig,
     RuntimeSettings,
     agent_default_model,
     agent_profiles,
@@ -37,9 +42,11 @@ from reach.config import (
     load_config,
 )
 from reach.models import Catalog, CatalogMode, Skill
+from reach.registry import RegistryCacheManager, RegistryManifest, RegistrySkillData
 from reach.runtime import (
     AgentOptions,
     AgentRuntime,
+    AntigravityOptions,
     AntigravityRuntime,
     CatalogFit,
     CliAgentRuntime,
@@ -49,6 +56,7 @@ from reach.runtime import (
     SkillRoot,
     SkillSelectionBase,
     ToolCallInfo,
+    VertexOptions,
     antigravity_agents,
     build_runtime,
     cli_agents,
@@ -68,16 +76,24 @@ from reach.runtime._env import (
     sync_google_and_gemini_keys,
 )
 from reach.runtime._fs import (
+    TOOL_PATH_KEYS,
+    WorkspaceSlot,
+    ensure_private_directory,
     install_skills,
+    normalize_skill_tool_args,
     probe_slot_dir,
     probe_slot_id,
     resolve_skill_from_path,
+    resolve_thread_slot_dir,
+    safe_cleanup_isolated_dir,
+    validate_isolated_directory,
 )
 from reach.runtime._subprocess import (
     check_tool_leak,
     extract_content_reasoning,
     format_subprocess_error,
     process_failure_reason,
+    run_subprocess_probe,
 )
 from reach.runtime.fake import FakeGenerator, FakeOptions, FakeRuntime
 from reach.runtime.generator import (
@@ -86,7 +102,14 @@ from reach.runtime.generator import (
 )
 from reach.runtime.profiles import model_profile
 
-from .conftest import MINIMAL_OPTIONS
+from .conftest import (
+    MINIMAL_OPTIONS,
+    WORKER_TIMEOUT,
+    expected_slot,
+    run_concurrent_workers,
+    run_staggered_two_worker_probe,
+    slot_agents,
+)
 from .conftest import build_agent as _build_agent
 
 _KEY_SYNC_AGENTS = ("antigravity-cli", "antigravity-sdk", "goose", "pi")
@@ -351,9 +374,18 @@ def test_fake_generator_custom_completion() -> None:
 
 
 def test_full_model_ids_have_profiles_in_reach_toml() -> None:
-    """Verify full model IDs for Claude and Gemini resolve directly without aliasing."""
+    """Verify full model IDs for Claude and Gemini resolve to explicit reach.toml entries."""
+    from reach.runtime.profiles import ModelProfile, _lookup_model_profile
+
+    raw_models = load_config().get("models", {})
+    assert isinstance(raw_models, dict)
+    models_table: dict[str, object] = {
+        str(k).lower(): v for k, v in raw_models.items() if isinstance(v, dict)
+    }
+
     for model_id in (
         "claude-sonnet-5",
+        "claude-sonnet-5-5",
         "claude-opus-5",
         "claude-haiku-4-5",
         "gemini-4-argon",
@@ -362,10 +394,19 @@ def test_full_model_ids_have_profiles_in_reach_toml() -> None:
         "gemini-3.5-flash-lite",
         "gemini-3.1-pro-preview",
     ):
+        matched = _lookup_model_profile(
+            models_table,
+            model_id.lower(),
+            model_id.lower().replace(".", "-"),
+        )
+        assert matched is not None, f"Full model ID {model_id!r} lacks profile in reach.toml"
         profile = model_profile(model_id)
-        assert profile is not None, f"Full model ID {model_id!r} lacks profile in reach.toml"
+        assert profile == matched
         assert profile.context_window > 0
         assert profile.chars_per_token > 0
+
+    assert _lookup_model_profile(models_table, "nonexistent-xyz-999", "nonexistent-xyz-999") is None
+    assert model_profile("nonexistent-xyz-999") == ModelProfile()
 
 
 def _assert_agent_default_model(agent_name: str) -> None:
@@ -1267,7 +1308,7 @@ def test_agent_build_env_sanitizes_ambient_sensitive_variables(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify build_env strips ambient sensitive credentials from child process environment."""
+    """Verify build_env strips or masks ambient sensitive credentials from child process env."""
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "unwanted-aws-secret")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_unwanted_token")
     monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "ssh.sock"))
@@ -1276,9 +1317,15 @@ def test_agent_build_env_sanitizes_ambient_sensitive_variables(
     monkeypatch.setenv("OPENAI_API_KEY", "valid-key")
     rt = _build_agent(agent, tmp_path)
     env = rt.build_env()
-    assert "AWS_SECRET_ACCESS_KEY" not in env
-    assert "GITHUB_TOKEN" not in env
-    assert "SSH_AUTH_SOCK" not in env
+    if agent == "antigravity-sdk":
+        assert env.get("AWS_SECRET_ACCESS_KEY") == ""
+        assert env.get("GITHUB_TOKEN") == ""
+        assert env.get("SSH_AUTH_SOCK") == ""
+        assert {**os.environ, **env}["AWS_SECRET_ACCESS_KEY"] == ""
+    else:
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert "SSH_AUTH_SOCK" not in env
     assert env.get("ANTHROPIC_API_KEY") == "valid-key"
     assert env.get("OPENAI_API_KEY") == "valid-key"
 
@@ -1325,7 +1372,11 @@ def test_agent_build_env_honors_custom_blocked_env_vars(
     )
     rt = build_runtime(settings)
     env = rt.build_env(tmp_path)
-    assert "CUSTOM_BLOCKED_VAR" not in env
+    if agent == "antigravity-sdk":
+        assert env.get("CUSTOM_BLOCKED_VAR") == ""
+        assert {**os.environ, **env}["CUSTOM_BLOCKED_VAR"] == ""
+    else:
+        assert "CUSTOM_BLOCKED_VAR" not in env
     assert env.get("GITHUB_TOKEN") == "keep-me"
 
 
@@ -1469,8 +1520,6 @@ def test_subprocess_probe_preserves_caller_configured_env(
     tmp_path: Path,
 ) -> None:
     """Verify run_subprocess_probe preserves explicitly allowed variables in caller env."""
-    from reach.runtime._subprocess import run_subprocess_probe
-
     seen: dict[str, Any] = {}
 
     def record(args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -1493,38 +1542,34 @@ def test_subprocess_probe_preserves_caller_configured_env(
     assert seen["env"] == caller_env
 
 
-@pytest.mark.parametrize(
-    ("agent", "dir_names"),
-    [
-        ("claude-code", [".reach_claude_config"]),
-        ("goose", [".reach_goose"]),
-        ("pi", [".reach_pi_sessions", ".reach_pi_agent"]),
-        ("antigravity-sdk", [".reach_antigravity_sdk"]),
-    ],
-)
-def test_isolated_config_dir_cleanup_on_auto_clean(
+@pytest.mark.parametrize("agent", slot_agents())
+def test_concurrent_workers_isolate_config_slots_and_prune_root_on_last_exit(
     agent: str,
-    dir_names: list[str],
     tmp_path: Path,
 ) -> None:
-    """Verify post_probe removes isolated runtime directories when auto_clean is enabled."""
-    workdir = tmp_path / f"work_{agent}"
+    """Verify concurrent threads get distinct slots and post_probe spares active sibling slots."""
+    workdir = tmp_path / f"work_concurrent_{agent}"
     workdir.mkdir(parents=True, exist_ok=True)
-    dirs = [workdir / name for name in dir_names]
-    for d in dirs:
-        d.mkdir(parents=True, exist_ok=True)
+    rt = _build_agent(agent, tmp_path, auto_clean=True)
+    assert rt.isolation_dir_name is not None
 
-    # auto_clean=False preserves directories
-    rt_no_clean = _build_agent(agent, tmp_path, auto_clean=False)
-    rt_no_clean.post_probe(workdir)
-    for d in dirs:
-        assert d.exists()
+    def setup_slot() -> Path:
+        slot = rt.effective_isolation_dir(workdir)
+        assert slot is not None
+        slot.mkdir(parents=True, exist_ok=True)
+        (slot / "sentinel.txt").write_text("active", encoding="utf-8")
+        return slot
 
-    # auto_clean=True removes directories
-    rt_clean = _build_agent(agent, tmp_path, auto_clean=True)
-    rt_clean.post_probe(workdir)
-    for d in dirs:
-        assert not d.exists()
+    slot_a, slot_b = run_staggered_two_worker_probe(
+        setup_slot=setup_slot,
+        cleanup_slot=lambda _slot: rt.post_probe(workdir),
+        is_intact=lambda slot: (slot / "sentinel.txt").is_file(),
+    )
+
+    root_dir = (workdir / rt.isolation_dir_name).resolve()
+    assert slot_a.is_relative_to(root_dir)
+    assert slot_b.is_relative_to(root_dir)
+    assert not root_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -1585,8 +1630,6 @@ def test_build_text_generator_options_model_is_respected() -> None:
 
 def test_agent_options_inheritance_hierarchy() -> None:
     """Verify AgentOptions is the root model and all registered agent options subclass it."""
-    from reach.runtime import AgentOptions, AntigravityOptions, CliOptions, VertexOptions
-
     assert issubclass(CliOptions, AgentOptions)
     assert issubclass(VertexOptions, AgentOptions)
     assert issubclass(AntigravityOptions, VertexOptions)
@@ -1878,6 +1921,24 @@ def test_tool_call_info_path_property_and_coercion() -> None:
 
     call2 = ToolCallInfo(name="view_file", parameters={"AbsolutePath": "/work/abs.md"})
     assert call2.path == "/work/abs.md"
+
+    call3 = ToolCallInfo(
+        name="read_file",
+        path="/ignored.md",
+        parameters={"Path": "/work/cap.md"},
+    )
+    assert call3.path == "/work/cap.md"
+    assert call3.parameters == {"Path": "/work/cap.md"}
+
+    call4 = ToolCallInfo.model_validate(
+        {
+            "name": "read_file",
+            "path": "/ignored.md",
+            "parameters": {"Path": "/work/cap.md"},
+        }
+    )
+    assert call4.path == "/work/cap.md"
+    assert call4.parameters == {"Path": "/work/cap.md"}
 
 
 def test_agent_runtime_effective_effort_and_resident_paths(tmp_path: Path) -> None:
@@ -2347,8 +2408,14 @@ def test_runtime_and_generator_build_env_resolves_and_scrubs_file_secrets(
     rt = build_runtime(RuntimeSettings(agent=agent, options=options))
     built_env = rt.build_env(tmp_path)
     assert built_env[expected_var] == expected_val
-    assert file_var not in built_env
-    assert "GITHUB_TOKEN_FILE" not in built_env
+    if agent == "antigravity-sdk":
+        assert built_env.get(file_var) == ""
+        assert built_env.get("GITHUB_TOKEN_FILE") == ""
+        assert {**os.environ, **built_env}[file_var] == ""
+        assert {**os.environ, **built_env}["GITHUB_TOKEN_FILE"] == ""
+    else:
+        assert file_var not in built_env
+        assert "GITHUB_TOKEN_FILE" not in built_env
 
     if explicit_api_key is None and agent == "claude-code":
         claude_gen = build_text_generator("claude-sonnet-4-5", agent="claude-code")
@@ -2418,12 +2485,354 @@ def test_apply_provider_api_key_rejects_unknown_provider() -> None:
 
 def test_probe_slot_dir_includes_pid_and_thread(tmp_path: Path) -> None:
     """Verify probe_slot_dir isolates directories by process ID and thread ID."""
-    import os
-
     slot = probe_slot_dir(tmp_path, prefix="test_slot")
     expected_name = f"test_slot_{os.getpid()}_{probe_slot_id()}"
     assert slot.name == expected_name
     assert slot.parent == tmp_path
+
+
+def test_resolve_thread_slot_dir_handles_owner_and_worker_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify resolve_thread_slot_dir returns base_dir for owner and slot_dir for other threads."""
+    base = tmp_path / "base_dir"
+    current_id = probe_slot_id()
+    assert resolve_thread_slot_dir(base, owner_slot_id=current_id) == base.resolve()
+    assert resolve_thread_slot_dir(base, owner_slot_id=current_id + 999) == probe_slot_dir(
+        base.resolve()
+    )
+    assert resolve_thread_slot_dir(base, owner_slot_id=None) == probe_slot_dir(base.resolve())
+
+    monkeypatch.chdir(tmp_path)
+    rel_slot = resolve_thread_slot_dir("rel_base", owner_slot_id=current_id)
+    assert rel_slot == (tmp_path / "rel_base").resolve()
+
+
+@pytest.mark.parametrize(
+    ("create_slot", "create_sibling", "expect_root_after"),
+    [
+        pytest.param(True, False, False, id="last-slot-prunes-root"),
+        pytest.param(True, True, True, id="sibling-slot-preserves-root"),
+        pytest.param(False, False, False, id="no-slot-prunes-empty-root"),
+    ],
+)
+def test_workspace_slot_for_subdir_and_cleanup_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    create_slot: bool,
+    create_sibling: bool,
+    expect_root_after: bool,
+) -> None:
+    """Verify WorkspaceSlot resolves relative workdirs and prunes empty root on cleanup."""
+    monkeypatch.chdir(tmp_path)
+    Path("rel_work").mkdir()
+    ws_slot = WorkspaceSlot.for_subdir("rel_work", ".reach_test")
+    assert ws_slot.workdir == (tmp_path / "rel_work").resolve()
+    assert ws_slot.root == (tmp_path / "rel_work" / ".reach_test").resolve()
+    assert ws_slot.slot.parent == ws_slot.root
+
+    ws_slot.root.mkdir(parents=True, exist_ok=True)
+    if create_slot:
+        ws_slot.slot.mkdir(parents=True, exist_ok=True)
+        (ws_slot.slot / "artifact.txt").write_text("data", encoding="utf-8")
+    if create_sibling:
+        sibling = ws_slot.root / "slot_other_worker"
+        sibling.mkdir(parents=True, exist_ok=True)
+
+    ws_slot.cleanup()
+    assert not ws_slot.slot.exists()
+    assert ws_slot.root.exists() is expect_root_after
+
+
+@dataclasses.dataclass(frozen=True)
+class CleanupCase:
+    """Test case specification for test_agent_runtime_cleanup_isolation_cases."""
+
+    agent: str = "claude-code"
+    isolate_config_dir: bool = True
+    auto_clean: bool = True
+    use_custom_dir: bool = False
+    create_slot: bool = True
+    create_sibling: bool = False
+    expect_target_exists: bool = False
+    expect_root_exists: bool | None = False
+    expect_extra_exists: bool = False
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            CleanupCase(
+                isolate_config_dir=False,
+                expect_target_exists=True,
+                expect_root_exists=True,
+            ),
+            id="isolate-config-dir-false-keeps-slot",
+        ),
+        pytest.param(
+            CleanupCase(
+                use_custom_dir=True,
+                create_slot=False,
+                expect_target_exists=False,
+                expect_root_exists=None,
+            ),
+            id="custom-dir-auto-clean-on-removes",
+        ),
+        pytest.param(
+            CleanupCase(
+                auto_clean=False,
+                use_custom_dir=True,
+                create_slot=False,
+                expect_target_exists=True,
+                expect_root_exists=None,
+            ),
+            id="custom-dir-auto-clean-off-keeps",
+        ),
+        *[
+            pytest.param(
+                CleanupCase(
+                    agent=agent,
+                    auto_clean=auto_clean,
+                    expect_target_exists=not auto_clean,
+                    expect_root_exists=not auto_clean,
+                    expect_extra_exists=(agent == "pi" and not auto_clean),
+                ),
+                id=f"{agent}-default-slot-auto-clean-{'on' if auto_clean else 'off'}",
+            )
+            for agent in ("claude-code", "goose", "pi")
+            for auto_clean in (True, False)
+        ],
+        pytest.param(
+            CleanupCase(
+                agent="antigravity-sdk",
+                auto_clean=False,
+                expect_target_exists=False,
+                expect_root_exists=False,
+            ),
+            id="antigravity-sdk-always-clean-slot-removes",
+        ),
+        pytest.param(
+            CleanupCase(
+                create_sibling=True,
+                expect_target_exists=False,
+                expect_root_exists=True,
+            ),
+            id="seam-sibling-slot-present-root-survives",
+        ),
+        pytest.param(
+            CleanupCase(
+                create_slot=False,
+                expect_target_exists=False,
+                expect_root_exists=False,
+            ),
+            id="seam-no-slot-present-prunes-empty-root",
+        ),
+    ],
+)
+def test_agent_runtime_cleanup_isolation_cases(
+    tmp_path: Path,
+    workdir: Path,
+    case: CleanupCase,
+) -> None:
+    """Verify post_probe cleanup handles config dirs, slots, and extra dirs across runtimes."""
+    custom_dir = (workdir / "custom_iso") if case.use_custom_dir else None
+    extra_kwargs: dict[str, Any] = {
+        "isolate_config_dir": case.isolate_config_dir,
+        "auto_clean": case.auto_clean,
+    }
+    if custom_dir is not None:
+        extra_kwargs["config_dir"] = custom_dir
+        custom_dir.mkdir(parents=True, exist_ok=True)
+
+    rt = _build_agent(case.agent, tmp_path, **extra_kwargs)
+    assert rt.isolation_dir_name is not None
+    ws_slot = WorkspaceSlot.for_subdir(workdir, rt.isolation_dir_name)
+    if not case.use_custom_dir:
+        ws_slot.root.mkdir(parents=True, exist_ok=True)
+        if case.create_slot:
+            ws_slot.slot.mkdir(parents=True, exist_ok=True)
+        if case.create_sibling:
+            (ws_slot.root / "slot_sibling").mkdir(parents=True, exist_ok=True)
+
+    extra_slots = [WorkspaceSlot.for_subdir(workdir, name) for name in rt.extra_isolation_dir_names]
+    for extra_slot in extra_slots:
+        extra_slot.slot.mkdir(parents=True, exist_ok=True)
+
+    rt.post_probe(workdir)
+
+    target = custom_dir if custom_dir is not None else ws_slot.slot
+    assert target.exists() is case.expect_target_exists
+    if case.expect_root_exists is not None:
+        assert ws_slot.root.exists() is case.expect_root_exists
+    for extra_slot in extra_slots:
+        assert extra_slot.root.exists() is case.expect_extra_exists
+
+
+def test_concurrent_four_workers_prune_root_only_on_last_exit(
+    tmp_path: Path,
+    workdir: Path,
+) -> None:
+    """Verify 4 concurrent workers get distinct slots and prune the root only on the 4th exit."""
+    rt = _build_agent("claude-code", tmp_path, auto_clean=True)
+    assert rt.isolation_dir_name is not None
+    root_dir = (workdir / rt.isolation_dir_name).resolve()
+
+    num_workers = 4
+    ready = threading.Barrier(num_workers + 1, timeout=WORKER_TIMEOUT)
+    exit_gates = [threading.Event() for _ in range(num_workers)]
+    exited = [threading.Event() for _ in range(num_workers)]
+    slots: dict[int, Path] = {}
+
+    def _abort_all() -> None:
+        ready.abort()
+        for gate in exit_gates:
+            gate.set()
+        for done in exited:
+            done.set()
+
+    def _task(idx: int) -> None:
+        if idx < num_workers:
+            slot = rt.effective_isolation_dir(workdir)
+            assert slot is not None
+            slot.mkdir(parents=True, exist_ok=True)
+            (slot / "marker.txt").write_text(f"worker-{idx}", encoding="utf-8")
+            slots[idx] = slot
+            ready.wait()
+            assert exit_gates[idx].wait(timeout=WORKER_TIMEOUT)
+            rt.post_probe(workdir)
+            exited[idx].set()
+            return
+
+        ready.wait()
+        for w_idx in range(num_workers):
+            exit_gates[w_idx].set()
+            assert exited[w_idx].wait(timeout=WORKER_TIMEOUT)
+            assert not slots[w_idx].exists()
+            if w_idx < num_workers - 1:
+                assert root_dir.is_dir()
+                for remaining in range(w_idx + 1, num_workers):
+                    assert (slots[remaining] / "marker.txt").is_file()
+            else:
+                assert not root_dir.exists()
+
+    run_concurrent_workers(num_workers + 1, _task, on_error=_abort_all)
+    assert len(set(slots.values())) == num_workers
+
+
+def test_concurrent_worker_exception_cleans_own_slot_and_propagates_in_helper(
+    tmp_path: Path,
+    workdir: Path,
+) -> None:
+    """Verify a raising worker cleans its slot in finally, spares siblings, and raises in helper."""
+    rt = _build_agent("claude-code", tmp_path, auto_clean=True)
+    assert rt.isolation_dir_name is not None
+    root_dir = (workdir / rt.isolation_dir_name).resolve()
+    observed_slots: list[Path] = []
+    sibling_survived: list[bool] = []
+
+    def _setup_slot() -> Path:
+        slot = rt.effective_isolation_dir(workdir)
+        assert slot is not None
+        slot.mkdir(parents=True, exist_ok=True)
+        (slot / "state.txt").write_text("active", encoding="utf-8")
+        observed_slots.append(slot)
+        return slot
+
+    should_fail = True
+
+    def _cleanup_with_first_worker_error(_slot: Path) -> None:
+        nonlocal should_fail
+        try:
+            if should_fail:
+                should_fail = False
+                msg = "simulated probe failure"
+                raise RuntimeError(msg)
+        finally:
+            rt.post_probe(workdir)
+
+    def _check_intact(slot: Path) -> bool:
+        intact = (slot / "state.txt").is_file()
+        sibling_survived.append(intact)
+        return intact
+
+    with pytest.raises(RuntimeError, match="simulated probe failure"):
+        run_staggered_two_worker_probe(
+            setup_slot=_setup_slot,
+            cleanup_slot=_cleanup_with_first_worker_error,
+            is_intact=_check_intact,
+        )
+
+    assert len(set(observed_slots)) == 2
+    assert sibling_survived == [True]
+    assert not root_dir.exists()
+
+
+@pytest.mark.parametrize("agent", slot_agents())
+def test_custom_isolation_dir_isolates_concurrent_workers_and_preserves_owner(
+    agent: str,
+    tmp_path: Path,
+    workdir: Path,
+) -> None:
+    """Verify custom isolation dir cleans owner files while workers run and prunes on last exit."""
+    custom_dir = workdir / f"custom_cfg_{agent}"
+    owner_file = custom_dir / "owner_state.json"
+    owner_subdir = custom_dir / "owner_nested"
+    owner_subdir.mkdir(parents=True)
+    owner_file.write_text("{}", encoding="utf-8")
+    (owner_subdir / "data.txt").write_text("nested", encoding="utf-8")
+
+    field = getattr(options_model(agent), "isolation_dir_field", None)
+    assert field is not None
+    base_rt = _build_agent(agent, tmp_path, **{field: custom_dir, "auto_clean": True})
+    assert base_rt.effective_isolation_dir(workdir) == custom_dir.resolve()
+
+    observed_slots: list[Path] = []
+    rt_holder: list[AgentRuntime[Any]] = []
+    rt_ready = threading.Event()
+    workers_ready = threading.Barrier(3, timeout=WORKER_TIMEOUT)
+    owner_cleaned = threading.Event()
+
+    def _setup() -> Path:
+        slot = rt_holder[0].effective_isolation_dir(workdir)
+        assert slot is not None
+        assert slot.parent == custom_dir.resolve()
+        slot.mkdir(parents=True, exist_ok=True)
+        (slot / "marker.txt").write_text("active", encoding="utf-8")
+        observed_slots.append(slot)
+        workers_ready.wait()
+        owner_cleaned.wait(timeout=WORKER_TIMEOUT)
+        assert (slot / "marker.txt").is_file()
+        return slot
+
+    def _actor(idx: int) -> None:
+        if idx == 0:
+            rt = base_rt.clone_isolated()
+            assert rt.effective_isolation_dir(workdir) == custom_dir.resolve()
+            rt_holder.append(rt)
+            rt_ready.set()
+            workers_ready.wait()
+            rt.post_probe(workdir)
+            assert not owner_file.exists()
+            assert not owner_subdir.exists()
+            assert custom_dir.is_dir()
+            owner_cleaned.set()
+        else:
+            rt_ready.wait(timeout=WORKER_TIMEOUT)
+            run_staggered_two_worker_probe(
+                setup_slot=_setup,
+                cleanup_slot=lambda _s: rt_holder[0].post_probe(workdir),
+                is_intact=lambda s: (s / "marker.txt").is_file(),
+            )
+
+    run_concurrent_workers(
+        2,
+        _actor,
+        on_error=lambda: (rt_ready.set(), workers_ready.abort(), owner_cleaned.set())[-1],
+    )
+    assert len(set(observed_slots)) == 2
+    assert not custom_dir.exists()
 
 
 def test_cli_agents_discovery() -> None:
@@ -2460,8 +2869,6 @@ def test_model_validators_preserve_input_dict_immutability() -> None:
 
 def test_ensure_private_directory_creates_and_secures(tmp_path: Path) -> None:
     """Verify ensure_private_directory creates directory with 0o700 permissions on POSIX."""
-    from reach.runtime._fs import ensure_private_directory
-
     target = tmp_path / "deep" / "nested" / "private_dir"
     res = ensure_private_directory(target)
     assert res == target.resolve()
@@ -2474,8 +2881,6 @@ def test_ensure_private_directory_creates_and_secures(tmp_path: Path) -> None:
 
 def test_ensure_private_directory_tightens_existing_permissions(tmp_path: Path) -> None:
     """Verify ensure_private_directory tightens pre-existing loose permissions to 0o700."""
-    from reach.runtime._fs import ensure_private_directory
-
     target = tmp_path / "preexisting_dir"
     target.mkdir(mode=0o777)
     if os.name == "posix":
@@ -2491,8 +2896,6 @@ def test_ensure_private_directory_tightens_existing_permissions(tmp_path: Path) 
 
 def test_ensure_private_directory_accepts_str(tmp_path: Path) -> None:
     """Verify ensure_private_directory works seamlessly when passed a string path."""
-    from reach.runtime._fs import ensure_private_directory
-
     target_str = str(tmp_path / "str_dir")
     res = ensure_private_directory(target_str)
     assert res.is_dir()
@@ -2502,9 +2905,7 @@ def test_ensure_private_directory_accepts_str(tmp_path: Path) -> None:
 def test_ensure_private_directory_tolerates_chmod_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify ensure_private_directory tolerates OSError during chmod without raising."""
-    from reach.runtime._fs import ensure_private_directory
-
+    """Verify ensure_private_directory tolerates chmod OSError and retries transient mkdir race."""
     target = tmp_path / "chmod_fail_dir"
 
     def _failing_chmod(path: Any, mode: int, **kwargs: Any) -> None:
@@ -2515,43 +2916,96 @@ def test_ensure_private_directory_tolerates_chmod_error(
     res = ensure_private_directory(target)
     assert res.is_dir()
 
+    race_target = tmp_path / "parent_race" / "slot_1"
+    orig_mkdir = Path.mkdir
+    attempts = 0
 
-def test_runtimes_create_private_isolation_directories(tmp_path: Path) -> None:
+    def _flaky_mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        nonlocal attempts
+        if self == race_target.resolve() and attempts == 0:
+            attempts += 1
+            msg = "Transient parent removal race"
+            raise FileNotFoundError(msg)
+        orig_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _flaky_mkdir)
+    res_race = ensure_private_directory(race_target)
+    assert attempts == 1
+    assert res_race.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("agent", "env_key"),
+    [
+        ("claude-code", "CLAUDE_CONFIG_DIR"),
+        ("goose", "HOME"),
+        ("pi", "PI_CODING_AGENT_DIR"),
+    ],
+)
+def test_runtimes_create_private_isolation_directories(
+    tmp_path: Path,
+    workdir: Path,
+    agent: str,
+    env_key: str,
+) -> None:
     """Verify runtimes establish private 0o700 isolation directories on POSIX."""
-    from reach.runtime.claude_code import ClaudeCodeRuntime
-    from reach.runtime.goose import GooseRuntime
-    from reach.runtime.pi import PiRuntime
-
-    workdir = tmp_path / "workspace"
-    workdir.mkdir()
-
-    claude = ClaudeCodeRuntime()
-    claude_env = claude.build_env(workdir)
-    claude_cfg = Path(claude_env["CLAUDE_CONFIG_DIR"])
-    assert claude_cfg.is_dir()
-
-    goose = GooseRuntime()
-    goose_env = goose.build_env(workdir)
-    goose_home = Path(goose_env["HOME"])
-    assert goose_home.is_dir()
-
-    pi = PiRuntime()
-    pi_env = pi.build_env(workdir)
-    pi_agent = Path(pi_env["PI_CODING_AGENT_DIR"])
-    assert pi_agent.is_dir()
+    rt = _build_agent(agent, tmp_path)
+    env = rt.build_env(workdir)
+    slot_dir = Path(env[env_key])
+    assert slot_dir == expected_slot(rt, workdir)
+    assert slot_dir.is_dir()
 
     if os.name == "posix":
-        assert (claude_cfg.stat().st_mode & 0o777) == 0o700
-        assert (goose_home.stat().st_mode & 0o777) == 0o700
-        assert (pi_agent.stat().st_mode & 0o777) == 0o700
+        assert (slot_dir.stat().st_mode & 0o777) == 0o700
+        assert (slot_dir.parent.stat().st_mode & 0o777) == 0o700
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param("symlinked-target", id="symlinked-target"),
+        pytest.param("symlinked-root", id="symlinked-root"),
+        pytest.param("symlinked-slot", id="symlinked-slot"),
+    ],
+)
+def test_isolation_helpers_reject_symlinks(
+    tmp_path: Path,
+    workdir: Path,
+    scenario: str,
+) -> None:
+    """Verify isolation directory helpers refuse symlinked base, root, or slot directories."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    if scenario == "symlinked-target":
+        symlink_target = workdir / "symlink_dir"
+        symlink_target.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            ensure_private_directory(symlink_target)
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            resolve_thread_slot_dir(symlink_target)
+    elif scenario == "symlinked-root":
+        symlink_reach_root = workdir / ".reach_claude_config"
+        symlink_reach_root.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            WorkspaceSlot.for_subdir(workdir, ".reach_claude_config")
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            ensure_private_directory(symlink_reach_root / "slot_1")
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            ensure_private_directory(symlink_reach_root / "slot_1" / "nested_sub")
+    else:
+        real_root = workdir / ".reach_claude_config"
+        real_root.mkdir()
+        preplanted_slot = probe_slot_dir(real_root.resolve())
+        preplanted_slot.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            resolve_thread_slot_dir(real_root)
+        with pytest.raises(ValueError, match="Refusing to use symlinked isolation directory"):
+            WorkspaceSlot.for_subdir(workdir, ".reach_claude_config")
 
 
 def test_registry_cache_manager_creates_private_directories(tmp_path: Path) -> None:
     """Verify RegistryCacheManager creates private directories when writing manifest or skill."""
-    from datetime import UTC, datetime
-
-    from reach.registry import RegistryCacheManager, RegistryManifest, RegistrySkillData
-
     cache_dir = tmp_path / "cache"
     mgr = RegistryCacheManager(cache_root=cache_dir)
     manifest = RegistryManifest(
@@ -2576,8 +3030,6 @@ def test_registry_cache_manager_creates_private_directories(tmp_path: Path) -> N
 
 def test_validate_isolated_directory(tmp_path: Path) -> None:
     """Verify validate_isolated_directory rejects active home and root."""
-    from reach.runtime._fs import validate_isolated_directory
-
     assert validate_isolated_directory(None) is None
     custom = tmp_path / "reach_isolated"
     assert validate_isolated_directory(custom) == custom
@@ -2613,10 +3065,12 @@ def test_agent_options_reject_home_and_root(agent: str, tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("agent", known_agents())
-def test_runtime_post_probe_never_cleans_outside_workdir(agent: str, tmp_path: Path) -> None:
-    """Verify post_probe on all runtimes safely ignores external directories without raising."""
-    workdir = tmp_path / "workspace"
-    workdir.mkdir()
+def test_runtime_post_probe_never_cleans_outside_workdir(
+    agent: str,
+    tmp_path: Path,
+    workdir: Path,
+) -> None:
+    """Verify post_probe preserves external custom dirs while cleaning worker slots inside them."""
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
     canary = outside_dir / "canary.txt"
@@ -2629,9 +3083,27 @@ def test_runtime_post_probe_never_cleans_outside_workdir(agent: str, tmp_path: P
         opts[field] = outside_dir
 
     runtime = build_runtime(RuntimeSettings(agent=agent, options=opts))
-    runtime.post_probe(workdir)
+    try:
+        runtime.post_probe(workdir)
+        assert canary.exists()
 
-    assert canary.exists()
+        if field:
+
+            def _worker(_idx: int) -> None:
+                if agent == "antigravity-cli":
+                    runtime.build_env(workdir)
+                else:
+                    slot = runtime.effective_isolation_dir(workdir)
+                    assert slot is not None
+                    ensure_private_directory(slot)
+                assert len(list(outside_dir.glob("slot_*"))) == 1
+                runtime.post_probe(workdir)
+
+            run_concurrent_workers(1, _worker)
+            assert list(outside_dir.glob("slot_*")) == []
+            assert canary.exists()
+    finally:
+        runtime.cleanup()
 
 
 @pytest.mark.parametrize(
@@ -2644,13 +3116,9 @@ def test_runtime_post_probe_never_cleans_outside_workdir(agent: str, tmp_path: P
 def test_safe_cleanup_isolated_dir_removes_contained_dir(
     target_rel: str,
     should_delete: bool,
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify safe_cleanup_isolated_dir removes directories strictly inside workdir."""
-    from reach.runtime._fs import safe_cleanup_isolated_dir
-
-    workdir = tmp_path / "work"
-    workdir.mkdir()
     target = workdir / target_rel
     target.mkdir(parents=True)
     (target / "dummy.txt").write_text("content")
@@ -2660,12 +3128,11 @@ def test_safe_cleanup_isolated_dir_removes_contained_dir(
     assert not target.exists()
 
 
-def test_safe_cleanup_isolated_dir_refuses_outside_or_root(tmp_path: Path) -> None:
+def test_safe_cleanup_isolated_dir_refuses_outside_or_root(
+    tmp_path: Path,
+    workdir: Path,
+) -> None:
     """Verify safe_cleanup_isolated_dir refuses outside dirs, None, or workdir itself."""
-    from reach.runtime._fs import safe_cleanup_isolated_dir
-
-    workdir = tmp_path / "work"
-    workdir.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "file.txt").write_text("content")
@@ -2686,19 +3153,25 @@ def test_safe_cleanup_isolated_dir_refuses_outside_or_root(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("agent", known_agents())
-def test_runtime_isolation_dir_properties(agent: str, tmp_path: Path) -> None:
-    """Verify isolation_dir_field and custom_isolation_dir properties reflect configuration."""
+def test_runtime_isolation_dir_properties(
+    agent: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify isolation_dir_field and custom_isolation_dir resolve relative and unset paths."""
+    monkeypatch.chdir(tmp_path)
     opts: dict[str, Any] = dict(MINIMAL_OPTIONS.get(agent, {}))
     field = getattr(options_model(agent), "isolation_dir_field", None)
-    custom_dir = tmp_path / f"custom_{agent}"
+    rel_dir = Path(f"rel_custom_{agent}")
     if field:
-        opts[field] = custom_dir
+        opts[field] = rel_dir
 
     runtime = build_runtime(RuntimeSettings(agent=agent, options=opts))
     if field:
+        expected = (tmp_path / rel_dir).resolve()
         assert runtime.isolation_dir_field == field
-        assert runtime.custom_isolation_dir == custom_dir
-        assert runtime.options.custom_isolation_dir == custom_dir
+        assert runtime.custom_isolation_dir == expected
+        assert runtime.options.custom_isolation_dir == expected
     else:
         assert runtime.isolation_dir_field is None
         assert runtime.custom_isolation_dir is None
@@ -2852,7 +3325,7 @@ def test_agent_runtime_build_env_prioritizes_options_over_settings(
 
 def test_fake_runtime_materialize_delegates_to_super_install_and_skill_roots(
     skill_repo: Path,
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify FakeRuntime with materialize=True delegates install and skill_roots to base."""
     skills = load_skills(skill_repo)
@@ -2862,7 +3335,7 @@ def test_fake_runtime_materialize_delegates_to_super_install_and_skill_roots(
         skills=("gcs-lifecycle-rules", "gcs-retention-policy"),
     )
     runtime = FakeRuntime(materialize=True)
-    target = runtime.install(catalog, skills, tmp_path / "work")
+    target = runtime.install(catalog, skills, workdir)
 
     # Verify installation materialized on disk via super().install()
     installed_dir = runtime.skills_dir(target)
@@ -2932,8 +3405,6 @@ def test_antigravity_options_resolve_schema_dict_happy_paths(
     expected: dict[str, Any] | None,
 ) -> None:
     """Verify AntigravityOptions.resolve_schema_dict parses mapping, JSON string, and None."""
-    from reach.runtime import AntigravityOptions
-
     opts = AntigravityOptions(json_schema=opt_schema)
     assert opts.resolve_schema_dict(arg_schema) == expected
 
@@ -2950,8 +3421,6 @@ def test_antigravity_options_resolve_schema_dict_sad_paths(
     match_pattern: str,
 ) -> None:
     """Verify AntigravityOptions.resolve_schema_dict raises ValueError on invalid schemas."""
-    from reach.runtime import AntigravityOptions
-
     opts = AntigravityOptions()
     with pytest.raises(ValueError, match=match_pattern):
         opts.resolve_schema_dict(bad_schema)
@@ -2964,8 +3433,6 @@ def test_antigravity_runtimes_inherit_registry_project_and_location(
     clean_api_keys: None,
 ) -> None:
     """Verify RunConfig.resolve propagates [registry] project/location to all Antigravity agents."""
-    from reach.config import RegistrySettings, RunConfig
-
     monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
     cfg = RunConfig(
         runtime=RuntimeSettings(agent=agent),
@@ -2984,6 +3451,7 @@ def test_antigravity_runtimes_inherit_registry_project_and_location(
     [
         "AbsolutePath",
         "path",
+        "Path",
         "file_path",
         "filePath",
         "dir_path",
@@ -2996,8 +3464,6 @@ def test_normalize_skill_tool_args_resolves_directory_across_path_keys(
     arg_key: str,
 ) -> None:
     """Verify normalize_skill_tool_args appends SKILL.md for directory paths across keys."""
-    from reach.runtime._fs import TOOL_PATH_KEYS, normalize_skill_tool_args
-
     assert arg_key in TOOL_PATH_KEYS
 
     skill_dir = tmp_path / "skill-test"
@@ -3014,6 +3480,218 @@ def test_normalize_skill_tool_args_resolves_directory_across_path_keys(
     assert normalize_skill_tool_args({arg_key: str(missing_dir)}, skill="missing-skill") == {
         arg_key: str(missing_dir / "SKILL.md")
     }
+
+
+def _stub_agent_probe(
+    agent: str,
+    runtime: AgentRuntime,
+    catalog: Catalog,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stub the pre-post_probe execution step for any agent so select() succeeds in-process."""
+    canned = SelectionOutcome(
+        invoked_skills=(catalog.skills[0],),
+        observed_catalog=catalog.skills,
+        turns_taken=1,
+    )
+    if agent == "antigravity-sdk":
+
+        async def _fake_select_async(*_args: object, **_kwargs: object) -> SelectionOutcome:
+            return canned
+
+        monkeypatch.setattr(runtime, "_select_async", _fake_select_async)
+    elif agent == "pi":
+        monkeypatch.setattr(runtime, "_select_unmeasured", lambda *_a, **_kw: canned)
+    elif agent not in ("fake", "keyword"):
+        monkeypatch.setattr(
+            "reach.runtime.run_subprocess_probe",
+            lambda *_a, **_kw: (
+                subprocess.CompletedProcess(args=["cmd"], returncode=0, stdout="", stderr=""),
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            runtime,
+            "parse_stream",
+            lambda *_a, **_kw: SessionSummary(
+                invoked_skills=(catalog.skills[0],),
+                observed_catalog=catalog.skills,
+                turns_taken=1,
+                status="SUCCESS",
+            ),
+        )
+
+
+@pytest.mark.parametrize("agent", known_agents())
+def test_all_agents_select_handles_post_probe_exception_without_crashing(
+    agent: str,
+    skill_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify post_probe exceptions do not escape select() across all known agents."""
+    runtime = _build_agent(agent, tmp_path)
+    skills = load_skills(skill_repo)
+    catalog = build_catalogs(skills, CatalogMode.SINGLETON)[0]
+    workdir = runtime.install(catalog, skills, tmp_path / f"work_post_probe_{agent}")
+
+    def _boom_post_probe(_workdir: Path) -> None:
+        msg = "Refusing to traverse symlinked path: /bad/slot"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(runtime, "post_probe", _boom_post_probe)
+    _stub_agent_probe(agent, runtime, catalog, monkeypatch)
+
+    try:
+        outcome = runtime.select(f"use {catalog.skills[0]}", workdir)
+        assert outcome.observed_catalog == catalog.skills
+        assert outcome.error is not None
+        assert "post_probe cleanup failed" in outcome.error
+    finally:
+        runtime.cleanup()
+
+
+@pytest.mark.parametrize("agent", [a for a in cli_agents() if a != "pi"])
+def test_cli_agents_select_preserves_prior_error_when_post_probe_raises(
+    agent: str,
+    skill_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify post_probe exceptions append to rather than mask a prior subprocess probe error."""
+    runtime = _build_agent(agent, tmp_path)
+    skills = load_skills(skill_repo)
+    catalog = build_catalogs(skills, CatalogMode.SINGLETON)[0]
+    workdir = runtime.install(catalog, skills, tmp_path / f"work_post_probe_err_{agent}")
+
+    def _boom_post_probe(_workdir: Path) -> None:
+        msg = "Refusing to traverse symlinked path: /bad/slot"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(runtime, "post_probe", _boom_post_probe)
+    monkeypatch.setattr(
+        "reach.runtime.run_subprocess_probe",
+        lambda *_a, **_kw: (
+            subprocess.CompletedProcess(
+                args=["cmd"],
+                returncode=1,
+                stdout="",
+                stderr="probe boom",
+            ),
+            "probe boom",
+        ),
+    )
+
+    try:
+        outcome = runtime.select("test query", workdir)
+        assert outcome.error is not None
+        assert "probe boom" in outcome.error
+        assert "post_probe cleanup failed" in outcome.error
+    finally:
+        runtime.cleanup()
+
+
+@pytest.mark.parametrize("agent", slot_agents())
+def test_slot_agents_select_catches_symlinked_isolation_dir(
+    agent: str,
+    skill_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Verify select() across all slot agents catches symlinked isolation root without raising."""
+    runtime = _build_agent(agent, tmp_path)
+    assert runtime.isolation_dir_name is not None
+    skills = load_skills(skill_repo)
+    catalog = build_catalogs(skills, CatalogMode.SINGLETON)[0]
+    workdir = runtime.install(catalog, skills, tmp_path / f"work_symlink_iso_{agent}")
+
+    outside = tmp_path / f"outside_{agent}"
+    outside.mkdir()
+    (workdir / runtime.isolation_dir_name).symlink_to(outside, target_is_directory=True)
+
+    try:
+        outcome = runtime.select("test query", workdir)
+        assert outcome.error is not None
+        assert "Refusing to use symlinked isolation directory" in outcome.error
+    finally:
+        runtime.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("agent", "env_var", "also_sets_home", "raw_stdout"),
+    [
+        (
+            "claude-code",
+            "CLAUDE_CONFIG_DIR",
+            False,
+            '{"result": "drafted query", "total_cost_usd": 0.001}',
+        ),
+        ("goose", "GOOSE_PATH_ROOT", True, "drafted query"),
+        ("pi", "PI_CODING_AGENT_DIR", False, "drafted query"),
+    ],
+)
+def test_cli_generators_complete_uses_ephemeral_isolation_dir_by_default(
+    agent: str,
+    env_var: str,
+    also_sets_home: bool,
+    raw_stdout: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify CLI generators create and clean up an ephemeral isolated directory on complete()."""
+    monkeypatch.delenv(env_var, raising=False)
+    gen = build_text_generator(agent=agent)
+    assert env_var not in gen.build_env()
+
+    captured_envs: list[dict[str, str]] = []
+
+    def _fake_run(
+        args: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        assert env is not None
+        assert env_var in env
+        iso_path = Path(env[env_var])
+        assert iso_path.is_dir()
+        assert (iso_path.stat().st_mode & 0o777) == 0o700
+        if also_sets_home:
+            assert env.get("HOME") == str(iso_path)
+        captured_envs.append(dict(env))
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=raw_stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert gen.complete("draft a query") == "drafted query"
+    assert len(captured_envs) == 1
+    ephemeral_dir = Path(captured_envs[0][env_var])
+    assert not ephemeral_dir.exists()
+
+    # Opt-out of isolate_config_dir leaves isolation env var unset
+    gen_no_iso = build_text_generator(agent=agent, options={"isolate_config_dir": False})
+    captured_envs.clear()
+
+    def _fake_run_no_iso(
+        args: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        assert env is not None
+        captured_envs.append(dict(env))
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=raw_stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run_no_iso)
+    assert gen_no_iso.complete("draft a query") == "drafted query"
+    assert env_var not in captured_envs[0]
 
 
 def test_install_skills_manifest_only_validates_manifest_symlink(tmp_path: Path) -> None:

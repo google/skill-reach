@@ -50,6 +50,12 @@ completion_window = 200_000
 context_window = 1_000_000
 effort = "low"
 
+[models.claude-sonnet-5-5]
+chars_per_token = 3.0
+completion_window = 200_000
+context_window = 1_000_000
+effort = "low"
+
 
 [models.gemini-2-5-flash]
 

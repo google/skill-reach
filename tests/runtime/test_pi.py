@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from reach.config import RuntimeSettings, agent_default_model
+from reach.runtime import SessionStatus
 from reach.runtime.pi import (
     PiGenerator,
     PiOptions,
@@ -37,7 +38,7 @@ from reach.runtime.pi import (
     parse_session_entries,
 )
 
-from .conftest import pi_entries
+from .conftest import WORKER_TIMEOUT, expected_slot, pi_entries, run_concurrent_workers
 
 
 @pytest.fixture
@@ -160,6 +161,88 @@ def test_pi_options_defaults() -> None:
     assert opts.auto_clean is False
 
 
+@pytest.mark.parametrize(
+    ("entries", "expected_status", "expected_error", "expected_skill"),
+    [
+        pytest.param(
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "error",
+                        "errorMessage": "429 quota exceeded",
+                    },
+                },
+            ],
+            SessionStatus.ERROR,
+            "429 quota exceeded",
+            None,
+            id="error-stop-reason",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "aborted",
+                    },
+                },
+            ],
+            SessionStatus.ERROR,
+            "pi assistant turn aborted",
+            None,
+            id="aborted-stop-reason",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "error",
+                        "errorMessage": "429 transient quota exceeded",
+                    },
+                },
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "stop",
+                        "content": [
+                            {
+                                "type": "toolCall",
+                                "name": "read",
+                                "arguments": {"path": ".pi/skills/cloud-deploy/SKILL.md"},
+                            }
+                        ],
+                    },
+                },
+            ],
+            SessionStatus.SUCCESS,
+            None,
+            "cloud-deploy",
+            id="recovered-on-later-turn",
+        ),
+    ],
+)
+def test_parse_session_entries_surfaces_assistant_stop_reason_and_error_message(
+    entries: list[dict[str, Any]],
+    expected_status: SessionStatus,
+    expected_error: str | None,
+    expected_skill: str | None,
+) -> None:
+    """Verify assistant messages with errorMessage or stopReason='error'/'aborted' record error."""
+    summary = parse_session_entries(entries, ("cloud-deploy",))
+    assert summary.status == expected_status
+    assert summary.error == expected_error
+    assert summary.invoked_skill == expected_skill
+
+
 def test_build_command_arguments(tmp_path: Path) -> None:
     """Verify command list assembled by PiRuntime."""
     settings = RuntimeSettings(
@@ -181,6 +264,10 @@ def test_build_command_arguments(tmp_path: Path) -> None:
     assert str(session_dir) in cmd
     assert "--tools" in cmd
     assert "read" in cmd
+    assert "--no-skills" in cmd
+    assert "--skill" in cmd
+    assert cmd[cmd.index("--skill") + 1] == ".pi/skills"
+    assert "--no-mcp" in cmd
     assert "--no-context-files" in cmd
     assert "--no-prompt-templates" in cmd
     assert "--no-extensions" in cmd
@@ -191,6 +278,26 @@ def test_build_command_arguments(tmp_path: Path) -> None:
     assert "--provider" in cmd
     assert "--thinking" in cmd
     assert "high" in cmd
+
+
+@pytest.mark.parametrize(
+    ("raw_query", "expected_arg"),
+    [
+        ("-v --help", " -v --help"),
+        ("@/etc/passwd", " @/etc/passwd"),
+        ("normal query", "normal query"),
+    ],
+)
+def test_pi_build_command_guards_leading_dash_and_at_queries(
+    tmp_path: Path,
+    raw_query: str,
+    expected_arg: str,
+) -> None:
+    """Verify build_command prefixes queries starting with '-' or '@' so Pi treats them as text."""
+    rt = PiRuntime()
+    cmd = rt.build_command(raw_query, session_dir=tmp_path / "sessions")
+    p_idx = cmd.index("-p")
+    assert cmd[p_idx + 1] == expected_arg
 
 
 def test_pi_build_command_effort_option(tmp_path: Path) -> None:
@@ -315,17 +422,17 @@ def test_pi_build_command_profile_effort_fallback(tmp_path: Path) -> None:
     assert "low" in cmd
 
 
-def test_pi_build_env_defaults_and_isolation(tmp_path: Path) -> None:
+def test_pi_build_env_defaults_and_isolation(workdir: Path) -> None:
     """Verify build_env sets telemetry suppression, skip version check, and isolated agent dir."""
     rt = PiRuntime()
-    workdir = tmp_path / "work"
-    workdir.mkdir()
 
     env = rt.build_env(workdir)
+    slot = expected_slot(rt, workdir)
     assert env["PI_TELEMETRY"] == "0"
     assert env["PI_SKIP_VERSION_CHECK"] == "1"
-    assert env["PI_CODING_AGENT_DIR"] == str(workdir / ".reach_pi_agent")
-    assert (workdir / ".reach_pi_agent").is_dir()
+    assert env["PI_OFFLINE"] == "1"
+    assert env["PI_CODING_AGENT_DIR"] == str(slot)
+    assert slot.is_dir()
 
 
 def test_pi_build_env_provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -369,12 +476,9 @@ def test_pi_build_env_provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_select_passes_env_and_cleans_when_auto_clean(
     mock_subprocess: Callable[..., Any],
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify select passes isolated env to subprocess and cleans state when auto_clean is True."""
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-
     rt = PiRuntime(RuntimeSettings(agent="pi", options={"auto_clean": True}))
     rt._resident = ("test-skill",)
 
@@ -415,10 +519,11 @@ def test_select_passes_env_and_cleans_when_auto_clean(
     mock_subprocess(handler=mock_run)
 
     outcome = rt.select("test query", workdir)
+    slot = expected_slot(rt, workdir)
     assert outcome.invoked_skill == "test-skill"
     assert captured_env.get("PI_TELEMETRY") == "0"
     assert captured_env.get("PI_SKIP_VERSION_CHECK") == "1"
-    assert captured_env.get("PI_CODING_AGENT_DIR") == str(workdir / ".reach_pi_agent")
+    assert captured_env.get("PI_CODING_AGENT_DIR") == str(slot)
 
     # Because auto_clean=True, session dir should have been removed in post_probe
     assert not (workdir / ".reach_pi_sessions").exists()
@@ -461,30 +566,24 @@ def probe_concurrently(runtime: PiRuntime, workdir: Path) -> dict[str, Any]:
     """Run one probe per resident skill on separate threads and collect outcomes."""
     outcomes: dict[str, Any] = {}
 
-    def _probe(skill: str) -> None:
+    def _probe(idx: int) -> None:
+        skill = SLOT_SKILLS[idx]
         outcomes[skill] = runtime.select(f"please use {skill}", workdir)
 
-    threads = [threading.Thread(target=_probe, args=(skill,)) for skill in SLOT_SKILLS]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
+    run_concurrent_workers(len(SLOT_SKILLS), _probe)
     return outcomes
 
 
 def test_concurrent_selects_do_not_cross_attribute_sessions(
     mock_subprocess: Callable[..., Any],
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify parallel probes read their own transcript rather than a sibling worker's."""
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-
     rt = PiRuntime()
     rt._resident = SLOT_SKILLS
 
     # Both transcripts exist before either probe reads, as under real parallel execution.
-    mock_subprocess(handler=session_writer(barrier=threading.Barrier(2, timeout=10)))
+    mock_subprocess(handler=session_writer(barrier=threading.Barrier(2, timeout=WORKER_TIMEOUT)))
 
     outcomes = probe_concurrently(rt, workdir)
 
@@ -496,18 +595,18 @@ def test_concurrent_selects_do_not_cross_attribute_sessions(
 
 def test_concurrent_selects_use_distinct_session_directories(
     mock_subprocess: Callable[..., Any],
-    tmp_path: Path,
+    workdir: Path,
 ) -> None:
     """Verify each worker thread receives its own session directory under the session root."""
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-
     rt = PiRuntime()
     rt._resident = SLOT_SKILLS
 
     captured: list[Path] = []
     mock_subprocess(
-        handler=session_writer(captured=captured, barrier=threading.Barrier(2, timeout=10)),
+        handler=session_writer(
+            captured=captured,
+            barrier=threading.Barrier(2, timeout=WORKER_TIMEOUT),
+        ),
     )
 
     probe_concurrently(rt, workdir)

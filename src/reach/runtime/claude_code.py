@@ -671,11 +671,15 @@ class _ClaudeCompletion(BaseModel):
     total_cost_usd: float | None = None
 
 
+_CLAUDE_GEN_TEMP_PREFIX = "reach-claude-gen-"
+
+
 class ClaudeGenerator(BaseTextGenerator[ClaudeCodeOptions]):
     """Generate text completions using the Claude Code CLI."""
 
     name: str = "claude-code"
     options: ClaudeCodeOptions
+    _temp_dir_prefix: ClassVar[str | None] = _CLAUDE_GEN_TEMP_PREFIX
 
     def __init__(
         self,
@@ -703,9 +707,15 @@ class ClaudeGenerator(BaseTextGenerator[ClaudeCodeOptions]):
             self.options.model or self.model,
             "--output-format",
             "json",
+            "--tools",
+            "",
         ]
         if self.options.no_session_persistence:
             command.append("--no-session-persistence")
+        if self.options.strict_mcp_config:
+            command.append("--strict-mcp-config")
+        if self.options.exclude_dynamic_prompt:
+            command.append("--exclude-dynamic-system-prompt-sections")
         if effort := self.effective_effort:
             command += ["--effort", effort]
         return [*command, *self.options.extra_args]
@@ -729,28 +739,19 @@ class ClaudeGenerator(BaseTextGenerator[ClaudeCodeOptions]):
         return reason
 
     @override
-    def build_env(self) -> dict[str, str]:
+    def build_env(self, isolation_dir: Path | None = None) -> dict[str, str]:
         """Assemble process environment with API keys for Claude Code completion."""
-        env = super().build_env()
+        env = super().build_env(isolation_dir)
         _apply_claude_options_env(env, self.options, blocked_env_vars=self.blocked_env_vars)
-        if (custom_iso := getattr(self.options, "custom_isolation_dir", None)) is not None:
-            config_dir = ensure_private_directory(custom_iso)
-            env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        if (iso_dir := self.effective_isolation_dir(isolation_dir)) is not None:
+            env["CLAUDE_CONFIG_DIR"] = str(ensure_private_directory(iso_dir))
         return env
 
     @override
     def complete(self, prompt: str, *, schema: str | Mapping[str, Any] | None = None) -> str:
         """Execute text completion subprocess and return response string."""
         effective_prompt = self.format_prompt_with_schema(prompt, schema)
-        completed = subprocess.run(
-            self.build_completion_command(effective_prompt),
-            input=effective_prompt,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_s,
-            check=False,
-            env=self.build_env(),
-        )
+        completed = self._run_completion_subprocess(effective_prompt)
         if completed.returncode != 0:
             reason = self._failure_reason(completed)
             msg = f"generation failed: {reason}"
