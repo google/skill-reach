@@ -1171,9 +1171,14 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
     )
     legacy_admonition_re = re.compile(r"^\s*(?:!!!|\?\?\?|===)\s+\w+")
     indented_fence_re = re.compile(r"^[ \t]+///(?:\s|$)")
+    indented_prettier_ignore_re = re.compile(r"^[ \t]+<!--\s*prettier-ignore-(?:start|end)\s*-->")
+    misindented_list_or_math_re = re.compile(r"^( +)(?:[-*+]\s|\d+\.\s|\$\$)")
     unrendered_html_re = re.compile(
         r"<p>\s*(?:!!!|\?\?\?|///|===)\s+|"
-        r'<div class="tabbed-content">\s*</div>',
+        r'<div class="tabbed-content">\s*</div>|'
+        r'\$<span class="arithmatex">|'
+        r'<span class="arithmatex">[^<]*</span>\$|'
+        r"\n-\s+<(?:strong|code)>",
     )
 
     md_renderer = markdown.Markdown(
@@ -1193,6 +1198,7 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
 
         in_code_fence = False
         open_block_line: int | None = None
+        open_prettier_ignore_line: int | None = None
         for lineno, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("```"):
@@ -1208,6 +1214,28 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
                 f"Indented '///' fence at {rel}:{lineno} ({line!r}); add a blank line before "
                 "closing '///' so Prettier does not indent it as a list continuation."
             )
+            assert not indented_prettier_ignore_re.match(line), (
+                f"Indented prettier-ignore comment at {rel}:{lineno} ({line!r}); place at "
+                "column 0 surrounded by blank lines so Remark pairs start/end at root level."
+            )
+            if stripped == "<!-- prettier-ignore-start -->":
+                assert open_prettier_ignore_line is None, (
+                    f"Nested or unclosed prettier-ignore-start at {rel}:{lineno} "
+                    f"(previous opened at line {open_prettier_ignore_line})"
+                )
+                open_prettier_ignore_line = lineno
+            elif stripped == "<!-- prettier-ignore-end -->":
+                assert open_prettier_ignore_line is not None, (
+                    f"Unmatched prettier-ignore-end at {rel}:{lineno}"
+                )
+                open_prettier_ignore_line = None
+            indent_match = misindented_list_or_math_re.match(line)
+            if indent_match and len(indent_match.group(1)) % 4 != 0:
+                pytest.fail(
+                    f"Non-4-space indent ({len(indent_match.group(1))} spaces) on nested list or "
+                    f"display math block at {rel}:{lineno} ({line!r}); Python-Markdown requires "
+                    "multiples of 4 spaces inside lists."
+                )
             if line.startswith("///"):
                 if stripped == "///":
                     assert open_block_line is not None, (
@@ -1222,12 +1250,15 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
                     open_block_line = lineno
 
         assert open_block_line is None, f"Unclosed '///' block opened at {rel}:{open_block_line}"
+        assert open_prettier_ignore_line is None, (
+            f"Unclosed prettier-ignore-start opened at {rel}:{open_prettier_ignore_line}"
+        )
 
         md_renderer.reset()
         rendered_html = md_renderer.convert(content)
         unrendered_match = unrendered_html_re.search(rendered_html)
         assert unrendered_match is None, (
-            f"Unrendered admonition/tab/block syntax in rendered HTML of {rel}: "
+            f"Unrendered admonition/tab/block/math syntax in rendered HTML of {rel}: "
             f"{unrendered_match.group(0)!r}"
         )
 
