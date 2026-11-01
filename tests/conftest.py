@@ -81,8 +81,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
+def _isolate_ambient_gcp_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ambient GCP environment variables from leaking into unit tests."""
+    for var in ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_LOCATION"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an untracked reach.toml in the repository root from leaking into unit tests."""
+    """Prevent an untracked reach.toml at the repository root from leaking into unit tests."""
     import reach.config as _cfg_mod
 
     orig_discover = _cfg_mod._discover_config_path
@@ -146,16 +153,24 @@ def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
 
 @pytest.fixture(autouse=True, scope="session")
 def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
-    """Cache Cyclopts completion data extraction across test runs with session teardown."""
+    """Cache Cyclopts completion data, argument collections, and docstring extraction."""
+    import functools
+
     import cyclopts.completion._base as c_base
     import cyclopts.completion.bash as c_bash
     import cyclopts.completion.fish as c_fish
     import cyclopts.completion.zsh as c_zsh
+    import docstring_parser
+    import docstring_parser.parser as dp_parser
     from cyclopts import App
+    from cyclopts.utils import UNSET
 
-    modules = (c_base, c_bash, c_fish, c_zsh)
     orig_extract = c_base.extract_completion_data
+    orig_parse = docstring_parser.parse_from_object
+    orig_assemble = App.assemble_argument_collection
+    cached_parse = functools.lru_cache(maxsize=None)(orig_parse)
     cache: dict[int, Any] = {}
+    ac_cache: dict[tuple[Any, ...], Any] = {}
 
     def cached_extract(app: App) -> Any:
         key = id(app)
@@ -166,15 +181,52 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
         # unpickleable thread locks within Cyclopts App instances.
         return dict(cache[key])
 
-    attr_name = "extract_completion_data"
-    for mod in modules:
-        setattr(mod, attr_name, cached_extract)
+    def cached_assemble(
+        self: App,
+        *,
+        default_parameter: Any = None,
+        parse_docstring: bool = False,
+    ) -> Any:
+        key = (
+            id(self),
+            self.default_command,
+            self.app_stack.default_parameter,
+            default_parameter,
+            parse_docstring,
+        )
+        ac = ac_cache.get(key)
+        if ac is None:
+            ac = orig_assemble(
+                self,
+                default_parameter=default_parameter,
+                parse_docstring=parse_docstring,
+            )
+            ac_cache[key] = ac
+        else:
+            for arg in ac:
+                arg.tokens.clear()
+                arg._value = UNSET
+                arg._marked_converted = False
+                arg._mark_converted_override = False
+        return ac
+
+    patches: tuple[tuple[tuple[Any, ...], str, Any, Any], ...] = (
+        ((c_base, c_bash, c_fish, c_zsh), "extract_completion_data", cached_extract, orig_extract),
+        ((docstring_parser, dp_parser), "parse_from_object", cached_parse, orig_parse),
+        ((App,), "assemble_argument_collection", cached_assemble, orig_assemble),
+    )
+    for target_mods, attr, replacement, _ in patches:
+        for mod in target_mods:
+            setattr(mod, attr, replacement)
 
     try:
         yield
     finally:
-        for mod in modules:
-            setattr(mod, attr_name, orig_extract)
+        for target_mods, attr, _, original in patches:
+            for mod in target_mods:
+                setattr(mod, attr, original)
+        cached_parse.cache_clear()
+        ac_cache.clear()
         cache.clear()
 
 

@@ -103,15 +103,15 @@ jobs:
           # 1. Fetch canonical PR diff via GitHub API (Immune to fork checkout failures)
           gh pr diff "${PR_NUMBER}" > "$WORK_DIR/raw_pr.diff"
 
-          # 2. Filter lockfiles, binary files, and build assets using native Python with encoding fallback
+          # 2. Filter lockfile hashes, binary files, and build assets using native Python with encoding fallback
           RAW_DIFF="$WORK_DIR/raw_pr.diff" python3 -c "
           import os, sys
-          excluded = ('uv.lock', '.lock', '.png', '.jpg', '.svg', 'site/', '.build/')
+          excluded = ('.png', '.jpg', '.svg', 'site/', '.build/')
           keep = True
           for line in open(os.environ['RAW_DIFF'], errors='replace'):
               if line.startswith('diff --git'):
                   keep = not any(x in line for x in excluded)
-              if keep:
+              if keep and 'hash = \"sha256:' not in line and '\"integrity\": \"sha512-' not in line:
                   sys.stdout.write(line)
           " > "$WORK_DIR/pr.diff"
 

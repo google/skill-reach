@@ -447,11 +447,13 @@ def test_lint_rules_match_docs(
     )
 
 
+_EXPLAIN_RE = re.compile(r"--explain\s+([a-z0-9-]+)")
+
+
 def test_explain_examples_reference_valid_rules(markdown_contents: dict[Path, str]) -> None:
     """Verify all --explain CLI examples in documentation reference registered rules."""
-    explain_re = re.compile(r"--explain\s+([a-z0-9-]+)")
     for md_file, content in markdown_contents.items():
-        for match in explain_re.finditer(content):
+        for match in _EXPLAIN_RE.finditer(content):
             rule_id = match.group(1)
             assert rule_id in RULES, (
                 f"Invalid rule {rule_id!r} in --explain example at {md_file.relative_to(_ROOT)}"
@@ -990,6 +992,42 @@ def _annotated_alias_bases(mod: Any) -> dict[str, str]:
     return bases
 
 
+_PRIVATE_TYPE_RE = re.compile(r"\b(_[A-Za-z][A-Za-z0-9_]*)\b")
+_IDENT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _intra_module_domain_defs(mod: Any, mod_name: str) -> set[str]:
+    """Return intra-module classes, functions, and non-Annotated type aliases."""
+    defs: set[str] = set()
+    for name, val in vars(mod).items():
+        if name.startswith("__"):
+            continue
+        is_local_def = (inspect.isclass(val) or inspect.isfunction(val)) and (
+            getattr(val, "__module__", None) == mod_name
+        )
+        is_domain_alias = (
+            type(val).__name__ == "TypeAliasType"
+            and get_origin(getattr(val, "__value__", None)) is not Annotated
+        )
+        if is_local_def or is_domain_alias:
+            defs.add(name)
+    return defs
+
+
+def _expand_annotation_tokens(ann_str: str, annotated_alias_bases: dict[str, str]) -> list[str]:
+    """Expand identifier tokens in an annotation string through Annotated alias bases."""
+    tokens = list(_IDENT_RE.findall(ann_str))
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok in annotated_alias_bases:
+            for base_tok in _IDENT_RE.findall(annotated_alias_bases[tok]):
+                if base_tok not in tokens:
+                    tokens.append(base_tok)
+        idx += 1
+    return [tok for tok in tokens if tok not in annotated_alias_bases]
+
+
 @pytest.mark.parametrize("mod_name", PUBLIC_API_MODULES)
 def test_public_api_signatures_reference_no_private_or_unexported_types(mod_name: str) -> None:
     """Verify public signatures and model_fields do not expose private or unexported types."""
@@ -1001,46 +1039,16 @@ def test_public_api_signatures_reference_no_private_or_unexported_types(mod_name
     all_public = _all_public_module_exports()
     reach_names = _collect_reach_imported_names(mod)
     annotated_alias_bases = _annotated_alias_bases(mod)
-
-    # Intra-module classes, functions, and non-Annotated domain type aliases must be exported
-    intra_domain_defs = {
-        name
-        for name, val in vars(mod).items()
-        if not name.startswith("__")
-        and (
-            (
-                (inspect.isclass(val) or inspect.isfunction(val))
-                and getattr(val, "__module__", None) == mod_name
-            )
-            or (
-                type(val).__name__ == "TypeAliasType"
-                and get_origin(getattr(val, "__value__", None)) is not Annotated
-            )
-        )
-    }
-
-    private_type_re = re.compile(r"\b(_[A-Za-z][A-Za-z0-9_]*)\b")
-    ident_re = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
+    intra_domain_defs = _intra_module_domain_defs(mod, mod_name)
     leaks: list[str] = []
 
     for label, ann_str in _collect_export_annotations(mod, exported):
         leaks.extend(
             f"{label} exposes private type {priv!r}"
-            for priv in private_type_re.findall(ann_str)
+            for priv in _PRIVATE_TYPE_RE.findall(ann_str)
             if priv != "_"
         )
-        tokens = list(ident_re.findall(ann_str))
-        idx = 0
-        while idx < len(tokens):
-            tok = tokens[idx]
-            if tok in annotated_alias_bases:
-                for base_tok in ident_re.findall(annotated_alias_bases[tok]):
-                    if base_tok not in tokens:
-                        tokens.append(base_tok)
-            idx += 1
-        for tok in tokens:
-            if tok in annotated_alias_bases:
-                continue
+        for tok in _expand_annotation_tokens(ann_str, annotated_alias_bases):
             if tok in intra_domain_defs and tok not in exported:
                 leaks.append(f"{label} references unexported intra-module type {tok!r}")
             elif tok in reach_names and tok not in exported and tok not in all_public:
@@ -1121,6 +1129,12 @@ def test_doc_python_snippets_syntax_and_imports(markdown_contents: dict[Path, st
                         )
 
 
+_MERMAID_CLASS_BLOCK_RE = re.compile(r"class\s+([A-Za-z0-9_]+)\s*\{([^}]*)\}", re.MULTILINE)
+_MERMAID_ATTR_LINE_RE = re.compile(
+    r"^\s*[+#~-]\s*(?:[A-Za-z0-9_|.\[\]]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*$"
+)
+
+
 def test_mermaid_class_diagrams_match_models(markdown_contents: dict[Path, str]) -> None:
     """Verify attributes in Mermaid classDiagram blocks exist on actual reach model classes."""
     known_classes: dict[str, type[Any]] = {
@@ -1130,17 +1144,12 @@ def test_mermaid_class_diagrams_match_models(markdown_contents: dict[Path, str])
         if obj.__module__ == mod.__name__
     }
 
-    class_block_re = re.compile(r"class\s+([A-Za-z0-9_]+)\s*\{([^}]*)\}", re.MULTILINE)
-    attr_line_re = re.compile(
-        r"^\s*[+#~-]\s*(?:[A-Za-z0-9_|.\[\]]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*$"
-    )
-
     for md_file, content in markdown_contents.items():
         rel_path = md_file.relative_to(_ROOT)
         for block in extract_fenced_blocks(content, "mermaid"):
             if not block.lstrip().startswith("classDiagram"):
                 continue
-            for match in class_block_re.finditer(block):
+            for match in _MERMAID_CLASS_BLOCK_RE.finditer(block):
                 cls_name, body = match.group(1), match.group(2)
                 cls = known_classes.get(cls_name)
                 if cls is None:
@@ -1151,7 +1160,7 @@ def test_mermaid_class_diagrams_match_models(markdown_contents: dict[Path, str])
                     | set(dir(cls))
                 )
                 for line in body.splitlines():
-                    attr_match = attr_line_re.match(line)
+                    attr_match = _MERMAID_ATTR_LINE_RE.match(line)
                     if attr_match:
                         attr_name = attr_match.group(1)
                         assert attr_name in valid_attrs, (
@@ -1160,134 +1169,250 @@ def test_mermaid_class_diagrams_match_models(markdown_contents: dict[Path, str])
                         )
 
 
+@pytest.fixture(scope="module")
+def docs_md_renderer(mkdocs_config: MkDocsConfig) -> markdown.Markdown:
+    """Provide a cached Python-Markdown renderer for structural doc fence checks."""
+    skip_exts = {"toc", "attr_list", "pymdownx.keys", "pymdownx.snippets"}
+    return markdown.Markdown(
+        extensions=[e for e in mkdocs_config["markdown_extensions"] if e not in skip_exts],
+        extension_configs={
+            **{k: v for k, v in mkdocs_config["mdx_configs"].items() if k not in skip_exts},
+            "pymdownx.highlight": {
+                **mkdocs_config["mdx_configs"].get("pymdownx.highlight", {}),
+                "use_pygments": False,
+            },
+        },
+    )
+
+
+_DOC_LINE_FORBIDDEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"^\s*>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]"),
+        "Unparsed GitHub alert blockquote; use '/// warning | Title' pymdownx.blocks syntax",
+    ),
+    (
+        re.compile(r'^\s*(?:!!!|\?\?\?|===)\s+(?:\w+|")'),
+        "Prettier-incompatible legacy admonition/tab syntax",
+    ),
+    (
+        re.compile(r"^[ \t]+///(?:\s|$)"),
+        "Indented '///' fence; add a blank line before closing '///'",
+    ),
+    (
+        re.compile(r"^[ \t]+<!--\s*prettier-ignore-(?:start|end)\s*-->"),
+        "Indented prettier-ignore comment; place at column 0 surrounded by blank lines",
+    ),
+)
+_MISINDENTED_LIST_OR_MATH_RE = re.compile(r"^( +)(?:[-*+]\s|\d+\.\s|\$\$)")
+_UNRENDERED_HTML_RE = re.compile(
+    r"<p>\s*(?:!!!|\?\?\?|///|===)\s+|"
+    r'<div class="tabbed-(?:content|block)">\s*</div>|'
+    r'\$<span class="arithmatex">|'
+    r'<span class="arithmatex">[^<]*</span>\$|'
+    r"\n-\s+<(?:strong|code)>",
+)
+_RENDER_CONSTRUCT_RE = re.compile(
+    r"(?:^|\n)\s*(?:!!!|\?\?\?|///|===)|"
+    r"\$(?:\$|[^$\n]+\$)|"
+    r"(?:^|\n)(?![ \t]*(?:[-*+]|\d+\.)\s)[ \t]*\S[^\n]*\n[ \t]*-\s+(?:\*\*|`)",
+)
+
+
+def _check_doc_fence_line(rel: Path, lineno: int, line: str) -> None:
+    """Validate single-line admonition, fence indentation, and 4-space list/math rules."""
+    for pattern, description in _DOC_LINE_FORBIDDEN_PATTERNS:
+        assert not pattern.match(line), f"{description} at {rel}:{lineno}: {line!r}"
+    indent_match = _MISINDENTED_LIST_OR_MATH_RE.match(line)
+    if indent_match and len(indent_match.group(1)) % 4 != 0:
+        pytest.fail(
+            f"Non-4-space indent ({len(indent_match.group(1))} spaces) on nested list or "
+            f"display math block at {rel}:{lineno} ({line!r}); Python-Markdown requires "
+            "multiples of 4 spaces inside lists."
+        )
+
+
+def _update_prettier_ignore_state(
+    rel: Path, lineno: int, stripped: str, open_line: int | None
+) -> int | None:
+    """Track paired prettier-ignore-start and prettier-ignore-end comments."""
+    if stripped == "<!-- prettier-ignore-start -->":
+        assert open_line is None, (
+            f"Nested or unclosed prettier-ignore-start at {rel}:{lineno} "
+            f"(previous opened at line {open_line})"
+        )
+        return lineno
+    if stripped == "<!-- prettier-ignore-end -->":
+        assert open_line is not None, f"Unmatched prettier-ignore-end at {rel}:{lineno}"
+        return None
+    return open_line
+
+
+def _update_block_fence_state(
+    rel: Path, lineno: int, line: str, stripped: str, open_line: int | None
+) -> int | None:
+    """Track paired opening and closing '///' pymdownx.blocks fences."""
+    if not line.startswith("///"):
+        return open_line
+    if stripped == "///":
+        assert open_line is not None, f"Unmatched closing '///' fence at {rel}:{lineno}"
+        return None
+    assert open_line is None, (
+        f"Nested or unclosed '///' block at {rel}:{lineno} "
+        f"(previous block opened at line {open_line})"
+    )
+    return lineno
+
+
+def _validate_doc_fence_lines(rel: Path, content: str) -> None:
+    """Validate all non-code-fenced lines in a documentation file for fence/ignore pairing."""
+    in_code_fence = False
+    open_block_line: int | None = None
+    open_prettier_ignore_line: int | None = None
+    for lineno, line in enumerate(content.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+        _check_doc_fence_line(rel, lineno, line)
+        open_prettier_ignore_line = _update_prettier_ignore_state(
+            rel, lineno, stripped, open_prettier_ignore_line
+        )
+        open_block_line = _update_block_fence_state(rel, lineno, line, stripped, open_block_line)
+
+    assert open_block_line is None, f"Unclosed '///' block opened at {rel}:{open_block_line}"
+    assert open_prettier_ignore_line is None, (
+        f"Unclosed prettier-ignore-start opened at {rel}:{open_prettier_ignore_line}"
+    )
+
+
 def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
     markdown_contents: dict[Path, str],
-    mkdocs_config: MkDocsConfig,
+    docs_md_renderer: markdown.Markdown,
 ) -> None:
     """Ensure docs/ uses Prettier-safe '///' blocks and renders cleanly via Python-Markdown."""
-    github_alert_re = re.compile(
-        r"^\s*>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]",
-        re.MULTILINE,
-    )
-    legacy_admonition_re = re.compile(r"^\s*(?:!!!|\?\?\?|===)\s+\w+")
-    indented_fence_re = re.compile(r"^[ \t]+///(?:\s|$)")
-    indented_prettier_ignore_re = re.compile(r"^[ \t]+<!--\s*prettier-ignore-(?:start|end)\s*-->")
-    misindented_list_or_math_re = re.compile(r"^( +)(?:[-*+]\s|\d+\.\s|\$\$)")
-    unrendered_html_re = re.compile(
-        r"<p>\s*(?:!!!|\?\?\?|///|===)\s+|"
-        r'<div class="tabbed-content">\s*</div>|'
-        r'\$<span class="arithmatex">|'
-        r'<span class="arithmatex">[^<]*</span>\$|'
-        r"\n-\s+<(?:strong|code)>",
-    )
-
-    md_renderer = markdown.Markdown(
-        extensions=mkdocs_config["markdown_extensions"],
-        extension_configs=mkdocs_config["mdx_configs"],
-    )
-
     for md_file, content in markdown_contents.items():
         if not md_file.is_relative_to(_DOCS_DIR):
             continue
         rel = md_file.relative_to(_ROOT)
-        alerts = github_alert_re.findall(content)
-        assert not alerts, (
-            f"Unparsed GitHub alert blockquote(s) {alerts} in {rel}; "
-            "use '/// warning | Title' pymdownx.blocks syntax instead."
+        _validate_doc_fence_lines(rel, content)
+        if _RENDER_CONSTRUCT_RE.search(content):
+            docs_md_renderer.reset()
+            rendered_html = docs_md_renderer.convert(content)
+            unrendered_match = _UNRENDERED_HTML_RE.search(rendered_html)
+            assert unrendered_match is None, (
+                f"Unrendered admonition/tab/block/math syntax in rendered HTML of {rel}: "
+                f"{unrendered_match.group(0)!r}"
+            )
+
+
+@pytest.mark.parametrize(
+    ("doc_path", "content"),
+    [
+        (
+            _DOCS_DIR / "valid_blocks.md",
+            (
+                "/// warning | Caution\nBody with $x = 1$.\n\n"
+                "- **item**: val\n    - nested\n///\n\n"
+                "<!-- prettier-ignore-start -->\n$$\nx = 2\n$$\n<!-- prettier-ignore-end -->\n"
+            ),
+        ),
+        (
+            _DOCS_DIR / "code_fence_ignored.md",
+            '```markdown\n> [!NOTE]\n!!! note "Legacy"\n  ///\n  - bad indent\n```\n',
+        ),
+        (
+            _ROOT / "README.md",
+            '> [!NOTE]\n!!! warning "Outside docs dir is ignored by this check"\n',
+        ),
+        (
+            _DOCS_DIR / "plain_prose.md",
+            "# Heading\n\nRun `$ reach eval` with `$GOOGLE_CLOUD_PROJECT`.\n\n- **flag**: ok\n",
+        ),
+    ],
+)
+def test_mkdocs_admonition_and_block_fences_accepts_valid_and_edge_cases(
+    doc_path: Path,
+    content: str,
+    docs_md_renderer: markdown.Markdown,
+) -> None:
+    """Verify valid blocks, fenced code examples, non-docs files, and plain prose pass."""
+    test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
+        {doc_path: content},
+        docs_md_renderer,
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_error"),
+    [
+        ("> [!NOTE]\n> Alert\n", "Unparsed GitHub alert blockquote"),
+        ('!!! note "Title"\n    Body\n', "Prettier-incompatible legacy admonition/tab syntax"),
+        ('??? info "Title"\n    Body\n', "Prettier-incompatible legacy admonition/tab syntax"),
+        ('=== "Tab 1"\n    Body\n', "Prettier-incompatible legacy admonition/tab syntax"),
+        ("/// note | Title\nBody\n  ///\n", "Indented '///' fence"),
+        ("  <!-- prettier-ignore-start -->\n<!-- prettier-ignore-end -->\n", "Indented prettier"),
+        (
+            "<!-- prettier-ignore-start -->\n<!-- prettier-ignore-start -->\n",
+            "Nested or unclosed prettier-ignore-start",
+        ),
+        ("<!-- prettier-ignore-end -->\n", "Unmatched prettier-ignore-end"),
+        ("<!-- prettier-ignore-start -->\n", "Unclosed prettier-ignore-start"),
+        ("- top\n  - two_space_nested\n", "Non-4-space indent"),
+        ("  $$\nx = 1\n  $$\n", "Non-4-space indent"),
+        ("///\n", "Unmatched closing '///' fence"),
+        ("/// note | A\n/// warning | B\n///\n///\n", "Nested or unclosed '///' block"),
+        ("/// note | Unclosed\nBody\n", "Unclosed '///' block opened"),
+        ("/// unknown_plugin | Title\nBody\n///\n", "Unrendered admonition/tab/block/math syntax"),
+        ("/// tab | Empty\n///\n", "Unrendered admonition/tab/block/math syntax"),
+        ("$$x = 1$\n", "Unrendered admonition/tab/block/math syntax"),
+        ("$x = 1$$\n", "Unrendered admonition/tab/block/math syntax"),
+        ("Paragraph:\n- **bold**: item\n", "Unrendered admonition/tab/block/math syntax"),
+        ("Paragraph:\n- `code`: item\n", "Unrendered admonition/tab/block/math syntax"),
+    ],
+)
+def test_mkdocs_admonition_and_block_fences_rejects_invalid_constructs(
+    content: str,
+    expected_error: str,
+    docs_md_renderer: markdown.Markdown,
+) -> None:
+    """Verify sad paths and seam cases fail with descriptive diagnostics."""
+    with pytest.raises((AssertionError, pytest.fail.Exception), match=expected_error):
+        test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
+            {_DOCS_DIR / "invalid.md": content},
+            docs_md_renderer,
         )
 
-        in_code_fence = False
-        open_block_line: int | None = None
-        open_prettier_ignore_line: int | None = None
-        for lineno, line in enumerate(content.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                in_code_fence = not in_code_fence
-                continue
-            if in_code_fence:
-                continue
 
-            assert not legacy_admonition_re.match(line), (
-                f"Prettier-incompatible legacy admonition/tab syntax at {rel}:{lineno}: {line!r}"
-            )
-            assert not indented_fence_re.match(line), (
-                f"Indented '///' fence at {rel}:{lineno} ({line!r}); add a blank line before "
-                "closing '///' so Prettier does not indent it as a list continuation."
-            )
-            assert not indented_prettier_ignore_re.match(line), (
-                f"Indented prettier-ignore comment at {rel}:{lineno} ({line!r}); place at "
-                "column 0 surrounded by blank lines so Remark pairs start/end at root level."
-            )
-            if stripped == "<!-- prettier-ignore-start -->":
-                assert open_prettier_ignore_line is None, (
-                    f"Nested or unclosed prettier-ignore-start at {rel}:{lineno} "
-                    f"(previous opened at line {open_prettier_ignore_line})"
-                )
-                open_prettier_ignore_line = lineno
-            elif stripped == "<!-- prettier-ignore-end -->":
-                assert open_prettier_ignore_line is not None, (
-                    f"Unmatched prettier-ignore-end at {rel}:{lineno}"
-                )
-                open_prettier_ignore_line = None
-            indent_match = misindented_list_or_math_re.match(line)
-            if indent_match and len(indent_match.group(1)) % 4 != 0:
-                pytest.fail(
-                    f"Non-4-space indent ({len(indent_match.group(1))} spaces) on nested list or "
-                    f"display math block at {rel}:{lineno} ({line!r}); Python-Markdown requires "
-                    "multiples of 4 spaces inside lists."
-                )
-            if line.startswith("///"):
-                if stripped == "///":
-                    assert open_block_line is not None, (
-                        f"Unmatched closing '///' fence at {rel}:{lineno}"
-                    )
-                    open_block_line = None
-                else:
-                    assert open_block_line is None, (
-                        f"Nested or unclosed '///' block at {rel}:{lineno} "
-                        f"(previous block opened at line {open_block_line})"
-                    )
-                    open_block_line = lineno
-
-        assert open_block_line is None, f"Unclosed '///' block opened at {rel}:{open_block_line}"
-        assert open_prettier_ignore_line is None, (
-            f"Unclosed prettier-ignore-start opened at {rel}:{open_prettier_ignore_line}"
-        )
-
-        md_renderer.reset()
-        rendered_html = md_renderer.convert(content)
-        unrendered_match = unrendered_html_re.search(rendered_html)
-        assert unrendered_match is None, (
-            f"Unrendered admonition/tab/block/math syntax in rendered HTML of {rel}: "
-            f"{unrendered_match.group(0)!r}"
-        )
+_OVERESCAPED_LATEX_RE = re.compile(r"\$[^$\n]*(?:\\{2}\w+|\\_)[^$\n]*\$")
 
 
 def test_no_overescaped_latex_in_markdown(markdown_contents: dict[Path, str]) -> None:
     """Detect accidental double-backslash escaping in LaTeX math blocks."""
-    bad_pattern = re.compile(r"\$[^$\n]*(?:\\{2}\w+|\\_)[^$\n]*\$")
     for md_file, content in markdown_contents.items():
-        matches = bad_pattern.findall(content)
+        matches = _OVERESCAPED_LATEX_RE.findall(content)
         assert not matches, (
             f"Over-escaped LaTeX math found in {md_file.relative_to(_ROOT)}: {matches}"
         )
 
 
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_DELIM_RE = re.compile(r"^\|(\s*:?-+:?\s*\|)+$")
+
+
 def test_markdown_tables_have_no_blank_lines(markdown_contents: dict[Path, str]) -> None:
     """Detect broken markdown tables separated by blank lines within table rows."""
-    table_row_re = re.compile(r"^\s*\|.*\|\s*$")
-    delim_re = re.compile(r"^\|(\s*:?-+:?\s*\|)+$")
-
     for md_file, content in markdown_contents.items():
         lines = content.splitlines()
         for i, line in enumerate(lines[:-1]):
-            if table_row_re.match(line) and not lines[i + 1].strip():
+            if _TABLE_ROW_RE.match(line) and not lines[i + 1].strip():
                 next_idx = i + 2
                 while next_idx < len(lines) and not lines[next_idx].strip():
                     next_idx += 1
-                if next_idx < len(lines) and table_row_re.match(lines[next_idx]):
+                if next_idx < len(lines) and _TABLE_ROW_RE.match(lines[next_idx]):
                     is_new_table = next_idx + 1 < len(lines) and bool(
-                        delim_re.match(lines[next_idx + 1].strip())
+                        _TABLE_DELIM_RE.match(lines[next_idx + 1].strip())
                     )
                     if not is_new_table:
                         pytest.fail(
