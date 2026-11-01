@@ -136,14 +136,14 @@ wheels = [
 
 [[package]]
 name = "bm25s"
-version = "0.3.13"
+version = "0.3.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/61/ed/5cef92cb5be8963f17a5d6a31bf20c8b0af466b0dc76fc7951f2b727df4a/bm25s-0.3.13.tar.gz", hash = "sha256:49d76bf892ee730beda6d280a13d34b05d630a63988ae246944a81ce8bd15a12", size = 81454, upload-time = "2026-10-07T02:37:14.367Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/26/1c2c5ff9192a64f42d57351256eaaffb39b34e89131bbd09b57c796a0adc/bm25s-0.3.15.tar.gz", hash = "sha256:d97d2f00af4d9f8ef803a1fac7c3cc11d0a4e06f143f9de2d207bdf856d27e6e", size = 81579, upload-time = "2026-10-22T19:02:29.144Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8e/b7/88807a1bc1dfca8f88a0ed0bbc1eff59287c4636dbf3386117c552a682bd/bm25s-0.3.13-py3-none-any.whl", hash = "sha256:caf033369ec16586430544cf31321ff1a284c7c02f2aff87c4f7a2629f031f0e", size = 75516, upload-time = "2026-10-07T02:37:12.67Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/a2/1da11128b4a4e28d583ecf56d1c12c977ca4398a22ee8b731491e3f52e82/bm25s-0.3.15-py3-none-any.whl", hash = "sha256:dc6b63936f50f05ac41b44a51e99df0c6e58b04ee9b9d72bba48006f633fd3b1", size = 75680, upload-time = "2026-10-22T19:02:27.78Z" },
 ]
 
 [[package]]
