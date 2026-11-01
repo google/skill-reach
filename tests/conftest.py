@@ -153,7 +153,7 @@ def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
 
 @pytest.fixture(autouse=True, scope="session")
 def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
-    """Cache Cyclopts completion data and docstring extraction across test runs."""
+    """Cache Cyclopts completion data, argument collections, and docstring extraction."""
     import functools
 
     import cyclopts.completion._base as c_base
@@ -163,11 +163,14 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
     import docstring_parser
     import docstring_parser.parser as dp_parser
     from cyclopts import App
+    from cyclopts.utils import UNSET
 
     orig_extract = c_base.extract_completion_data
     orig_parse = docstring_parser.parse_from_object
+    orig_assemble = App.assemble_argument_collection
     cached_parse = functools.lru_cache(maxsize=None)(orig_parse)
     cache: dict[int, Any] = {}
+    ac_cache: dict[tuple[Any, ...], Any] = {}
 
     def cached_extract(app: App) -> Any:
         key = id(app)
@@ -178,9 +181,39 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
         # unpickleable thread locks within Cyclopts App instances.
         return dict(cache[key])
 
+    def cached_assemble(
+        self: App,
+        *,
+        default_parameter: Any = None,
+        parse_docstring: bool = False,
+    ) -> Any:
+        key = (
+            id(self),
+            self.default_command,
+            self.app_stack.default_parameter,
+            default_parameter,
+            parse_docstring,
+        )
+        ac = ac_cache.get(key)
+        if ac is None:
+            ac = orig_assemble(
+                self,
+                default_parameter=default_parameter,
+                parse_docstring=parse_docstring,
+            )
+            ac_cache[key] = ac
+        else:
+            for arg in ac:
+                arg.tokens.clear()
+                arg._value = UNSET
+                arg._marked_converted = False
+                arg._mark_converted_override = False
+        return ac
+
     patches: tuple[tuple[tuple[Any, ...], str, Any, Any], ...] = (
         ((c_base, c_bash, c_fish, c_zsh), "extract_completion_data", cached_extract, orig_extract),
         ((docstring_parser, dp_parser), "parse_from_object", cached_parse, orig_parse),
+        ((App,), "assemble_argument_collection", cached_assemble, orig_assemble),
     )
     for target_mods, attr, replacement, _ in patches:
         for mod in target_mods:
@@ -193,6 +226,7 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
             for mod in target_mods:
                 setattr(mod, attr, original)
         cached_parse.cache_clear()
+        ac_cache.clear()
         cache.clear()
 
 
