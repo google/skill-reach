@@ -19,8 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import cyclopts.completion._base as c_base
 import pytest
-from cyclopts.completion._base import extract_completion_data
 from cyclopts.completion._engine import compute_completions
 
 from reach.cli import _reorder_argv, main
@@ -51,7 +51,7 @@ def test_completion_generates_shell_script(
 
 def test_completion_options_have_no_duplicates() -> None:
     """Verify completion extraction has no duplicate flags across commands."""
-    data = extract_completion_data(app)
+    data = c_base.extract_completion_data(app)
     for cmd_path, entry in data.items():
         seen_names: set[str] = set()
         for arg in entry.arguments:

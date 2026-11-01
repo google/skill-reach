@@ -1181,9 +1181,16 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
         r"\n-\s+<(?:strong|code)>",
     )
 
+    render_construct_re = re.compile(r"(?:^|\s)(?:!!!|\?\?\?|///|===)|\$|\n\s*-\s+")
     md_renderer = markdown.Markdown(
         extensions=mkdocs_config["markdown_extensions"],
-        extension_configs=mkdocs_config["mdx_configs"],
+        extension_configs={
+            **mkdocs_config["mdx_configs"],
+            "pymdownx.highlight": {
+                **mkdocs_config["mdx_configs"].get("pymdownx.highlight", {}),
+                "use_pygments": False,
+            },
+        },
     )
 
     for md_file, content in markdown_contents.items():
@@ -1254,13 +1261,14 @@ def test_mkdocs_admonition_and_block_fences_are_prettier_and_pymdownx_safe(
             f"Unclosed prettier-ignore-start opened at {rel}:{open_prettier_ignore_line}"
         )
 
-        md_renderer.reset()
-        rendered_html = md_renderer.convert(content)
-        unrendered_match = unrendered_html_re.search(rendered_html)
-        assert unrendered_match is None, (
-            f"Unrendered admonition/tab/block/math syntax in rendered HTML of {rel}: "
-            f"{unrendered_match.group(0)!r}"
-        )
+        if render_construct_re.search(content):
+            md_renderer.reset()
+            rendered_html = md_renderer.convert(content)
+            unrendered_match = unrendered_html_re.search(rendered_html)
+            assert unrendered_match is None, (
+                f"Unrendered admonition/tab/block/math syntax in rendered HTML of {rel}: "
+                f"{unrendered_match.group(0)!r}"
+            )
 
 
 def test_no_overescaped_latex_in_markdown(markdown_contents: dict[Path, str]) -> None:

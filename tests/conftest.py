@@ -82,7 +82,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(autouse=True)
 def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an untracked reach.toml in the repository root from leaking into unit tests."""
+    """Prevent an untracked reach.toml or ambient GCP env vars from leaking into unit tests."""
+    for var in ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_LOCATION"):
+        monkeypatch.delenv(var, raising=False)
+
     import reach.config as _cfg_mod
 
     orig_discover = _cfg_mod._discover_config_path
@@ -146,15 +149,21 @@ def orig_load_model2vec() -> Generator[Callable[[str], Any]]:
 
 @pytest.fixture(autouse=True, scope="session")
 def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
-    """Cache Cyclopts completion data extraction across test runs with session teardown."""
+    """Cache Cyclopts completion data and docstring extraction across test runs."""
+    import functools
+
     import cyclopts.completion._base as c_base
     import cyclopts.completion.bash as c_bash
     import cyclopts.completion.fish as c_fish
     import cyclopts.completion.zsh as c_zsh
+    import docstring_parser
+    import docstring_parser.parser as dp_parser
     from cyclopts import App
 
     modules = (c_base, c_bash, c_fish, c_zsh)
     orig_extract = c_base.extract_completion_data
+    orig_parse = docstring_parser.parse_from_object
+    cached_parse = functools.lru_cache(maxsize=None)(orig_parse)
     cache: dict[int, Any] = {}
 
     def cached_extract(app: App) -> Any:
@@ -167,14 +176,20 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
         return dict(cache[key])
 
     attr_name = "extract_completion_data"
+    parse_attr = "parse_from_object"
     for mod in modules:
         setattr(mod, attr_name, cached_extract)
+    for dp_mod in (docstring_parser, dp_parser):
+        setattr(dp_mod, parse_attr, cached_parse)
 
     try:
         yield
     finally:
         for mod in modules:
             setattr(mod, attr_name, orig_extract)
+        for dp_mod in (docstring_parser, dp_parser):
+            setattr(dp_mod, parse_attr, orig_parse)
+        cached_parse.cache_clear()
         cache.clear()
 
 

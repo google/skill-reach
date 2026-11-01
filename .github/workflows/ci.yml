@@ -76,3 +76,7 @@ jobs:
 
       - name: Type check
         run: uv run ty check
+
+      - name: Test minimum dependency bounds
+        if: strategy.job-index == 0
+        run: uv run --isolated --resolution lowest-direct --all-groups --all-extras pytest -q
