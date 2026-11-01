@@ -106,14 +106,12 @@ jobs:
           # 2. Filter lockfile hashes, binary files, and build assets using native Python with encoding fallback
           RAW_DIFF="$WORK_DIR/raw_pr.diff" python3 -c "
           import os, sys
-          excluded = ('.lock', 'package-lock.json', '.png', '.jpg', '.svg', 'site/', '.build/')
+          excluded = ('.png', '.jpg', '.svg', 'site/', '.build/')
           keep = True
-          in_uv_lock = False
           for line in open(os.environ['RAW_DIFF'], errors='replace'):
               if line.startswith('diff --git'):
-                  in_uv_lock = 'uv.lock' in line
-                  keep = in_uv_lock or not any(x in line for x in excluded)
-              if keep and not (in_uv_lock and 'hash = \"sha256:' in line):
+                  keep = not any(x in line for x in excluded)
+              if keep and 'hash = \"sha256:' not in line and '\"integrity\": \"sha512-' not in line:
                   sys.stdout.write(line)
           " > "$WORK_DIR/pr.diff"
 

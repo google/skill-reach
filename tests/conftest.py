@@ -81,11 +81,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
-def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an untracked reach.toml or ambient GCP env vars from leaking into unit tests."""
+def _isolate_ambient_gcp_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ambient GCP environment variables from leaking into unit tests."""
     for var in ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_LOCATION"):
         monkeypatch.delenv(var, raising=False)
 
+
+@pytest.fixture(autouse=True)
+def _isolate_repo_root_reach_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent an untracked reach.toml at the repository root from leaking into unit tests."""
     import reach.config as _cfg_mod
 
     orig_discover = _cfg_mod._discover_config_path
@@ -160,7 +164,6 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
     import docstring_parser.parser as dp_parser
     from cyclopts import App
 
-    modules = (c_base, c_bash, c_fish, c_zsh)
     orig_extract = c_base.extract_completion_data
     orig_parse = docstring_parser.parse_from_object
     cached_parse = functools.lru_cache(maxsize=None)(orig_parse)
@@ -175,20 +178,20 @@ def _cache_cyclopts_completion_data() -> Generator[None, None, None]:
         # unpickleable thread locks within Cyclopts App instances.
         return dict(cache[key])
 
-    attr_name = "extract_completion_data"
-    parse_attr = "parse_from_object"
-    for mod in modules:
-        setattr(mod, attr_name, cached_extract)
-    for dp_mod in (docstring_parser, dp_parser):
-        setattr(dp_mod, parse_attr, cached_parse)
+    patches: tuple[tuple[tuple[Any, ...], str, Any, Any], ...] = (
+        ((c_base, c_bash, c_fish, c_zsh), "extract_completion_data", cached_extract, orig_extract),
+        ((docstring_parser, dp_parser), "parse_from_object", cached_parse, orig_parse),
+    )
+    for target_mods, attr, replacement, _ in patches:
+        for mod in target_mods:
+            setattr(mod, attr, replacement)
 
     try:
         yield
     finally:
-        for mod in modules:
-            setattr(mod, attr_name, orig_extract)
-        for dp_mod in (docstring_parser, dp_parser):
-            setattr(dp_mod, parse_attr, orig_parse)
+        for target_mods, attr, _, original in patches:
+            for mod in target_mods:
+                setattr(mod, attr, original)
         cached_parse.cache_clear()
         cache.clear()
 
