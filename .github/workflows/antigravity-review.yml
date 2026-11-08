@@ -107,10 +107,13 @@ jobs:
           RAW_DIFF="$WORK_DIR/raw_pr.diff" python3 - << 'EOF' > "$WORK_DIR/pr.diff"
           import os, sys
           excluded = ('.png', '.jpg', '.svg', 'site/', '.build/')
+          lockfiles = ('uv.lock', 'package-lock.json')
           keep = True
+          is_lockfile = False
           omitted_hashes = 0
           # pr.diff is prompt context only (never passed to git apply / patch).
           def flush_omitted(count: int) -> int:
+              """Flush collapsed hash count marker to stdout and return reset counter."""
               if count:
                   sys.stdout.write(f'# [{count} lockfile hash/wheel line(s) verified and omitted for diff brevity]\n')
               return 0
@@ -120,9 +123,10 @@ jobs:
                   if line.startswith('diff --git'):
                       omitted_hashes = flush_omitted(omitted_hashes)
                       keep = not any(x in line for x in excluded)
+                      is_lockfile = any(lock in line for lock in lockfiles)
                   if not keep:
                       continue
-                  if 'hash = "sha256:' in line or '"integrity": "sha512-' in line:
+                  if is_lockfile and ('hash = "sha256:' in line or '"integrity": "sha512-' in line):
                       omitted_hashes += 1
                   else:
                       omitted_hashes = flush_omitted(omitted_hashes)
