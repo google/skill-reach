@@ -112,20 +112,21 @@ jobs:
           # pr.diff is prompt context only (never passed to git apply / patch).
           def flush_omitted(count):
               if count:
-                  sys.stdout.write(f' # [{count} lockfile hash/wheel line(s) verified and omitted for diff brevity]\n')
-          for line in open(os.environ['RAW_DIFF'], errors='replace'):
-              if line.startswith('diff --git'):
-                  flush_omitted(omitted_hashes)
-                  omitted_hashes = 0
-                  keep = not any(x in line for x in excluded)
-              if not keep:
-                  continue
-              if 'hash = \"sha256:' in line or '\"integrity\": \"sha512-' in line:
-                  omitted_hashes += 1
-              else:
-                  flush_omitted(omitted_hashes)
-                  omitted_hashes = 0
-                  sys.stdout.write(line)
+                  sys.stdout.write(f'# [{count} lockfile hash/wheel line(s) verified and omitted for diff brevity]\n')
+          with open(os.environ['RAW_DIFF'], encoding='utf-8', errors='replace') as diff_file:
+              for line in diff_file:
+                  if line.startswith('diff --git'):
+                      flush_omitted(omitted_hashes)
+                      omitted_hashes = 0
+                      keep = not any(x in line for x in excluded)
+                  if not keep:
+                      continue
+                  if 'hash = \"sha256:' in line or '\"integrity\": \"sha512-' in line:
+                      omitted_hashes += 1
+                  else:
+                      flush_omitted(omitted_hashes)
+                      omitted_hashes = 0
+                      sys.stdout.write(line)
           flush_omitted(omitted_hashes)
           " > "$WORK_DIR/pr.diff"
 
