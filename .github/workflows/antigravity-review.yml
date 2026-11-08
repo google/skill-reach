@@ -104,31 +104,31 @@ jobs:
           gh pr diff "${PR_NUMBER}" > "$WORK_DIR/raw_pr.diff"
 
           # 2. Filter lockfile hashes, binary files, and build assets using native Python with encoding fallback
-          RAW_DIFF="$WORK_DIR/raw_pr.diff" python3 -c "
+          RAW_DIFF="$WORK_DIR/raw_pr.diff" python3 - << 'EOF' > "$WORK_DIR/pr.diff"
           import os, sys
           excluded = ('.png', '.jpg', '.svg', 'site/', '.build/')
           keep = True
           omitted_hashes = 0
           # pr.diff is prompt context only (never passed to git apply / patch).
-          def flush_omitted(count):
+          def flush_omitted(count: int) -> int:
               if count:
                   sys.stdout.write(f'# [{count} lockfile hash/wheel line(s) verified and omitted for diff brevity]\n')
+              return 0
+
           with open(os.environ['RAW_DIFF'], encoding='utf-8', errors='replace') as diff_file:
               for line in diff_file:
                   if line.startswith('diff --git'):
-                      flush_omitted(omitted_hashes)
-                      omitted_hashes = 0
+                      omitted_hashes = flush_omitted(omitted_hashes)
                       keep = not any(x in line for x in excluded)
                   if not keep:
                       continue
-                  if 'hash = \"sha256:' in line or '\"integrity\": \"sha512-' in line:
+                  if 'hash = "sha256:' in line or '"integrity": "sha512-' in line:
                       omitted_hashes += 1
                   else:
-                      flush_omitted(omitted_hashes)
-                      omitted_hashes = 0
+                      omitted_hashes = flush_omitted(omitted_hashes)
                       sys.stdout.write(line)
           flush_omitted(omitted_hashes)
-          " > "$WORK_DIR/pr.diff"
+          EOF
 
           if [ ! -s "$WORK_DIR/pr.diff" ]; then
             echo "No reviewable code changes detected."
