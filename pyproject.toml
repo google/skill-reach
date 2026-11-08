@@ -207,6 +207,7 @@ markers = [
 filterwarnings = [
     "error",
     "ignore::ResourceWarning:model2vec.*",
+    "ignore:.*(\\\\/.*invalid escape sequence|invalid escape sequence.*\\\\/).*:SyntaxWarning:.*google[/\\\\]genai[/\\\\]types$",
     "ignore:.*_UnionGenericAlias.*:DeprecationWarning",
     "ignore:The docstring of App contains raw markdown.*:DeprecationWarning",
 ]
