@@ -51,10 +51,3 @@ uv run mkdocs build --strict
 
 - All submissions, including those from project members, require review through a GitHub pull request. Consult [GitHub Help](https://help.github.com/articles/about-pull-requests/) for pull request workflows.
 - Keep pull requests scoped to a single logical change with clear, well-formed commit messages (preferably following [Conventional Commits](https://www.conventionalcommits.org/)).
-
-### Automated AI Code Review
-
-Pull requests submitted to `skill-reach` are eligible for automated AI code reviews via the Antigravity CLI:
-
-- **Initial Review**: Reviews run automatically once when a pull request is first opened or reopened.
-- **On-Demand & Subsequent Pushes**: To minimize noise and safeguard API quotas, reviews do not re-run automatically on push (`synchronize`). Comment `@agy /review` on the pull request to request or re-run an inspection. For external forks, a maintainer comment is required.
